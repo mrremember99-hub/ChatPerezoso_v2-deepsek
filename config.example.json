@@ -1,0 +1,7 @@
+{
+  "ollama_host": "http://localhost:11434",
+  "model": "",
+  "workspace": "workspace",
+  "width": 1100,
+  "height": 720
+}
