@@ -44,7 +44,7 @@ class OllamaClient:
 
     def __init__(self, host: str = "http://localhost:11434"):
         self.host = host.rstrip("/")
-        self.timeout = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
+        self.timeout = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
         self._active_response: httpx.Response | None = None
         self._active_lock = threading.Lock()
 
@@ -393,7 +393,7 @@ class OllamaClient:
 
         message: dict[str, Any] = {"role": "assistant", "content": ""}
         content_parts: list[str] = []
-        watchdog_stop = threading.Event()
+        buffer = ""
 
         try:
             with httpx.stream(
@@ -401,33 +401,36 @@ class OllamaClient:
             ) as response:
                 with self._active_lock:
                     self._active_response = response
-
-                # Watchdog: si el usuario cancela, cierra la respuesta
-                # desde otro hilo. La iteración en curso recibirá
-                # httpx.HTTPError y saldremos con OllamaCancelled.
-                watchdog = None
-                if cancel_event is not None:
-                    watchdog = threading.Thread(
-                        target=self._watchdog_cancel,
-                        args=(response, cancel_event, watchdog_stop),
-                        daemon=True,
-                    )
-                    watchdog.start()
-
                 try:
                     response.raise_for_status()
-                    for line in response.iter_lines():
+
+                    # Leemos en chunks de 1024 bytes. Cada chunk
+                    # comprueba el cancel_event. Con iter_lines() el
+                    # hilo se quedaba bloqueado esperando la siguiente
+                    # linea y no veia el cancel hasta que Ollama
+                    # enviara algo nuevo.
+                    for raw_chunk in response.iter_bytes(chunk_size=1024):
                         if cancel_event is not None and cancel_event.is_set():
                             raise OllamaCancelled(
                                 "Operación cancelada por el usuario."
                             )
-                        if not line:
-                            continue
-                        self._handle_line(line, message, content_parts)
+                        buffer += raw_chunk.decode("utf-8", errors="replace")
+                        while "\n" in buffer:
+                            line, buffer = buffer.split("\n", 1)
+                            line = line.strip()
+                            if not line:
+                                continue
+                            self._handle_line(line, message, content_parts)
+                            if message.get("_done"):
+                                break
                         if message.get("_done"):
                             break
+
+                    # Linea final sin salto
+                    if buffer.strip() and not message.get("_done"):
+                        self._handle_line(buffer.strip(), message, content_parts)
+
                 finally:
-                    watchdog_stop.set()
                     with self._active_lock:
                         self._active_response = None
 
@@ -456,28 +459,6 @@ class OllamaClient:
                 on_text(content)
         message["content"] = content
         return message
-
-    @staticmethod
-    def _watchdog_cancel(
-        response: httpx.Response,
-        cancel_event: threading.Event,
-        stop_event: threading.Event,
-    ) -> None:
-        """Cierra la respuesta si el cancel_event se activa.
-
-        Se ejecuta en un hilo aparte mientras dura el streaming. Sin esto,
-        la cancelación solo se notaría en el siguiente chunk (que puede
-        tardar con un modelo lento).
-        """
-        while not stop_event.is_set():
-            if cancel_event.is_set():
-                try:
-                    response.close()
-                except Exception:
-                    pass
-                return
-            stop_event.wait(0.1)
-
     @staticmethod
     def _handle_line(
         line: str,

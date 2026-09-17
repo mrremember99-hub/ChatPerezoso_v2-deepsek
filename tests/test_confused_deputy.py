@@ -108,6 +108,12 @@ def test_xml_tool_result_uses_prefixed_content(monkeypatch):
             for line in self._lines:
                 yield line
 
+        def iter_bytes(self, chunk_size=4096):
+            # _stream lee con iter_bytes para comprobar el cancel_event
+            # con frecuencia. Enviamos cada línea con su salto de línea.
+            for line in self._lines:
+                yield (line + chr(10)).encode("utf-8")
+
     class _FakeStreamCtx:
         def __init__(self, lines):
             self._lines = lines
