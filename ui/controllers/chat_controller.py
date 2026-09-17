@@ -8,24 +8,34 @@ from PySide6.QtWidgets import QWidget
 from core.history import HistoryStore
 from core.ollama import OllamaClient
 from core.tool_provider import ToolProvider
+from core.tool_result import ToolResult
 
-from .. import design
 from ..rendering import ChatRenderer
 from ..views.dialogs import confirm_tool
 from ..workers import ChatWorker
 
 
-MAX_HISTORY_MESSAGES = 40
+MAX_HISTORY_MESSAGES = 60
+RECENT_TURNS_TO_KEEP = 12
+
+
+_NARRATION_TEMPLATES = {
+    "buscar_en_workspace": "Buscando en el workspace…",
+    "leer_archivo": "Leyendo archivo…",
+    "listar_carpeta": "Listando carpeta…",
+    "crear_archivo": "Creando archivo…",
+    "escribir_archivo": "Escribiendo archivo…",
+    "borrar_archivo": "Borrando archivo…",
+    "crear_carpeta": "Creando carpeta…",
+    "ejecutar_comando": "Ejecutando comando…",
+    "git_status": "Consultando estado de Git…",
+    "git_diff": "Obteniendo diferencias…",
+    "git_log": "Consultando historial de Git…",
+    "git_show": "Mostrando commit…",
+}
 
 
 class ChatController(QObject):
-    """Orquesta una conversación con Ollama y un ``ToolProvider``.
-
-    Depende exclusivamente del Protocol ``ChatRenderer`` y de
-    ``ToolProvider``. Persiste el historial tras cada turno. Permite
-    regenerar la última respuesta sin retipear el mensaje del usuario.
-    """
-
     streaming_changed = Signal(bool)
     status = Signal(str)
     assistant_message = Signal(str)
@@ -56,9 +66,9 @@ class ChatController(QObject):
         self._last_model = ""
         self._last_options: dict[str, Any] | None = None
         self._last_system_prompt = ""
+        self._current_actions: list[ToolResult] = []
 
     # -- API pública ---------------------------------------------------------
-
     def is_streaming(self) -> bool:
         return self._streaming
 
@@ -75,7 +85,6 @@ class ChatController(QObject):
         self._last_system_prompt = system_prompt or ""
 
     def last_assistant_text(self) -> str:
-        """Devuelve el texto de la última respuesta del asistente, o ""."""
         for message in reversed(self.messages):
             if message.get("role") == "assistant":
                 content = message.get("content")
@@ -91,7 +100,6 @@ class ChatController(QObject):
     ) -> None:
         if self._streaming or not text or not model:
             return
-
         self._last_model = model
         if options is not None:
             self._last_options = dict(options)
@@ -101,21 +109,15 @@ class ChatController(QObject):
         self.renderer.insert_user_message(text)
         self._append_message({"role": "user", "content": text})
         self.renderer.reset()
+        self._current_actions = []
         self._streaming = True
         self.streaming_changed.emit(True)
         self.status.emit("Generando…")
         self._spawn_worker(model, self._last_options, self._last_system_prompt)
 
     def regenerate(self, model: str) -> None:
-        """Reenvía el último mensaje del usuario sin retipearlo.
-
-        Elimina el mensaje del asistente posterior (si lo hay) y el
-        bloque visual correspondiente. Si el último mensaje del usuario
-        terminó en cancelación o error, simplemente se reintenta.
-        """
         if self._streaming or not self.messages or not model:
             return
-
         last_user_idx: int | None = None
         for i in range(len(self.messages) - 1, -1, -1):
             if self.messages[i].get("role") == "user":
@@ -123,31 +125,16 @@ class ChatController(QObject):
                 break
         if last_user_idx is None:
             return
-
         user_text = str(self.messages[last_user_idx].get("content", ""))
         if not user_text:
             return
-
         self._last_model = model
-        # Truncamos el historial hasta justo antes del mensaje a regenerar.
-        self.messages = self.messages[:last_user_idx]
-        # Borramos la parte visual desde ese mensaje del usuario hasta el final.
+        if last_user_idx < len(self.messages) - 1:
+            self.messages = self.messages[:last_user_idx]
         self.renderer.remove_from_last_user()
-        # send() se encarga de reinsertar el mensaje de usuario y arrancar worker.
-        self.send(
-            user_text,
-            model,
-            self._last_options,
-            self._last_system_prompt,
-        )
+        self.send(user_text, model, self._last_options, self._last_system_prompt)
 
-    def _spawn_worker(
-        self,
-        model: str,
-        options: dict[str, Any] | None = None,
-        system_prompt: str = "",
-    ) -> None:
-        """Crea el worker y el thread de la generación actual."""
+    def _spawn_worker(self, model, options=None, system_prompt=""):
         self._thread = QThread(self)
         self._worker = ChatWorker(
             self.client,
@@ -159,11 +146,6 @@ class ChatController(QObject):
         )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
-        # Los slots del renderer deben ejecutarse en el main thread. Al
-        # conectar a un método del propio ChatController (QObject del main
-        # thread), Qt usa una QueuedConnection automáticamente. Conectar
-        # directamente `self._worker.text` al renderer saltaría el cambio
-        # de hilo y podría tocar QTextEdit desde el worker.
         self._worker.text.connect(self._on_text_chunk)
         self._worker.tool.connect(self._on_tool)
         self._worker.tool_result.connect(self._on_tool_result)
@@ -197,58 +179,48 @@ class ChatController(QObject):
         self._persist()
 
     # -- historial -----------------------------------------------------------
-
     def _append_message(self, message: dict) -> None:
         self.messages.append(message)
-        if len(self.messages) > MAX_HISTORY_MESSAGES:
-            cut = len(self.messages) - MAX_HISTORY_MESSAGES
-            while cut < len(self.messages) and self.messages[cut].get("role") != "user":
-                cut += 1
-            if cut < len(self.messages):
-                self.messages = self.messages[cut:]
+        self._compact_if_needed()
         self._persist()
         self.conversation_changed.emit()
+
+    def _compact_if_needed(self) -> None:
+        """Trunca por turnos user/assistant, no por mensaje.
+
+        Antes se cortaba por número de mensajes, lo que podía dejar un
+        mensaje ``tool`` huérfano (sin su ``assistant``) y confundir al
+        modelo. Ahora se conservan los últimos N turnos completos.
+        """
+        if len(self.messages) <= MAX_HISTORY_MESSAGES:
+            return
+        user_positions = [
+            i for i, m in enumerate(self.messages) if m.get("role") == "user"
+        ]
+        if len(user_positions) <= RECENT_TURNS_TO_KEEP:
+            return
+        cut_at = user_positions[-RECENT_TURNS_TO_KEEP]
+        self.messages = self.messages[cut_at:]
 
     def _persist(self) -> None:
         self.store.save(self.messages, model=self._last_model)
 
     # -- slots internos ------------------------------------------------------
-
     @Slot(str)
     def _on_text_chunk(self, text: str) -> None:
-        """Slot intermedio entre el worker y el renderer.
-
-        Se ejecuta en el main thread (Qt lo encola automáticamente porque
-        el receptor es un QObject). El renderer nunca se llama directo
-        desde el hilo del worker.
-        """
         self.renderer.on_text(text)
 
     def _on_tool(self, name: str) -> None:
-        self.renderer.insert_tool_event(
-            f"Herramienta: {name}", design.TOOL_EVENT_COLOR
-        )
+        narration = _NARRATION_TEMPLATES.get(name, f"Ejecutando {name}…")
+        self.renderer.insert_narration(narration, active=True)
 
-    def _on_tool_result(self, name: str, result: str) -> None:
-        if result.startswith("ERROR MCP"):
-            server_id = self._extract_mcp_server(name)
+    def _on_tool_result(self, result: ToolResult) -> None:
+        if result.is_error and result.summary.startswith("ERROR MCP"):
+            server_id = self._extract_mcp_server(result.tool_name)
             if server_id:
                 self.mcp_error.emit(server_id)
-        if result.startswith("ERROR:"):
-            label = f"Error en {name}"
-            color = design.TOOL_EVENT_ERROR_COLOR
-        elif result.startswith("OPERACIÓN CANCELADA"):
-            label = "Operación cancelada"
-            color = design.TOOL_EVENT_CANCELLED_COLOR
-        else:
-            label = f"Resultado: {name}"
-            color = design.TOOL_EVENT_COLOR
-        self.renderer.insert_tool_event(label, color)
-        preview = result.strip()
-        if len(preview) > 1200:
-            preview = preview[:1200] + "\n…"
-        if preview:
-            self.renderer.insert_tool_result(preview)
+        self._current_actions.append(result)
+        self.renderer.insert_tool_card(result)
 
     def _on_confirmation(self, name: str, arguments: dict[str, Any]) -> None:
         if self._worker is None:
@@ -258,9 +230,31 @@ class ChatController(QObject):
 
     def _on_done(self, result: str) -> None:
         response_text = self.renderer.final_text(result)
+        summary = self._summarize_actions()
+        if summary:
+            self.renderer.insert_narration(summary, active=False)
         self._append_message({"role": "assistant", "content": response_text})
         self.assistant_message.emit(response_text)
         self._finish("Listo")
+
+    def _summarize_actions(self) -> str:
+        actions = self._current_actions
+        if not actions:
+            return ""
+        ok = sum(1 for a in actions if a.status == "ok")
+        err = sum(1 for a in actions if a.status == "error")
+        cancelled = sum(1 for a in actions if a.status == "cancelled")
+        total_ms = sum(a.duration_ms for a in actions)
+        parts = [f"{ok} correcta(s)"]
+        if err:
+            parts.append(f"{err} con error")
+        if cancelled:
+            parts.append(f"{cancelled} cancelada(s)")
+        return (
+            f"Se ejecutaron {len(actions)} herramienta(s): "
+            + ", ".join(parts)
+            + f" · tiempo total {total_ms} ms"
+        )
 
     def _on_cancelled(self) -> None:
         self._finish("Cancelado")

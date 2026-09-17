@@ -1,8 +1,31 @@
-__pycache__/
-*.pyc
-.pytest_cache/
-.venv/
-.DS_Store
+# Estado local del usuario
 config.json
-history.json
 agents.json
+mcp_servers.json
+history.json
+workspace/*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Editores
+.idea/
+.vscode/
+*.swp
+.DS_Store
+# Extras
+*.bak
+*.tmp
+*~

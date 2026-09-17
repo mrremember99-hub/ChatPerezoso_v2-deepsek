@@ -20,6 +20,26 @@ def test_user_message_renders_as_bubble(qapp):
         qapp.processEvents()
 
 
+def test_assistant_response_uses_configured_right_margin(qapp):
+    from ui import design
+
+    panel = ChatPanel()
+    try:
+        panel.resize(1000, 700)
+        panel.chat.resize(760, 500)
+        panel.renderer.on_text("Respuesta de prueba")
+
+        cursor = panel.chat.textCursor()
+        cursor.setPosition(panel.renderer.response_start or 0)
+        block_format = cursor.blockFormat()
+
+        assert block_format.rightMargin() > 0
+        expected = panel.chat.viewport().width() * design.RESPONSE_RIGHT_MARGIN_RATIO
+        assert abs(block_format.rightMargin() - expected) < 1.0
+    finally:
+        panel.close()
+        qapp.processEvents()
+
 
 def test_final_text_inserts_fallback_when_no_streaming(qapp):
     panel = ChatPanel()

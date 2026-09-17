@@ -161,7 +161,11 @@ class MCPToolBridge:
 
     def intent_rules(self) -> dict[str, IntentRule]:
         core_rules = self.local_tools.intent_rules()
-        result: dict[str, IntentRule] = {}
+        # Empezamos con las reglas del núcleo. MCPToolBridge envuelve
+        # ToolRegistry: si no incluimos sus reglas, el composite pierde
+        # los verbos que activan listar_carpeta, crear_archivo, etc., y
+        # el gate bloquea TODO (bug detectado en pruebas end-to-end).
+        result: dict[str, IntentRule] = dict(core_rules)
         for exposed, (_, original_name) in self._mcp_names.items():
             inherited = self._inherit_core_rule(original_name, core_rules)
             if inherited is not None:

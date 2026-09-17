@@ -1,14 +1,15 @@
-"""Renderer por defecto: texto plano con párrafos, burbujas HTML para el
-usuario, cajas para resultados de herramienta y errores en rojo.
-"""
+"""Renderer de chat: texto, tarjetas y narración."""
 from __future__ import annotations
 
 import html
 
-from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QColor, QTextBlockFormat, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import QTextEdit
 
+from core.tool_result import ToolResult
+
 from .. import design
+from .markdown_renderer import to_html
 
 
 class PlainTextRenderer:
@@ -17,56 +18,93 @@ class PlainTextRenderer:
     def __init__(self, chat: QTextEdit):
         self.chat = chat
         self.response_text = ""
-        self.response_start: int | None = None
+        self.response_start = None
         self.response_segment = ""
-        # Posición del documento donde empieza el último mensaje de
-        # usuario. Se usa para regenerar.
-        self.last_user_start: int | None = None
+        self.last_user_start = None
+        self._segment_end = None
 
-    # -- ciclo de vida -------------------------------------------------------
-
+    # -- ciclo de vida ------------------------------------
     def reset(self) -> None:
         self.response_text = ""
         self.response_start = None
         self.response_segment = ""
+        self._segment_end = None
 
     def reset_response_segment(self) -> None:
+        if (
+            self.response_start is not None
+            and self.response_segment
+            and self._segment_end is not None
+        ):
+            self._render_markdown_block()
         self.response_start = None
         self.response_segment = ""
+        self._segment_end = None
 
-    # -- mensajes de usuario -------------------------------------------------
+    # -- helpers de formato -------------------------------
+    @staticmethod
+    def _fresh_block_format() -> QTextBlockFormat:
+        fmt = QTextBlockFormat()
+        fmt.setTopMargin(0)
+        fmt.setBottomMargin(0)
+        fmt.setLeftMargin(0)
+        fmt.setRightMargin(0)
+        return fmt
 
+    @staticmethod
+    def _fresh_char_format() -> QTextCharFormat:
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(design.RESPONSE_TEXT_COLOR))
+        fmt.setBackground(QColor(0, 0, 0, 0))
+        return fmt
+
+    def _reset_cursor_format(self, cursor: QTextCursor) -> None:
+        cursor.setBlockFormat(self._fresh_block_format())
+        cursor.setCharFormat(self._fresh_char_format())
+
+    # -- mensaje de usuario -------------------------------
     def insert_user_message(self, text: str) -> None:
         cursor = self.chat.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         if cursor.position() > 0 and not cursor.atBlockStart():
             cursor.insertBlock()
         self.last_user_start = cursor.position()
-        safe_text = html.escape(text).replace("\n", "<br>")
+
+        viewport_width = self.chat.viewport().width()
+        table_width = max(200, int(viewport_width * 0.6))
+
+        safe_text = html.escape(text).replace(chr(10), "<br>")
+        # Sin border en la tabla: el borde forzaba a QTextDocument a
+        # recalcular el layout de toda la tabla en cada operación, lo
+        # que ralentizaba el streaming posterior. El fondo de color ya
+        # distingue visualmente la pregunta del resto.
         cursor.insertHtml(
-            f'<table align="right" '
-            f'cellpadding="{design.USER_MESSAGE_PADDING_PX}" '
-            f'cellspacing="0" '
-            f'bgcolor="{design.USER_MESSAGE_BG_COLOR}">'
-            f'<tr><td style="color:{design.USER_MESSAGE_TEXT_COLOR}; '
+            f'<table align="right" width="{table_width}" '
+            f'cellpadding="0" cellspacing="0">'
+            f'<tr><td bgcolor="{design.USER_MESSAGE_BG_COLOR}" '
+            f'style="padding:{design.USER_MESSAGE_PADDING_PX}px;">'
+            f'<div style="color:#7EE0A8; font-size:8pt; '
+            f'font-weight:700; letter-spacing:1.2px; '
+            f'margin-bottom:6px;">TÚ</div>'
+            f'<div style="color:{design.USER_MESSAGE_TEXT_COLOR}; '
             f'font-size:{design.USER_MESSAGE_FONT_SIZE_PX}px;">'
-            f'{safe_text}'
+            f'{safe_text}</div>'
             f'</td></tr></table>'
         )
         cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.insertBlock()
+        self._reset_cursor_format(cursor)
         self.chat.setTextCursor(cursor)
         self.chat.ensureCursorVisible()
 
-    # -- respuesta en streaming ----------------------------------------------
-
+    # -- respuesta en streaming ----------------------------
     @staticmethod
     def display_response_text(text: str) -> str:
         return (
-            text.replace("\r\n", "\n")
-            .replace("\r", "\n")
-            .replace("\\r\\n", "\n")
-            .replace("\\n", "\n")
+            text.replace(chr(13) + chr(10), chr(10))
+            .replace(chr(13), chr(10))
+            .replace("\\r\\n", chr(10))
+            .replace("\\n", chr(10))
         )
 
     @classmethod
@@ -74,150 +112,217 @@ class PlainTextRenderer:
         stripped = text.lstrip()
         for prefix in cls._HEADER_PREFIXES:
             if stripped.startswith(prefix):
-                return stripped[len(prefix):].lstrip(" \n:")
+                return stripped[len(prefix):].lstrip(" " + chr(10) + ":")
         return stripped
 
     def on_text(self, text: str) -> None:
         text = self.display_response_text(text)
         if not text:
             return
+
         self.response_text += text
         self.response_segment += text
         self.response_segment = self.clean_response_text(self.response_segment)
 
         cursor = self.chat.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
+
         if self.response_start is None:
             if cursor.position() > 0 and not cursor.atBlockStart():
-                cursor.insertBlock()
+                cursor.insertBlock(self._fresh_block_format())
+            block = self._fresh_block_format()
+            block.setLeftMargin(design.ASSISTANT_INDENT_PX)
+            cursor.setBlockFormat(block)
+            cursor.setCharFormat(self._fresh_char_format())
             self.response_start = cursor.position()
 
-        replace_cursor = QTextCursor(self.chat.document())
-        replace_cursor.setPosition(self.response_start)
-        replace_cursor.movePosition(
-            QTextCursor.MoveOperation.End,
-            QTextCursor.MoveMode.KeepAnchor,
-        )
-        replace_cursor.removeSelectedText()
-        replace_cursor.setPosition(self.response_start)
+        chunks = text.split(chr(10) + chr(10))
+        for i, chunk in enumerate(chunks):
+            if i > 0:
+                cursor.insertBlock()
+                block = self._fresh_block_format()
+                block.setLeftMargin(design.ASSISTANT_INDENT_PX)
+                block.setTopMargin(design.RESPONSE_PARAGRAPH_TOP_MARGIN)
+                cursor.setBlockFormat(block)
+                cursor.setCharFormat(self._fresh_char_format())
+            first_line = True
+            for line in chunk.split(chr(10)):
+                if not first_line:
+                    cursor.insertText(chr(10))
+                if line:
+                    cursor.insertText(line)
+                first_line = False
 
-        fmt = QTextCharFormat()
-        fmt.setFontWeight(QFont.Weight.Normal)
-        fmt.setForeground(QColor(design.RESPONSE_TEXT_COLOR))
-        replace_cursor.setCharFormat(fmt)
-
-        paragraphs = self.response_segment.split("\n")
-        right_margin = max(
-            0.0,
-            self.chat.viewport().width() * design.RESPONSE_RIGHT_MARGIN_RATIO,
-        )
-        for index, paragraph in enumerate(paragraphs):
-            if index:
-                replace_cursor.insertBlock()
-            replace_cursor.insertText(paragraph)
-            block = replace_cursor.blockFormat()
-            block.setTopMargin(
-                design.RESPONSE_FIRST_PARAGRAPH_TOP_MARGIN
-                if index == 0
-                else design.RESPONSE_PARAGRAPH_TOP_MARGIN
-            )
-            block.setBottomMargin(design.RESPONSE_PARAGRAPH_BOTTOM_MARGIN)
-            block.setRightMargin(right_margin)
-            replace_cursor.setBlockFormat(block)
-
-        self.chat.setTextCursor(replace_cursor)
+        self._segment_end = cursor.position()
+        self.chat.setTextCursor(cursor)
         self.chat.ensureCursorVisible()
 
-    # -- eventos de herramienta ---------------------------------------------
+    # -- renderizado de Markdown ---------------------------
+    def _render_markdown_block(self) -> None:
+        if self.response_start is None or self._segment_end is None:
+            return
+        text = self.response_segment
+        if not text.strip():
+            return
 
-    def insert_tool_event(self, text: str, color: str) -> None:
+        cursor = QTextCursor(self.chat.document())
+        cursor.setPosition(self.response_start)
+        cursor.setPosition(self._segment_end, QTextCursor.MoveMode.KeepAnchor)
+        cursor.removeSelectedText()
+
+        rendered = to_html(text)
+        if rendered:
+            cursor.insertHtml(
+                f'<div style="margin-left:{design.ASSISTANT_INDENT_PX}px; '
+                f'color:{design.RESPONSE_TEXT_COLOR};">'
+                f'{rendered}'
+                f'</div>'
+            )
+        cursor.insertBlock(self._fresh_block_format())
+        cursor.setCharFormat(self._fresh_char_format())
+
+        self.response_start = None
+        self._segment_end = None
+
+    # -- narración ----------------------------------------
+    def insert_narration(self, text: str, active: bool = False) -> None:
         self.reset_response_segment()
         cursor = self.chat.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         if cursor.position() > 0 and not cursor.atBlockStart():
-            cursor.insertBlock()
+            cursor.insertBlock(self._fresh_block_format())
+
+        block = self._fresh_block_format()
+        block.setLeftMargin(design.ASSISTANT_INDENT_PX)
+        block.setTopMargin(6)
+        cursor.setBlockFormat(block)
+        cursor.setCharFormat(self._fresh_char_format())
+
+        color = design.NARRATION_ACTIVE_COLOR if active else design.NARRATION_COLOR
+        safe = html.escape(text)
         cursor.insertHtml(
-            f'<div style="margin:12px 0 4px 0; color:{color}; '
-            f'font-size:{design.TOOL_EVENT_FONT_SIZE_PT}pt; '
-            f'letter-spacing:0.4px;">'
-            f'{html.escape(text)}</div>'
+            f'<span style="color:{color}; '
+            f'font-size:{design.NARRATION_FONT_SIZE_PT}pt; '
+            f'font-style:italic;">{safe}</span>'
         )
-        cursor.insertBlock()
+        cursor.insertBlock(self._fresh_block_format())
+        cursor.setCharFormat(self._fresh_char_format())
         self.chat.setTextCursor(cursor)
         self.chat.ensureCursorVisible()
 
-    def insert_tool_result(self, text: str) -> None:
+    # -- tarjeta de herramienta ----------------------------
+    def insert_tool_card(self, result: ToolResult) -> None:
+        self.reset_response_segment()
         cursor = self.chat.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        safe_text = html.escape(text).replace("\n", "<br>")
+        if cursor.position() > 0 and not cursor.atBlockStart():
+            cursor.insertBlock(self._fresh_block_format())
+
+        block = self._fresh_block_format()
+        block.setLeftMargin(design.ASSISTANT_INDENT_PX)
+        cursor.setBlockFormat(block)
+        cursor.setCharFormat(self._fresh_char_format())
+
+        color = {
+            "ok": design.TOOL_CARD_TEXT,
+            "error": "#E0A0A0",
+            "cancelled": "#E0BC7A",
+        }[result.status]
+        icon = {"ok": "●", "error": "▲", "cancelled": "■"}[result.status]
+        duration = f" · {result.duration_ms} ms" if result.duration_ms else ""
+        summary = html.escape(result.summary or result.status_label)
+
         cursor.insertHtml(
-            f'<div style="margin:2px 0 14px 18px; padding:10px 12px; '
-            f'background-color:{design.TOOL_RESULT_BG_COLOR}; '
-            f'color:{design.TOOL_RESULT_TEXT_COLOR}; '
-            f'font-family:monospace; '
-            f'font-size:{design.TOOL_RESULT_FONT_SIZE_PT}pt;">'
-            f'{safe_text}'
+            f'<div style="border-left:3px solid {color}; '
+            f'padding:2px 0 2px 10px; '
+            f'color:{color}; '
+            f'font-size:{design.TOOL_CARD_FONT_SIZE_PT}pt;">'
+            f'<span style="color:{color};">{icon}</span> '
+            f'<b>{html.escape(result.tool_name)}</b>{html.escape(duration)}'
+            f'<br><span style="color:#8FA79A;">{summary}</span>'
             f'</div>'
         )
-        cursor.insertBlock()
+
+        if result.detail:
+            cursor.insertBlock(self._fresh_block_format())
+            block = self._fresh_block_format()
+            block.setLeftMargin(design.ASSISTANT_INDENT_PX)
+            cursor.setBlockFormat(block)
+
+            lines = result.detail.split(chr(10))
+            detail_lines = "".join(
+                f'<div style="margin:0; padding:0; line-height:1.3;">'
+                f'{html.escape(line) if line else "&nbsp;"}'
+                f'</div>'
+                for line in lines
+            )
+            cursor.insertHtml(
+                f'<div style="border-left:3px solid {design.TOOL_CARD_BORDER}; '
+                f'padding:6px 0 6px 10px; '
+                f'color:{design.TOOL_CARD_TEXT}; '
+                f'font-family:{design.TOOL_CARD_MONO}; '
+                f'font-size:{design.TOOL_CARD_FONT_SIZE_PT}pt;">'
+                f'{detail_lines}'
+                f'</div>'
+            )
+
+        cursor.insertBlock(self._fresh_block_format())
+        cursor.setCharFormat(self._fresh_char_format())
         self.chat.setTextCursor(cursor)
         self.chat.ensureCursorVisible()
 
-    # -- errores -------------------------------------------------------------
-
+    # -- errores ------------------------------------------
     def insert_error(self, message: str) -> None:
-        cursor = self.chat.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor(design.TOOL_EVENT_ERROR_COLOR))
-        cursor.setCharFormat(fmt)
-        cursor.insertText(f"\n\nError: {message}\n")
-        cursor.setCharFormat(QTextCharFormat())
-        self.chat.setTextCursor(cursor)
+        self.insert_narration(f"Error: {message}", active=False)
 
-    # -- cierre de respuesta -------------------------------------------------
-
+    # -- cierre de respuesta -----------------------------
     def final_text(self, fallback: str) -> str:
-        """Devuelve el texto final de la respuesta, ya normalizado.
-
-        Si no hubo streaming (``response_text`` vacío), inserta ``fallback``
-        en el chat para que el usuario lo vea. La normalización se aplica
-        siempre al texto devuelto, porque ``response_text`` se acumuló con
-        ``display_response_text`` pero sin el ``clean_response_text`` final
-        (que solo se aplica al segmento visible).
-        """
         if not self.response_text and fallback:
             self.on_text(fallback)
         raw = self.response_text or fallback
-        return self.clean_response_text(self.display_response_text(raw))
+        cleaned = self.clean_response_text(self.display_response_text(raw))
 
-    # -- restauración -------------------------------------------------------
+        if self.response_start is not None and self.response_segment:
+            self._render_markdown_block()
 
+        return cleaned
+
+    # -- restauración ------------------------------------
     def restore_assistant_message(self, text: str) -> None:
-        """Inserta una respuesta completa sin simular streaming.
-
-        Se usa al cargar una conversación guardada. El flujo es:
-        ``on_text(full_text)`` acumula el texto y lo pinta, y después un
-        ``reset()`` limpia el estado para que la próxima respuesta empiece
-        limpia. El texto queda en el chat como si hubiera terminado ahí.
-        """
         if not text:
             return
-        self.on_text(text)
+        cursor = self.chat.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        if cursor.position() > 0 and not cursor.atBlockStart():
+            cursor.insertBlock(self._fresh_block_format())
+
+        block = self._fresh_block_format()
+        block.setLeftMargin(design.ASSISTANT_INDENT_PX)
+        cursor.setBlockFormat(block)
+        cursor.setCharFormat(self._fresh_char_format())
+
+        rendered = to_html(text)
+        if rendered:
+            cursor.insertHtml(
+                f'<div style="color:{design.RESPONSE_TEXT_COLOR};">'
+                f'{rendered}'
+                f'</div>'
+            )
+        cursor.insertBlock(self._fresh_block_format())
+        cursor.setCharFormat(self._fresh_char_format())
+        self.chat.setTextCursor(cursor)
+        self.chat.ensureCursorVisible()
         self.reset()
 
-    # -- regenerar ----------------------------------------------------------
-
+    # -- regenerar ---------------------------------------
     def remove_from_last_user(self) -> None:
-        """Borra desde el último mensaje del usuario hasta el final.
-
-        Si no hay ``last_user_start`` registrado, no hace nada. Después
-        de la eliminación se limpia el estado del segmento para que la
-        próxima respuesta empiece en blanco.
-        """
         if self.last_user_start is None:
             return
-        cursor = QTextCursor(self.chat.document())
+        doc = self.chat.document()
+        if self.last_user_start >= doc.characterCount():
+            self.last_user_start = None
+            return
+        cursor = QTextCursor(doc)
         cursor.setPosition(self.last_user_start)
         cursor.movePosition(
             QTextCursor.MoveOperation.End,
@@ -227,4 +332,5 @@ class PlainTextRenderer:
         self.last_user_start = None
         self.response_start = None
         self.response_segment = ""
+        self._segment_end = None
         self.chat.setTextCursor(cursor)

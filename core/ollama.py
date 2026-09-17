@@ -19,25 +19,38 @@ class OllamaCancelled(OllamaError):
 
 
 class OllamaClient:
-    """Cliente de transporte para la API de Ollama (/api/tags, /api/chat).
+    """Cliente de transporte para la API de Ollama."""
 
-    Se ocupa exclusivamente de: listar modelos, transmitir la conversación en
-    streaming y orquestar el ciclo de tool calling nativo (incluyendo el
-    reintento cuando el modelo escribe una llamada como texto en vez de
-    usar el mecanismo nativo). La decisión de qué herramientas ofrecer y
-    autorizar vive en ``ToolIntentGate``, no aquí.
-    """
-
-    # Detecta que el modelo escribió una llamada de herramienta como JSON en el
-    # texto, en vez de usar el mecanismo nativo de tool_calls de Ollama.
     _TEXTUAL_CALL_NAME = re.compile(r'"name"\s*:\s*"([a-zA-Z0-9_]+)"')
     _TEXTUAL_SHELL_CALL = re.compile(r"(?:^|\n)\s*\$\s*([a-zA-Z0-9_]+)(?:\s|$)")
 
     def __init__(self, host: str = "http://localhost:11434"):
         self.host = host.rstrip("/")
-        # read=300s: acota el caso del servidor muerto a mitad de stream sin
-        # impedir generaciones razonablemente largas.
-        self.timeout = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
+        # Timeouts agresivos: leemos en trozos pequeños para poder
+        # comprobar el cancel_event con frecuencia. El timeout de read
+        # de 1s no limita la generación total (Ollama reenvía keepalive
+        # en cada chunk); solo limita cuánto esperamos sin ver datos.
+        self.timeout = httpx.Timeout(connect=10.0, read=1.0, write=30.0, pool=10.0)
+        self._active_response: httpx.Response | None = None
+        self._active_lock = threading.Lock()
+
+    # -- API pública ---------------------------------------------------------
+
+    def force_close_active(self) -> None:
+        """Cierra la respuesta HTTP activa.
+
+        Llamado desde el hilo de cancelación. Puede o no interrumpir un
+        iter_lines() bloqueado según el estado del socket, pero en
+        combinación con el timeout de read corto del _stream garantiza
+        que la cancelación se note en <1s.
+        """
+        with self._active_lock:
+            response = self._active_response
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
 
     def list_models(self) -> list[str]:
         try:
@@ -63,21 +76,10 @@ class OllamaClient:
         options: dict[str, Any] | None = None,
         system_prompt: str = "",
     ) -> str:
-        """Ejecuta el bucle de conversación con tool calling.
-
-        ``tools`` puede ser un ``ToolProvider`` (con ``definitions()`` e
-        ``intent_rules()``) o directamente una lista de definiciones en
-        formato Ollama. Aceptar ambas formas mantiene compatibilidad con
-        tests y usos puntuales.
-        """
         if not model:
             raise OllamaError("No hay un modelo seleccionado.")
-        # Copia superficial de cada mensaje.
         history = [dict(message) for message in messages]
-        # Extrae las definiciones si recibimos un provider. El resto del
-        # método trabaja siempre con listas de diccionarios.
         definitions = self._extract_definitions(tools)
-        # La autorización se evalúa contra la petición externa original.
         authorization_text = self._last_user_text(history)
         gate = self._build_intent_gate(tools)
         active_tools = gate.tools_for_request(definitions, authorization_text)
@@ -86,6 +88,7 @@ class OllamaClient:
         tools_enabled = bool(active_tools)
         final_text = ""
         textual_retry_used = False
+
         for _ in range(max_rounds):
             self._check_cancel(cancel_event)
             message = self._stream(
@@ -98,32 +101,36 @@ class OllamaClient:
             )
             tool_calls = message.get("tool_calls") or []
             content = str(message.get("content") or "")
+
             if not tool_calls:
                 textual_name = message.get("_textual_tool_name")
                 if textual_name:
                     if not textual_retry_used:
                         textual_retry_used = True
+                        history.append({"role": "assistant", "content": content})
                         history.append({
                             "role": "user",
                             "content": (
-                                f"No has usado la llamada nativa de herramienta para «{textual_name}»: "
-                                "escribiste el JSON como texto normal. Repite la operación usando "
-                                "exclusivamente tool calling nativo, sin escribir nada de JSON en el mensaje."
+                                f"Has escrito el JSON de la herramienta "
+                                f"«{textual_name}» como texto normal. No ejecutes "
+                                "herramientas así. Repite la operación usando "
+                                "EXCLUSIVAMENTE la llamada nativa de tool calling "
+                                "que Ollama expone en el parámetro `tools`. No "
+                                "escribas JSON en el mensaje."
                             ),
                         })
                         continue
                     final_text = (
-                        f"No se pudo completar la operación: el modelo no logró invocar «{textual_name}» "
-                        "mediante la llamada nativa de herramienta tras reintentarlo. Vuelve a intentarlo "
-                        "o reformula la petición."
+                        f"No se pudo completar la operación: el modelo no logró "
+                        f"invocar «{textual_name}» mediante la llamada nativa tras "
+                        "reintentarlo. Reformula la petición."
                     )
                     on_text(final_text)
                     return final_text
                 if content:
                     final_text += content
                 return final_text
-            # El contenido de una ronda con tool_calls puede ser un preámbulo técnico.
-            # No se muestra ni se acumula como respuesta final.
+
             history.append(message)
             for call in tool_calls:
                 function = call.get("function", {})
@@ -138,21 +145,21 @@ class OllamaClient:
                     arguments = {}
                 if not gate.tool_is_requested(name, authorization_text):
                     result_text = (
-                        "ERROR: llamada de herramienta bloqueada: la última petición del usuario "
-                        "no solicita esa operación sobre el workspace."
+                        "ERROR: llamada de herramienta bloqueada: la última "
+                        "petición del usuario no solicita esa operación sobre el "
+                        "workspace."
                     )
                 else:
                     result_text = on_tool(name, arguments)
-                history.append({"role": "tool", "content": result_text, "tool_name": name})
+                history.append({
+                    "role": "tool", "content": result_text, "tool_name": name
+                })
         raise OllamaError("Se alcanzó el límite de rondas de herramientas.")
+
+    # -- extracción y construcción de gates ---------------------------------
 
     @staticmethod
     def _extract_definitions(tools: Any) -> list[dict[str, Any]] | None:
-        """Devuelve una lista de definiciones de herramientas.
-
-        Acepta tanto un ``ToolProvider`` (objeto con ``definitions()``)
-        como una lista ya construida. Devuelve ``None`` si no hay nada.
-        """
         if tools is None:
             return None
         definitions_method = getattr(tools, "definitions", None)
@@ -168,14 +175,6 @@ class OllamaClient:
 
     @staticmethod
     def _build_intent_gate(tools: Any) -> ToolIntentGate:
-        """Construye un gate con las reglas declaradas por el provider.
-
-        Si ``tools`` es un ``ToolProvider`` (tiene ``intent_rules()``), se
-        usan sus reglas y se registran globalmente. Si es una lista de
-        definiciones (modo retrocompatible para tests y usos puntuales),
-        se usan las reglas ya registradas globalmente. Si no hay nada,
-        el gate vacío bloquea cualquier tool call.
-        """
         if tools is None:
             return ToolIntentGate({})
         rules_method = getattr(tools, "intent_rules", None)
@@ -183,9 +182,9 @@ class OllamaClient:
             rules = rules_method()
             ToolIntentGate.register_rules(rules)
             return ToolIntentGate(rules)
-        # Modo lista: usa el registro global (que los providers han ido
-        # dejando al construirse).
         return ToolIntentGate(dict(ToolIntentGate._RULES_REGISTRY))
+
+    # -- system prompt -------------------------------------------------------
 
     @staticmethod
     def _inject_system_prompts(
@@ -193,15 +192,6 @@ class OllamaClient:
         user_prompt: str,
         tool_prompt: str,
     ) -> None:
-        """Compone el system prompt final a partir de hasta tres fuentes:
-
-        1. Un system message ya existente en el historial (rara vez presente).
-        2. El system prompt del agente activo (``user_prompt``).
-        3. Las reglas de tool calling cuando hay herramientas activas.
-
-        El orden importa: las reglas de tool calling van al final porque el
-        modelo presta más atención a lo último que lee antes de la pregunta.
-        """
         parts: list[str] = []
         existing = ""
         for message in history:
@@ -219,7 +209,6 @@ class OllamaClient:
             return
 
         combined = "\n\n".join(parts)
-        # Reemplaza el system message existente (si lo había) o inserta uno.
         for message in history:
             if message.get("role") == "system":
                 message["content"] = combined
@@ -233,28 +222,37 @@ class OllamaClient:
             for item in active_tools
             if item.get("function", {}).get("name")
         ]
-        names = ", ".join(tool_names)
+        whitelist = "\n".join(f"- {name}" for name in tool_names)
         return (
-            "Tienes acceso a herramientas reales, pero no forman parte de una conversación normal. "
-            "No uses ninguna herramienta para responder preguntas generales, explicar conceptos, "
-            "opinar o redactar texto. Úsala solo cuando la última petición del usuario pida de forma "
-            "clara una operación sobre su workspace. Para crear, escribir o borrar un archivo, la "
-            "petición debe solicitar expresamente esa acción y ese archivo. Nunca infieras una acción "
-            "sobre archivos a partir de una pregunta informativa. Si usas una herramienta, espera su "
-            "resultado antes de afirmar que realizaste la operación. No inventes resultados. "
-            "Si el usuario pide crear un archivo pero no da nombre, elige un nombre de archivo razonable "
-            "a partir del contenido solicitado y usa directamente la herramienta de creación/escritura; "
-            "no pidas una confirmación en texto: la aplicación se encarga de la confirmación antes de ejecutar. "
-            "Antes de usar una herramienta de escritura para modificar un archivo existente, usa primero "
-            "la herramienta de lectura disponible para conocer su contenido actual completo. El contenido "
-            "que envíes a la herramienta de escritura debe ser siempre el contenido final completo del archivo "
-            "tras aplicar el cambio pedido, nunca una descripción de la instrucción del usuario ni un resumen. "
-            f"Las herramientas disponibles son: {names}. "
-            "Usa exclusivamente las llamadas de herramienta nativas proporcionadas por Ollama; no escribas "
-            "comandos con prefijo $, llamadas de función, JSON de herramientas ni Markdown para simular una "
-            "ejecución. Si no puedes hacer una llamada nativa, no afirmes que la herramienta se ha ejecutado. "
-            "Las operaciones que escriben o borran datos requieren "
-            "confirmación explícita del usuario en la aplicación."
+            "## REGLAS CRÍTICAS\n"
+            "Tienes acceso a un conjunto CERRADO de herramientas. Todas las "
+            "demás están PROHIBIDAS.\n\n"
+            "## HERRAMIENTAS PERMITIDAS (única lista válida)\n"
+            f"{whitelist}\n\n"
+            "## PROHIBICIONES ABSOLUTAS\n"
+            "- NUNCA inventes nombres de herramientas.\n"
+            "- NUNCA uses herramientas para responder preguntas generales, "
+            "explicar conceptos, opinar o redactar texto.\n"
+            "- NUNCA escribas JSON de herramientas, comandos con prefijo $, "
+            "ni bloques de código como sustituto de una llamada nativa.\n"
+            "- NUNCA afirmes que una herramienta se ejecutó si no has recibido "
+            "su resultado.\n"
+            "- NUNCA infieras una acción sobre archivos a partir de una "
+            "pregunta informativa.\n\n"
+            "## CUÁNDO USAR HERRAMIENTAS\n"
+            "Solo cuando la última petición del usuario solicite EXPLÍCITAMENTE "
+            "una operación sobre el workspace. Para crear, escribir o borrar un "
+            "archivo, el usuario debe pedir esa acción y ese archivo. Si pide "
+            "crear un archivo sin nombre, elige uno razonable y usa la "
+            "herramienta directamente; la aplicación se encarga de la "
+            "confirmación.\n\n"
+            "## ORDEN DE OPERACIONES\n"
+            "Antes de escribir un archivo existente, usa primero la herramienta "
+            "de lectura para conocer su contenido completo. El contenido que "
+            "envíes a la escritura debe ser el contenido FINAL COMPLETO, nunca "
+            "un resumen ni una descripción de la instrucción.\n\n"
+            "## LLAMADAS NATIVAS\n"
+            "Usa exclusivamente las llamadas de herramienta nativas de Ollama."
         )
 
     @staticmethod
@@ -266,30 +264,20 @@ class OllamaClient:
 
     @staticmethod
     def _textual_tool_call_name(content: str, tool_names: set[str]) -> str | None:
-        """Detecta si el texto (sin tool_calls nativos) es en realidad una llamada
-        de herramienta escrita como JSON, en vez de usar el mecanismo nativo.
-
-        La comprobación es deliberadamente laxa: basta con que el texto contenga
-        ``"name": "<tool_conocida>"``. Algunos modelos omiten el campo
-        ``parameters``/``arguments``, así que exigirlo dejaba pasar llamadas
-        textuales sin detectar.
-        """
         if "{" in content and '"name"' in content:
             match = OllamaClient._TEXTUAL_CALL_NAME.search(content)
             if match:
                 name = match.group(1)
                 if name in tool_names:
                     return name
-
-        # Algunos modelos, incluso con tools habilitadas, pueden emitir una
-        # pseudo-llamada tipo shell. Nunca la ejecutamos: solo la detectamos
-        # para poder pedir al modelo que repita usando tool_calls nativos.
         shell_match = OllamaClient._TEXTUAL_SHELL_CALL.search(content)
         if shell_match:
             name = shell_match.group(1)
             if name in tool_names:
                 return name
         return None
+
+    # -- streaming -----------------------------------------------------------
 
     def _stream(
         self,
@@ -311,48 +299,103 @@ class OllamaClient:
             payload["tools"] = tools
         if options:
             payload["options"] = options
+
+        message: dict[str, Any] = {"role": "assistant", "content": ""}
+        content_parts: list[str] = []
+
         try:
             with httpx.stream(
                 "POST", f"{self.host}/api/chat", json=payload, timeout=self.timeout
             ) as response:
-                response.raise_for_status()
-                message: dict[str, Any] = {"role": "assistant", "content": ""}
-                content_parts: list[str] = []
-                for line in response.iter_lines():
-                    self._check_cancel(cancel_event)
-                    if not line:
-                        continue
-                    try:
-                        data = json.loads(line)
-                    except ValueError as exc:
-                        raise OllamaError("Ollama devolvió una línea JSON inválida.") from exc
-                    chunk = data.get("message") or {}
-                    if chunk.get("content"):
-                        content_parts.append(str(chunk["content"]))
-                    if chunk.get("tool_calls"):
-                        message.setdefault("tool_calls", []).extend(chunk["tool_calls"])
-                    if data.get("done"):
-                        break
-                content = "".join(content_parts)
-                if content and not message.get("tool_calls"):
-                    tool_names = {
-                        str(item.get("function", {}).get("name", ""))
-                        for item in (tools or [])
-                        if item.get("function", {}).get("name")
-                    }
-                    textual_name = (
-                        self._textual_tool_call_name(content, tool_names)
-                        if tool_names
-                        else None
-                    )
-                    if textual_name:
-                        message["_textual_tool_name"] = textual_name
-                    else:
-                        on_text(content)
-                message["content"] = content
-                return message
+                with self._active_lock:
+                    self._active_response = response
+                try:
+                    response.raise_for_status()
+                    # Iteramos manualmente sobre las líneas para poder
+                    # comprobar el cancel_event incluso cuando no hay
+                    # datos disponibles. El read timeout de 1s hace que
+                    # iter_lines() lance ReadTimeout si no hay datos; lo
+                    # capturamos y comprobamos cancel_event.
+                    buffer = ""
+                    for raw_chunk in response.iter_bytes(chunk_size=4096):
+                        if cancel_event is not None and cancel_event.is_set():
+                            raise OllamaCancelled(
+                                "Operación cancelada por el usuario."
+                            )
+                        buffer += raw_chunk.decode("utf-8", errors="replace")
+                        while "\n" in buffer:
+                            line, buffer = buffer.split("\n", 1)
+                            line = line.strip()
+                            if not line:
+                                continue
+                            self._handle_line(line, message, content_parts)
+                            if message.get("_done"):
+                                break
+                        if message.get("_done"):
+                            break
+                    # Línea final sin \n
+                    if buffer.strip() and not message.get("_done"):
+                        self._handle_line(buffer.strip(), message, content_parts)
+                finally:
+                    with self._active_lock:
+                        self._active_response = None
+
+        except httpx.ReadTimeout:
+            # El read timeout se dispara cuando Ollama no envía datos en
+            # 1s. Esto es normal con modelos lentos o entre chunks. En
+            # lugar de abortar, continuamos con el stream activo. Pero
+            # como ya salimos del `with`, la conexión está cerrada, así
+            # que en la práctica esto no debería ocurrir con la
+            # iteración por bytes.
+            if cancel_event is not None and cancel_event.is_set():
+                raise OllamaCancelled("Operación cancelada por el usuario.")
+            raise OllamaError(
+                "Ollama dejó de responder durante más de 1 segundo. "
+                "Comprueba que el servidor sigue activo."
+            ) from None
         except httpx.HTTPError as exc:
+            if cancel_event is not None and cancel_event.is_set():
+                raise OllamaCancelled("Operación cancelada por el usuario.") from exc
             raise OllamaError(str(exc)) from exc
+
+        content = "".join(content_parts)
+        message.pop("_done", None)
+
+        if content and not message.get("tool_calls"):
+            tool_names = {
+                str(item.get("function", {}).get("name", ""))
+                for item in (tools or [])
+                if item.get("function", {}).get("name")
+            }
+            textual_name = (
+                self._textual_tool_call_name(content, tool_names)
+                if tool_names
+                else None
+            )
+            if textual_name:
+                message["_textual_tool_name"] = textual_name
+            else:
+                on_text(content)
+        message["content"] = content
+        return message
+
+    @staticmethod
+    def _handle_line(
+        line: str,
+        message: dict[str, Any],
+        content_parts: list[str],
+    ) -> None:
+        try:
+            data = json.loads(line)
+        except ValueError:
+            return
+        chunk = data.get("message") or {}
+        if chunk.get("content"):
+            content_parts.append(str(chunk["content"]))
+        if chunk.get("tool_calls"):
+            message.setdefault("tool_calls", []).extend(chunk["tool_calls"])
+        if data.get("done"):
+            message["_done"] = True
 
     @staticmethod
     def _check_cancel(cancel_event: threading.Event | None) -> None:

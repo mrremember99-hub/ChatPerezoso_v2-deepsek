@@ -1,15 +1,20 @@
-"""Workers que corren en hilos aparte: orquestan Ollama/MCP y no tocan
-directamente ningún widget (se comunican solo por señales Qt).
-"""
+"""Workers que corren en hilos aparte."""
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
 from core.ollama import OllamaCancelled, OllamaClient, OllamaError
+from core.tool_result import ToolResult
 from plugins.mcp import MCPClient, MCPError
+
+
+# Tiempo máximo que un worker espera una confirmación del usuario.
+# Sin límite, un cierre de ventana dejaba el worker colgado.
+CONFIRMATION_TIMEOUT_SECONDS = 600  # 10 minutos
 
 
 class ModelWorker(QObject):
@@ -28,10 +33,8 @@ class ModelWorker(QObject):
 
 
 class MCPWorker(QObject):
-    """Consulta las herramientas de un servidor MCP en su propio hilo."""
-
-    finished = Signal(str, object, list)  # server_id, client, tools
-    error = Signal(str, str)              # server_id, message
+    finished = Signal(str, object, list)
+    error = Signal(str, str)
 
     def __init__(self, server_id: str, client: MCPClient):
         super().__init__()
@@ -49,7 +52,7 @@ class MCPWorker(QObject):
 class ChatWorker(QObject):
     text = Signal(str)
     tool = Signal(str)
-    tool_result = Signal(str, str)
+    tool_result = Signal(object)          # ToolResult
     confirmation_requested = Signal(str, object)
     finished = Signal(str)
     cancelled = Signal()
@@ -82,7 +85,7 @@ class ChatWorker(QObject):
             result = self.client.chat(
                 self.model,
                 self.messages,
-                self.tools,   # el provider completo, no solo las definiciones
+                self.tools,
                 self.text.emit,
                 self._call_tool,
                 cancel_event=self._cancel_event,
@@ -97,13 +100,23 @@ class ChatWorker(QObject):
 
     def cancel(self) -> None:
         self._cancel_event.set()
+        # Forzar el cierre de la respuesta HTTP activa. Sin esto, un
+        # iter_lines() bloqueado en el socket no ve el cancel_event.
+        try:
+            self.client.force_close_active()
+        except Exception:
+            pass
         event = self._confirmation_event
         if event is not None:
             self._confirmation_approved = False
             event.set()
 
+    # -- ejecución de herramientas -----------------------------------------
+
     def _call_tool(self, name: str, arguments: dict) -> str:
         self.tool.emit(name)
+        start = time.monotonic()
+
         if self.tools.requires_confirmation(name):
             result = self._request_confirmation(name, arguments)
         else:
@@ -112,24 +125,53 @@ class ChatWorker(QObject):
                 arguments,
                 cancel_event=self._cancel_event,
             )
-        self.tool_result.emit(name, result)
-        return result
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+        tool_result = self._build_result(name, result, duration_ms)
+        self.tool_result.emit(tool_result)
+        return tool_result.to_text()
+
+    @staticmethod
+    def _build_result(name: str, raw: str, duration_ms: int) -> ToolResult:
+        raw = raw or "(sin resultado)"
+        if raw.startswith("ERROR MCP") or raw.startswith("ERROR:"):
+            return ToolResult(
+                tool_name=name,
+                summary=raw.split("\n", 1)[0],
+                detail=raw,
+                is_error=True,
+                duration_ms=duration_ms,
+            )
+        if raw.startswith("OPERACIÓN CANCELADA"):
+            return ToolResult(
+                tool_name=name,
+                summary="Operación cancelada por el usuario.",
+                detail=raw,
+                is_cancelled=True,
+                duration_ms=duration_ms,
+            )
+        first_line, _, rest = raw.partition("\n")
+        summary = first_line.strip()
+        truncated = "truncad" in rest.lower()
+        return ToolResult(
+            tool_name=name,
+            summary=summary,
+            detail=rest.strip(),
+            duration_ms=duration_ms,
+            truncated=truncated,
+        )
 
     def _request_confirmation(self, name: str, arguments: dict[str, Any]) -> str:
-        """Pide confirmación a la UI y ejecuta el tool en este mismo hilo.
-
-        La UI solo marca aprobado/rechazado y libera el evento; la ejecución
-        del tool sigue viviendo en el hilo del worker, que es donde se hizo
-        la llamada original a ``client.chat``. Así no hay carreras entre el
-        hilo de UI y este al usar ``self.tools``.
-        """
         event = threading.Event()
         self._confirmation_event = event
         self._confirmation_name = name
         self._confirmation_arguments = dict(arguments)
         self._confirmation_approved = False
         self.confirmation_requested.emit(name, dict(arguments))
-        event.wait()
+
+        # Con timeout: si la UI no responde (ventana cerrada, por ejemplo),
+        # el worker se desbloquea y sigue su curso.
+        event.wait(timeout=CONFIRMATION_TIMEOUT_SECONDS)
 
         if self._confirmation_approved and not self._cancel_event.is_set():
             result = self.tools.call(
@@ -138,10 +180,15 @@ class ChatWorker(QObject):
                 allow_destructive=True,
                 cancel_event=self._cancel_event,
             )
-        else:
+        elif self._cancel_event.is_set():
             result = (
                 "OPERACIÓN CANCELADA POR EL USUARIO: "
                 "no se ha ejecutado ninguna operación."
+            )
+        else:
+            result = (
+                "OPERACIÓN CANCELADA: no se recibió confirmación del usuario "
+                "a tiempo. No se ha ejecutado ninguna operación."
             )
 
         self._confirmation_event = None
@@ -151,7 +198,6 @@ class ChatWorker(QObject):
         return result
 
     def resolve_confirmation(self, approved: bool) -> None:
-        """Llamado desde el hilo de UI. Solo marca el flag y libera el evento."""
         event = self._confirmation_event
         if event is None:
             return

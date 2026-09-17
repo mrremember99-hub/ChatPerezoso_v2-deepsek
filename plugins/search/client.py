@@ -1,21 +1,16 @@
 """Búsqueda de texto recursiva sobre el workspace.
 
-Usa ``os.walk`` directamente (sin ``grep``) para no depender de binarios
-externos y tener control total sobre exclusiones, límites y formato.
-
-Limitación conocida: el motor de expresiones regulares de Python no
-soporta timeouts. Un patrón malicioso (por ejemplo ``(a+)+$``) puede
-tardar mucho sobre una única línea larga. Se mitiga limitando la longitud
-de las líneas que se examinan y ofreciendo cancelación cooperativa a
-través de ``cancel_event``. No es una solución perfecta pero cubre el
-caso real.
+Usa ``regex`` en lugar de ``re`` para poder aplicar timeout por línea y
+evitar ReDoS. El resto de límites (tamaño de archivo, número de matches,
+profundidad) se mantienen.
 """
 from __future__ import annotations
 
 import os
-import re
 import threading
 from pathlib import Path
+
+import regex
 
 
 class SearchError(RuntimeError):
@@ -41,14 +36,9 @@ _MAX_FILE_BYTES = 1_000_000
 _MAX_MATCHES = 200
 _MAX_LINE_LENGTH = 300
 _MAX_FILES_SCANNED = 5000
-
-# Líneas más largas que esto se saltan: son casi siempre datos binarios
-# o logs monolíticos, y son el escenario típico donde un regex patológico
-# puede colgar el motor.
 _MAX_LINE_BYTES_FOR_REGEX = 10_000
-
-# Cada cuántas líneas se consulta ``cancel_event``.
 _CANCEL_CHECK_INTERVAL = 200
+_REGEX_LINE_TIMEOUT_SECONDS = 0.5
 
 
 class SearchClient:
@@ -56,7 +46,6 @@ class SearchClient:
         self.root = Path(workspace_root).expanduser().resolve()
 
     # -- API pública ---------------------------------------------------------
-
     def search(
         self,
         query: str,
@@ -69,7 +58,6 @@ class SearchClient:
     ) -> str:
         if not query:
             raise SearchError("La consulta de búsqueda no puede estar vacía.")
-
         base = self._resolve(path)
         if not base.exists():
             raise SearchError(f"La ruta no existe: {path}")
@@ -80,8 +68,11 @@ class SearchClient:
         normalized_exts = self._normalize_extensions(extensions)
 
         try:
-            pattern = re.compile(query, 0 if case_sensitive else re.IGNORECASE)
-        except re.error as exc:
+            pattern = regex.compile(
+                query,
+                regex.IGNORECASE if not case_sensitive else 0,
+            )
+        except regex.error as exc:
             raise SearchError(f"Expresión regular inválida: {exc}") from exc
 
         matches: list[str] = []
@@ -136,7 +127,6 @@ class SearchClient:
         return f"{header}\n{body}"
 
     # -- interno -------------------------------------------------------------
-
     def _resolve(self, relative: str) -> Path:
         candidate = (self.root / relative).resolve()
         try:
@@ -181,7 +171,7 @@ class SearchClient:
     @staticmethod
     def _search_file(
         file: Path,
-        pattern: re.Pattern[str],
+        pattern,
         limit: int,
         cancel_event: threading.Event | None = None,
     ) -> list[tuple[int, str]]:
@@ -189,9 +179,6 @@ class SearchClient:
         try:
             with file.open("r", encoding="utf-8", errors="strict") as handle:
                 for line_number, raw in enumerate(handle, start=1):
-                    # Cancelación cooperativa: no puede interrumpir un
-                    # match patológico en curso, pero sí evita seguir
-                    # procesando archivos después de que el usuario cancele.
                     if (
                         cancel_event is not None
                         and line_number % _CANCEL_CHECK_INTERVAL == 0
@@ -199,18 +186,21 @@ class SearchClient:
                     ):
                         break
                     line = raw.rstrip("\n")
-                    # Saltar líneas muy largas: es el escenario donde un
-                    # regex malicioso bloquearía el motor. Las líneas
-                    # normales (código, texto) nunca llegan a este tamaño.
                     if len(line) > _MAX_LINE_BYTES_FOR_REGEX:
                         continue
-                    if pattern.search(line):
-                        display = line
-                        if len(display) > _MAX_LINE_LENGTH:
-                            display = display[:_MAX_LINE_LENGTH] + "…"
-                        hits.append((line_number, display))
-                        if len(hits) >= limit:
-                            break
+                    try:
+                        if pattern.search(
+                            line, timeout=_REGEX_LINE_TIMEOUT_SECONDS
+                        ):
+                            display = line
+                            if len(display) > _MAX_LINE_LENGTH:
+                                display = display[:_MAX_LINE_LENGTH] + "…"
+                            hits.append((line_number, display))
+                            if len(hits) >= limit:
+                                break
+                    except TimeoutError:
+                        # Regex patológico: se salta la línea y se sigue.
+                        continue
         except UnicodeDecodeError:
             return []
         return hits

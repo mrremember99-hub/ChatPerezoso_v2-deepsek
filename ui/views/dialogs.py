@@ -113,6 +113,10 @@ def _confirm_shell(parent: QWidget, arguments: dict) -> bool:
 # -- resto de operaciones ----------------------------------------------------
 
 def _confirm_generic(parent: QWidget, name: str, arguments: dict) -> bool:
+    # Casos con contenido largo: usamos diálogo con scroll.
+    if name in {"crear_archivo", "escribir_archivo"}:
+        return _confirm_file_write(parent, name, arguments)
+
     if name == "borrar_archivo":
         path = str(arguments.get("path", ""))
         text = (
@@ -124,17 +128,6 @@ def _confirm_generic(parent: QWidget, name: str, arguments: dict) -> bool:
         path = str(arguments.get("path", ""))
         text = f"¿Quieres crear la carpeta «{path}»?"
         title = "Confirmar creación de carpeta"
-    elif name in {"crear_archivo", "escribir_archivo"}:
-        path = str(arguments.get("path", ""))
-        content = str(arguments.get("content", ""))
-        preview = content if len(content) <= 800 else content[:800] + "\n…(truncado)"
-        action = "crear" if name == "crear_archivo" else "escribir o reemplazar"
-        text = (
-            f"¿Quieres {action} el archivo «{path}» con este contenido?\n\n"
-            f"{preview if preview else '(vacío)'}\n\n"
-            "Esta operación solo se realizará si la confirmas."
-        )
-        title = "Confirmar escritura"
     else:
         text = (
             f"La herramienta «{name}» puede modificar o ejecutar acciones.\n\n"
@@ -150,6 +143,64 @@ def _confirm_generic(parent: QWidget, name: str, arguments: dict) -> bool:
         QMessageBox.StandardButton.No,
     )
     return reply == QMessageBox.StandardButton.Yes
+
+
+def _confirm_file_write(parent: QWidget, name: str, arguments: dict) -> bool:
+    """Diálogo de confirmación para crear/escribir archivos.
+
+    Usa un QPlainTextEdit con altura fija y scroll en lugar de QMessageBox.
+    Sin esto, un archivo grande hacía que el diálogo creciera más allá de
+    la pantalla y los botones quedaban inaccesibles.
+    """
+    path = str(arguments.get("path", ""))
+    content = str(arguments.get("content", ""))
+    action = "crear" if name == "crear_archivo" else "escribir o reemplazar"
+    size_bytes = len(content.encode("utf-8"))
+
+    dialog = QDialog(parent)
+    dialog.setWindowTitle("Confirmar escritura")
+    dialog.setMinimumWidth(560)
+    dialog.setMaximumWidth(720)
+    layout = QVBoxLayout(dialog)
+    layout.setSpacing(10)
+
+    # Pregunta
+    question = QLabel(
+        f"¿Quieres <b>{action}</b> el archivo "
+        f"<code>{html.escape(path)}</code>?"
+    )
+    question.setTextFormat(Qt.TextFormat.RichText)
+    question.setWordWrap(True)
+    layout.addWidget(question)
+
+    # Etiqueta del contenido + tamaño
+    meta = QLabel(f"<b>Contenido</b> ({size_bytes} bytes):")
+    meta.setTextFormat(Qt.TextFormat.RichText)
+    layout.addWidget(meta)
+
+    # Visor de contenido: altura fija, scroll vertical y horizontal.
+    content_view = QPlainTextEdit()
+    content_view.setPlainText(content if content else "(vacío)")
+    content_view.setReadOnly(True)
+    content_view.setFixedHeight(220)
+    content_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+    font = QFont("Menlo")
+    font.setStyleHint(QFont.StyleHint.Monospace)
+    font.setPointSize(11)
+    content_view.setFont(font)
+    layout.addWidget(content_view)
+
+    # Botones
+    buttons = QDialogButtonBox(
+        QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok
+    )
+    buttons.button(QDialogButtonBox.StandardButton.Ok).setText(action.capitalize())
+    buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Cancelar")
+    buttons.accepted.connect(dialog.accept)
+    buttons.rejected.connect(dialog.reject)
+    layout.addWidget(buttons)
+
+    return dialog.exec() == QDialog.DialogCode.Accepted
 
 
 def warn(parent: QWidget, title: str, message: str) -> None:

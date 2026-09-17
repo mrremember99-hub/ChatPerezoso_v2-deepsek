@@ -12,7 +12,6 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QObject
 
-from core.tool_result import ToolResult
 from ui.controllers.chat_controller import ChatController, MAX_HISTORY_MESSAGES
 
 
@@ -33,21 +32,14 @@ class _FakeSignal:
 
 
 class FakeRenderer:
-    """Renderer que solo acumula lo que recibe, sin tocar Qt.
-
-    Mantiene las listas antiguas (tool_events, tool_results) por
-    compatibilidad con tests escritos antes del rediseño. Los métodos
-    nuevos (insert_tool_card, insert_narration) las siguen poblando.
-    """
+    """Renderer que solo acumula lo que recibe, sin tocar Qt."""
 
     def __init__(self):
         self.response_text = ""
         self.response_start: int | None = None
         self.user_messages: list[str] = []
-        self.tool_events: list[tuple[str, str]] = []   # (name, status)
+        self.tool_events: list[tuple[str, str]] = []
         self.tool_results: list[str] = []
-        self.tool_cards: list = []
-        self.narrations: list[tuple[str, bool]] = []
         self.errors: list[str] = []
         self.final_calls: list[str] = []
 
@@ -64,29 +56,11 @@ class FakeRenderer:
     def on_text(self, text: str):
         self.response_text += text
 
-    def insert_narration(self, text: str, active: bool = False):
-        self.narrations.append((text, active))
+    def insert_tool_event(self, text: str, color: str):
+        self.tool_events.append((text, color))
 
-    def insert_tool_card(self, result):
-        # Espeja el comportamiento del controlador antiguo: construye
-        # labels ("Error en X", "Operación cancelada", "Resultado: X") para
-        # no romper tests escritos antes del rediseño.
-        self.tool_cards.append(result)
-        if result.status == "error":
-            label = f"Error en {result.tool_name}"
-            color = "#E0A0A0"
-        elif result.status == "cancelled":
-            label = "Operación cancelada"
-            color = "#E0BC7A"
-        else:
-            label = f"Resultado: {result.tool_name}"
-            color = "#7C8F87"
-        self.tool_events.append((label, color))
-        if result.detail:
-            preview = result.detail
-            if len(preview) > 1200:
-                preview = preview[:1200] + "\n…"
-            self.tool_results.append(preview)
+    def insert_tool_result(self, text: str):
+        self.tool_results.append(text)
 
     def insert_error(self, message: str):
         self.errors.append(message)
@@ -94,12 +68,6 @@ class FakeRenderer:
     def final_text(self, fallback: str) -> str:
         self.final_calls.append(fallback)
         return self.response_text or fallback
-
-    def restore_assistant_message(self, text: str):
-        self.response_text += text
-
-    def remove_from_last_user(self):
-        pass
 
 
 class FakeTools:
@@ -296,21 +264,21 @@ def test_on_error_inserts_error_and_finishes(controller):
 
 def test_on_tool_event_colors_error_prefix(controller):
     ctrl, renderer = controller
-    ctrl._on_tool_result(ToolResult(tool_name="leer_archivo", summary="ERROR: no existe", detail="ERROR: no existe", is_error=True))
+    ctrl._on_tool_result("leer_archivo", "ERROR: no existe")
     label, _ = renderer.tool_events[-1]
     assert "Error" in label
 
 
 def test_on_tool_event_colors_cancelled_prefix(controller):
     ctrl, renderer = controller
-    ctrl._on_tool_result(ToolResult(tool_name="borrar_archivo", summary="Operación cancelada por el usuario.", is_cancelled=True))
+    ctrl._on_tool_result("borrar_archivo", "OPERACIÓN CANCELADA POR EL USUARIO")
     label, _ = renderer.tool_events[-1]
     assert "cancelada" in label.lower()
 
 
 def test_on_tool_event_regular_result(controller):
     ctrl, renderer = controller
-    ctrl._on_tool_result(ToolResult(tool_name="listar_carpeta", summary="Contenido del directorio", detail="[FILE] a.txt"))
+    ctrl._on_tool_result("listar_carpeta", "[FILE] a.txt")
     label, _ = renderer.tool_events[-1]
     assert "Resultado" in label
 
@@ -318,7 +286,7 @@ def test_on_tool_event_regular_result(controller):
 def test_on_tool_result_truncates_long_previews(controller):
     ctrl, renderer = controller
     long_result = "x" * 5000
-    ctrl._on_tool_result(ToolResult(tool_name="leer_archivo", summary="archivo leído", detail=long_result, truncated=True))
+    ctrl._on_tool_result("leer_archivo", long_result)
     assert renderer.tool_results
     assert len(renderer.tool_results[-1]) <= 1200 + len("\n…")
 

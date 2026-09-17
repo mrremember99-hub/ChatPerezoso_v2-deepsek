@@ -1,7 +1,4 @@
-"""Coordinador de la aplicación.
-
-Es el único que conoce a la vez la vista y los controladores de dominio.
-"""
+"""Coordinador de la aplicación."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,13 +10,15 @@ from core.agents import Agent, AgentStore
 from core.composite_tools import CompositeToolProvider, FilteredToolProvider
 from core.config import AppConfig
 from core.history import HistoryStore
+from core.mcp_servers import MCPServerStore
 from core.ollama import OllamaClient
+from core.plugins_registry import (
+    discover_plugin_factories,
+    instantiate_plugins,
+)
 from core.tools import ToolRegistry
 from core.workspace import Workspace, WorkspaceError
-from plugins.git import GitProvider
 from plugins.mcp import MCPToolBridge
-from plugins.search import SearchProvider
-from plugins.shell import ShellProvider
 
 from ..views.dialogs import warn
 from ..views.main_window import MainWindow
@@ -40,12 +39,10 @@ class AppController(QObject):
         self.workspace = Workspace(self.config.workspace_path())
         self.tools = ToolRegistry(self.workspace)
         self.mcp = MCPToolBridge(self.tools)
-        self.git = GitProvider(self.workspace)
-        self.search = SearchProvider(self.workspace)
-        self.shell = ShellProvider(self.workspace)
-        self.composite = CompositeToolProvider(
-            [self.shell, self.search, self.git, self.mcp]
-        )
+
+        # Descubrimiento dinámico de plugins vía entry points.
+        self._plugin_factories = discover_plugin_factories()
+        self._rebuild_composite()
 
         self.history_store = HistoryStore()
         saved = self.history_store.load()
@@ -60,7 +57,10 @@ class AppController(QObject):
         )
 
         self.model_ctrl = ModelController(self, self.ollama)
-        self.mcp_ctrl = MCPController(self, self.view, self.mcp, self.workspace)
+        self.mcp_ctrl = MCPController(
+            self, self.view, self.mcp, self.workspace,
+            store=MCPServerStore(),
+        )
         self.chat_ctrl = ChatController(
             self,
             self.view,
@@ -82,15 +82,24 @@ class AppController(QObject):
         self._restore_conversation(initial_messages)
         self.model_ctrl.load()
 
+    # -- construcción del composite -----------------------------------------
+
+    def _rebuild_composite(self) -> None:
+        """Reconstruye el composite con los plugins disponibles.
+
+        El orden importa: el primero que declara una herramienta es su
+        dueño. Los plugins van antes que MCP para que las herramientas
+        locales (shell, git, search) ganen si colisionan.
+        """
+        plugins = instantiate_plugins(self._plugin_factories, self.workspace)
+        self.composite = CompositeToolProvider([*plugins, self.mcp])
+
     # -- wiring --------------------------------------------------------------
 
     def _wire(self) -> None:
         s = self.view.sidebar
         cp = self.view.chat_panel
 
-        # El combo de la sidebar emite un nombre (string). Se resuelve a
-        # un Agent a través del AgentController, que vuelve a emitir
-        # agent_changed(Agent). Así el handler real solo recibe objetos.
         s.agent_changed.connect(self._on_agent_name_selected)
         s.agent_edit_requested.connect(self.agent_ctrl.edit_active)
         s.agent_create_requested.connect(self.agent_ctrl.create_new)
@@ -123,10 +132,15 @@ class AppController(QObject):
 
         s.clear_chat_requested.connect(self._clear_chat)
 
+        # Emitir el estado MCP inicial AHORA que las señales ya están
+        # conectadas. Antes, MCPController._emit_changed() en __init__
+        # se llamaba antes del wiring y el evento se perdía.
+        self.mcp_ctrl.emit_current_state()
+
     def _apply_initial_state(self) -> None:
         self.view.resize(self.config.width, self.config.height)
         self.view.sidebar.set_workspace_name(self._workspace_name())
-        self.view.sidebar.set_mcp_servers([], [], [])
+        self.view.sidebar.set_mcp_servers([], [], [], [])
         self.view.sidebar.set_agents(
             self.agent_ctrl.names(),
             self.agent_ctrl.active_name,
@@ -143,8 +157,6 @@ class AppController(QObject):
 
     @Slot(str)
     def _on_agent_name_selected(self, name: str) -> None:
-        """El combo de la sidebar solo sabe de nombres. Delegamos en el
-        AgentController para que resuelva el Agent y emita agent_changed."""
         if not name:
             return
         self.agent_ctrl.set_active(name)
@@ -152,13 +164,11 @@ class AppController(QObject):
     @Slot(object)
     def _on_agent_changed(self, agent: Agent) -> None:
         self._apply_agent(agent)
-        # Refresca el combo del sidebar por si el nombre cambió.
         self.view.sidebar.set_agents(self.agent_ctrl.names(), agent.name)
         self.config.current_agent = agent.name
         self.config.save()
 
     def _apply_agent(self, agent: Agent) -> None:
-        """Aplica el agente activo al chat y a la config."""
         if agent.allowed_tools is None:
             self.chat_ctrl.rebind_tools(self.composite)
         else:
@@ -205,12 +215,13 @@ class AppController(QObject):
 
     # -- MCP -----------------------------------------------------------------
 
-    @Slot(list, list, list)
+    @Slot(list, list, list, list)
     def _on_mcp_servers_changed(
         self,
-        _active: list[str],
-        _pending: list[str],
-        _dead: list[str],
+        _entries: list,
+        _active: list,
+        _pending: list,
+        _dead: list,
     ) -> None:
         self.agent_ctrl.set_available_tools(self._all_tool_names())
         self._apply_agent(self.agent_ctrl.active_agent())
@@ -232,20 +243,10 @@ class AppController(QObject):
             self.workspace = Workspace(selected)
             self.tools = ToolRegistry(self.workspace)
             new_bridge = MCPToolBridge(self.tools)
-            new_git = GitProvider(self.workspace)
-            new_search = SearchProvider(self.workspace)
-            new_shell = ShellProvider(self.workspace)
-            new_composite = CompositeToolProvider(
-                [new_shell, new_search, new_git, new_bridge]
-            )
 
             self.mcp_ctrl.rebind(new_bridge, self.workspace)
-
             self.mcp = new_bridge
-            self.git = new_git
-            self.search = new_search
-            self.shell = new_shell
-            self.composite = new_composite
+            self._rebuild_composite()
 
             self.agent_ctrl.set_available_tools(self._all_tool_names())
             self._apply_agent(self.agent_ctrl.active_agent())

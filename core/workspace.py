@@ -49,7 +49,7 @@ class Workspace:
         lines = []
         for item in entries:
             rel = item.relative_to(self.root)
-            lines.append(f"{'[DIR] ' if item.is_dir() else '[FILE]'}{rel}")
+            lines.append(f"{'[DIR] ' if item.is_dir() else '[FILE] '}{rel}")
         if not lines:
             return "(carpeta vacía)"
         if truncated:

@@ -6,7 +6,6 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QObject
 
-from core.mcp_servers import MCPServerStore
 from core.workspace import Workspace
 from plugins.mcp import MCPToolBridge
 
@@ -15,8 +14,7 @@ class _FakeBridge(MCPToolBridge):
     """Bridge mínimo que registra las llamadas a activate/deactivate."""
 
     def __init__(self, workspace):
-        from core.tools import ToolRegistry
-        super().__init__(ToolRegistry(workspace))
+        super().__init__(__import__("core.tools", fromlist=["ToolRegistry"]).ToolRegistry(workspace))
         self.activated: list[str] = []
         self.deactivated: list[str] = []
 
@@ -32,56 +30,26 @@ class _FakeBridge(MCPToolBridge):
         return super().deactivate(server_id)
 
 
-@pytest.fixture
-def controller(tmp_path):
-    """Crea un MCPController aislado del estado real del proyecto.
-
-    Puntos clave:
-      · MCPServerStore apunta a un archivo temporal que no existe, así
-        no carga el mcp_servers.json real del usuario (que podría tener
-        servidores enabled=True y arrancarían threads de npx durante
-        los tests).
-      · shutdown() garantiza que ningún QThread quede vivo al terminar,
-        evitando el segfault de Qt al destruir objetos.
-    """
+def _controller(tmp_path):
     from ui.controllers.mcp_controller import MCPController
 
     owner = QObject()
     workspace = Workspace(tmp_path)
     bridge = _FakeBridge(workspace)
-
-    # Store aislado: archivo que no existe → default_servers() sin enabled.
-    isolated_store = MCPServerStore(path=tmp_path / "no_existe.json")
-
-    ctrl = MCPController(
-        parent=owner,
-        parent_widget=None,
-        bridge=bridge,
-        workspace=workspace,
-        store=isolated_store,
-    )
-    try:
-        yield ctrl, bridge
-    finally:
-        try:
-            ctrl.shutdown()
-        except Exception:
-            pass
-        try:
-            ctrl.servers_changed.disconnect()
-        except (TypeError, RuntimeError):
-            pass
-        owner.deleteLater()
+    ctrl = MCPController(parent=owner, parent_widget=None, bridge=bridge, workspace=workspace)
+    ctrl._owner = owner
+    return ctrl, bridge
 
 
-def test_report_failure_without_config_is_noop(controller):
-    ctrl, bridge = controller
+def test_report_failure_without_config_is_noop(tmp_path):
+    ctrl, bridge = _controller(tmp_path)
     ctrl.report_failure("desconocido")
     assert ctrl.dead_ids == []
 
 
-def test_report_failure_marks_dead_and_deactivates_bridge(controller):
-    ctrl, bridge = controller
+def test_report_failure_marks_dead_and_deactivates_bridge(tmp_path, monkeypatch):
+    ctrl, bridge = _controller(tmp_path)
+    # Simula un servidor ya conectado y con config registrada.
     from plugins.mcp import MCPServerConfig
     ctrl._configs["demo"] = MCPServerConfig("python3", ("fake.py",))
 
@@ -95,8 +63,8 @@ def test_report_failure_marks_dead_and_deactivates_bridge(controller):
     assert changes  # emitió señal
 
 
-def test_report_failure_is_idempotent(controller):
-    ctrl, bridge = controller
+def test_report_failure_is_idempotent(tmp_path):
+    ctrl, bridge = _controller(tmp_path)
     from plugins.mcp import MCPServerConfig
     ctrl._configs["demo"] = MCPServerConfig("python3", ("fake.py",))
 
@@ -106,10 +74,11 @@ def test_report_failure_is_idempotent(controller):
     assert len(bridge.deactivated) == deactivated_before
 
 
-def test_report_failure_ignores_pending_server(controller):
-    ctrl, _ = controller
+def test_report_failure_ignores_pending_server(tmp_path):
+    ctrl, _ = _controller(tmp_path)
     from plugins.mcp import MCPServerConfig
     ctrl._configs["demo"] = MCPServerConfig("python3", ("fake.py",))
+    # Simula un thread pendiente.
     ctrl._threads["demo"] = object()  # type: ignore[assignment]
 
     ctrl.report_failure("demo")
@@ -117,8 +86,8 @@ def test_report_failure_ignores_pending_server(controller):
     ctrl._threads.clear()
 
 
-def test_deactivate_manual_clears_dead_and_config(controller):
-    ctrl, _ = controller
+def test_deactivate_manual_clears_dead_and_config(tmp_path):
+    ctrl, _ = _controller(tmp_path)
     from plugins.mcp import MCPServerConfig
     ctrl._configs["demo"] = MCPServerConfig("python3", ("fake.py",))
     ctrl.report_failure("demo")
@@ -129,15 +98,15 @@ def test_deactivate_manual_clears_dead_and_config(controller):
     assert "demo" not in ctrl._configs
 
 
-def test_reconnect_without_config_is_noop(controller):
-    ctrl, _ = controller
+def test_reconnect_without_config_is_noop(tmp_path):
+    ctrl, _ = _controller(tmp_path)
     ctrl.reconnect("desconocido")
     assert "desconocido" not in ctrl.dead_ids
     assert ctrl._threads == {}
 
 
-def test_servers_changed_emits_four_lists(controller):
-    ctrl, _ = controller
+def test_servers_changed_emits_three_lists(tmp_path):
+    ctrl, _ = _controller(tmp_path)
     captured: list[tuple] = []
     ctrl.servers_changed.connect(lambda *args: captured.append(args))
 
@@ -146,7 +115,7 @@ def test_servers_changed_emits_four_lists(controller):
     ctrl.report_failure("demo")
 
     assert captured
-    entries, active, pending, dead = captured[-1]
+    active, pending, dead = captured[-1]
     assert isinstance(active, list)
     assert isinstance(pending, list)
     assert isinstance(dead, list)

@@ -1,8 +1,4 @@
-"""Panel lateral como widget autocontenido.
-
-No conoce Ollama ni MCP: emite señales cuando el usuario interactúa y expone
-métodos ``set_*`` para que el controlador refleje el estado.
-"""
+"""Panel lateral como widget autocontenido."""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
@@ -20,11 +16,10 @@ from .diagnostics_panel import DiagnosticsPanel
 
 
 class Sidebar(QWidget):
-    # interacción del usuario
     model_refresh_requested = Signal()
     model_selected = Signal(str)
     workspace_change_requested = Signal()
-    mcp_toggle_requested = Signal(bool)
+    mcp_toggle_requested = Signal(str, bool)
     agent_changed = Signal(str)
     agent_edit_requested = Signal()
     agent_create_requested = Signal()
@@ -34,15 +29,13 @@ class Sidebar(QWidget):
         super().__init__()
         self.setObjectName("Sidebar")
         self.setFixedWidth(design.SIDEBAR_WIDTH_PX)
-        # Estado explícito del único servidor MCP soportado (archivos).
-        self._mcp_active = False
-        self._mcp_pending = False
-        self._mcp_dead = False
         self._busy = False
+        self._mcp_buttons: dict[str, QPushButton] = {}
+        self._mcp_states: dict[str, str] = {}
+        self._mcp_labels: dict[str, str] = {}
         self._build()
 
     # -- construcción --------------------------------------------------------
-
     def _build(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -75,6 +68,7 @@ class Sidebar(QWidget):
         agent_row.addWidget(self.agent_edit_button)
         layout.addLayout(agent_row)
 
+        # -- MODELO (agrupado) --
         model_title = QLabel("MODELO")
         model_title.setObjectName("SectionTitle")
         layout.addWidget(model_title)
@@ -83,21 +77,21 @@ class Sidebar(QWidget):
         self.model_combo.currentTextChanged.connect(self.model_selected)
         layout.addWidget(self.model_combo)
 
-        mcp_title = QLabel("MCP (ARCHIVOS)")
-        mcp_title.setObjectName("SectionTitle")
-        layout.addWidget(mcp_title)
-
-        self.mcp_toggle_button = QPushButton("Activar MCP")
-        self.mcp_toggle_button.setObjectName("SecondaryButton")
-        self.mcp_toggle_button.setCheckable(True)
-        self.mcp_toggle_button.toggled.connect(self._on_mcp_toggled)
-        layout.addWidget(self.mcp_toggle_button)
-
         refresh = QPushButton("Actualizar modelos")
         refresh.setObjectName("SecondaryButton")
         refresh.clicked.connect(lambda: self.model_refresh_requested.emit())
         layout.addWidget(refresh)
 
+        # -- MCP --
+        mcp_title = QLabel("MCP")
+        mcp_title.setObjectName("SectionTitle")
+        layout.addWidget(mcp_title)
+
+        self.mcp_list = QVBoxLayout()
+        self.mcp_list.setSpacing(6)
+        layout.addLayout(self.mcp_list)
+
+        # -- CARPETA DE TRABAJO --
         layout.addSpacing(14)
         workspace_title = QLabel("CARPETA DE TRABAJO")
         workspace_title.setObjectName("SectionTitle")
@@ -117,6 +111,7 @@ class Sidebar(QWidget):
         choose.clicked.connect(lambda: self.workspace_change_requested.emit())
         layout.addWidget(choose)
 
+        # -- SESIÓN --
         layout.addSpacing(14)
         diagnostics_title = QLabel("SESIÓN")
         diagnostics_title.setObjectName("SectionTitle")
@@ -131,7 +126,6 @@ class Sidebar(QWidget):
         layout.addWidget(clear)
 
     # -- API pública ---------------------------------------------------------
-
     def set_models(self, models: list[str], current: str | None) -> None:
         blocked = self.model_combo.blockSignals(True)
         self.model_combo.clear()
@@ -159,50 +153,90 @@ class Sidebar(QWidget):
 
     def set_mcp_servers(
         self,
+        entries: list[dict],
         active: list[str],
         pending: list[str],
-        dead: list[str] | None = None,
+        dead: list[str],
     ) -> None:
-        """Refleja el estado del único servidor MCP soportado (archivos).
+        """Refleja el estado de los servidores MCP configurados.
 
-        Sólo importa si hay algo en cada lista, no el id concreto: la
-        sidebar ya no distingue servidores por nombre.
+        Cada servidor se muestra como un botón con texto ON/OFF bien
+        visible, sin checkboxes ni estilos raros.
         """
-        self._mcp_active = bool(active)
-        self._mcp_pending = bool(pending)
-        self._mcp_dead = bool(dead)
-        self._render_mcp_button()
+        active_set = set(active)
+        pending_set = set(pending)
+        dead_set = set(dead)
+        self._mcp_states = {}
+        self._mcp_labels = {}
+        seen_ids = set()
+
+        for entry in entries:
+            sid = entry.get("id")
+            if not sid:
+                continue
+            seen_ids.add(sid)
+            self._mcp_labels[sid] = entry.get("label", sid)
+            if sid in dead_set:
+                self._mcp_states[sid] = "dead"
+            elif sid in pending_set:
+                self._mcp_states[sid] = "pending"
+            elif sid in active_set:
+                self._mcp_states[sid] = "active"
+            else:
+                self._mcp_states[sid] = "off"
+            self._ensure_mcp_button(sid)
+
+        # Limpiar botones huérfanos
+        for sid in list(self._mcp_buttons):
+            if sid not in seen_ids:
+                button = self._mcp_buttons.pop(sid)
+                self.mcp_list.removeWidget(button)
+                button.deleteLater()
+        self._render_mcp_buttons()
 
     def set_busy(self, busy: bool) -> None:
         self._busy = busy
         self._apply_busy()
 
     # -- helpers -------------------------------------------------------------
+    def _ensure_mcp_button(self, server_id: str) -> None:
+        if server_id in self._mcp_buttons:
+            return
+        button = QPushButton("")
+        button.setObjectName("McpToggle")
+        button.setCheckable(True)
+        button.setMinimumHeight(34)
+        button.clicked.connect(
+            lambda checked, sid=server_id: self.mcp_toggle_requested.emit(sid, checked)
+        )
+        self._mcp_buttons[server_id] = button
+        self.mcp_list.addWidget(button)
 
-    def _on_mcp_toggled(self, checked: bool) -> None:
-        self.mcp_toggle_requested.emit(checked)
+    def _render_mcp_buttons(self) -> None:
+        for sid, button in self._mcp_buttons.items():
+            state = self._mcp_states.get(sid, "off")
+            base = self._mcp_labels.get(sid, sid)
+            blocked = button.blockSignals(True)
 
-    def _render_mcp_button(self) -> None:
-        button = self.mcp_toggle_button
-        blocked = button.blockSignals(True)
-        if self._mcp_dead:
-            button.setChecked(False)
-            button.setText("MCP sin respuesta · reconectar")
-            button.setEnabled(not self._busy)
-        elif self._mcp_pending:
-            button.setChecked(True)
-            button.setText("Conectando MCP…")
-            button.setEnabled(False)
-        elif self._mcp_active:
-            button.setChecked(True)
-            button.setText("MCP activo (desactivar)")
-            button.setEnabled(not self._busy)
-        else:
-            button.setChecked(False)
-            button.setText("Activar MCP")
-            button.setEnabled(not self._busy)
-        button.blockSignals(blocked)
+            if state == "dead":
+                button.setChecked(False)
+                button.setText(f"⚠  {base}   —   reconectar")
+                button.setEnabled(not self._busy)
+            elif state == "pending":
+                button.setChecked(True)
+                button.setText(f"◐  {base}   —   conectando…")
+                button.setEnabled(False)
+            elif state == "active":
+                button.setChecked(True)
+                button.setText(f"ON   ·   {base}")
+                button.setEnabled(not self._busy)
+            else:
+                button.setChecked(False)
+                button.setText(f"OFF  ·   {base}")
+                button.setEnabled(not self._busy)
+
+            button.blockSignals(blocked)
 
     def _apply_busy(self) -> None:
         self.model_combo.setEnabled(not self._busy)
-        self._render_mcp_button()
+        self._render_mcp_buttons()

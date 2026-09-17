@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from .. import design
 from ..rendering import ChatRenderer, PlainTextRenderer
+from ..theme import DOCUMENT_STYLESHEET
 from ..widgets import ChatInput, ChatView
 
 RendererFactory = Callable[[QTextEdit], ChatRenderer]
@@ -50,7 +51,6 @@ class ChatPanel(QWidget):
         self._install_shortcuts()
 
     # -- construcción --------------------------------------------------------
-
     def _build(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 22, 28, 18)
@@ -61,6 +61,8 @@ class ChatPanel(QWidget):
         self.chat.setReadOnly(True)
         self.chat.document().setUndoRedoEnabled(False)
         self.chat.document().setMaximumBlockCount(5000)
+        # CSS para el HTML insertado (Markdown renderizado, tarjetas).
+        self.chat.document().setDefaultStyleSheet(DOCUMENT_STYLESHEET)
         layout.addWidget(self.chat, 1)
 
         indicator_row = QHBoxLayout()
@@ -109,7 +111,6 @@ class ChatPanel(QWidget):
         )
 
     # -- señales de entrada --------------------------------------------------
-
     def _on_submit(self) -> None:
         if self._streaming:
             return
@@ -129,7 +130,6 @@ class ChatPanel(QWidget):
         self.clear_requested.emit()
 
     # -- API pública ---------------------------------------------------------
-
     def set_streaming(self, streaming: bool) -> None:
         self._streaming = streaming
         self.send.setText("Detener" if streaming else "Enviar")
@@ -160,7 +160,6 @@ class ChatPanel(QWidget):
         return text
 
     # -- indicadores ---------------------------------------------------------
-
     def _start_indicators(self) -> None:
         self._thinking_step = 0
         self.thinking_label.setText("•••")

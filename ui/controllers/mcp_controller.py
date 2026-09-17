@@ -5,6 +5,7 @@ import shlex
 from PySide6.QtCore import QObject, QThread, Signal
 from PySide6.QtWidgets import QWidget
 
+from core.mcp_servers import MCPServerEntry, MCPServerStore
 from core.workspace import Workspace
 from plugins.mcp import (
     MCPClient,
@@ -16,26 +17,17 @@ from plugins.mcp import (
 from ..views.dialogs import warn
 from ..workers import MCPWorker
 
-# Único servidor MCP soportado desde la UI: acceso a archivos del workspace
-# actual. El interruptor de la sidebar activa/desactiva justo este servidor,
-# sin pedir nombre ni comando.
-FILESYSTEM_SERVER_ID = "fs"
-
 
 class MCPController(QObject):
     """Gestiona el ciclo de vida de los servidores MCP.
 
-    Guarda la ``MCPServerConfig`` de cada servidor activo para poder
-    reconectar cuando el proceso hijo muere sin que el usuario tenga que
-    reintroducir el comando. Cuando una llamada MCP falla, el
-    ``ChatController`` emite ``mcp_error(server_id)`` y el
-    ``AppController`` lo reenvía a ``report_failure``. A partir de ese
-    momento el servidor queda marcado como "sin respuesta" y la sidebar
-    ofrece reconectarlo.
+    Los servidores se declaran en ``mcp_servers.json``. La UI muestra un
+    toggle por cada uno. La señal ``servers_changed`` emite las entradas
+    completas + el estado para que la sidebar los renderice.
     """
 
-    # active_ids, pending_ids, dead_ids
-    servers_changed = Signal(list, list, list)
+    # entries(as dicts), active_ids, pending_ids, dead_ids
+    servers_changed = Signal(list, list, list, list)
     status = Signal(str)
     error = Signal(str)
 
@@ -45,20 +37,28 @@ class MCPController(QObject):
         parent_widget: QWidget,
         bridge: MCPToolBridge,
         workspace: Workspace,
+        store: MCPServerStore | None = None,
     ):
         super().__init__(parent)
         self._parent_widget = parent_widget
         self.bridge = bridge
         self.workspace = workspace
+        self.store = store or MCPServerStore()
+        self.entries: list[MCPServerEntry] = self.store.load(str(workspace.root))
         self._threads: dict[str, QThread] = {}
         self._workers: dict[str, MCPWorker] = {}
-        # Config completa por servidor, para poder reconectar.
         self._configs: dict[str, MCPServerConfig] = {}
-        # Servidores cuyo proceso hijo ha dejado de responder.
         self._dead: set[str] = set()
 
-    # -- consulta ------------------------------------------------------------
+        # Autoactivar los marcados como enabled en el JSON.
+        for entry in self.entries:
+            if entry.enabled:
+                self._connect(
+                    entry.id, entry.command,
+                    args=tuple(entry.args), env=entry.env,
+                )
 
+    # -- consulta ------------------------------------------------------------
     @property
     def pending_ids(self) -> list[str]:
         return list(self._threads)
@@ -67,81 +67,82 @@ class MCPController(QObject):
     def dead_ids(self) -> list[str]:
         return sorted(self._dead)
 
+    def entries_by_id(self) -> dict[str, MCPServerEntry]:
+        return {e.id: e for e in self.entries}
+
     # -- API pública ---------------------------------------------------------
-
     def rebind(self, bridge: MCPToolBridge, workspace: Workspace) -> None:
-        """Sustituye el bridge y el workspace en caliente.
-
-        Cierra las conexiones del workspace anterior. No recrea el objeto.
-        """
         self._shutdown_connections()
         self.bridge = bridge
         self.workspace = workspace
+        self.entries = self.store.load(str(workspace.root))
         self._emit_changed()
 
-    def toggle(self, enabled: bool) -> None:
-        """Activa o desactiva el servidor MCP de archivos del workspace actual."""
-        server_id = FILESYSTEM_SERVER_ID
+    def toggle(self, server_id: str, enabled: bool) -> None:
+        entry = self.entries_by_id().get(server_id)
+        if entry is None:
+            return
+        entry.enabled = enabled
+        self.store.save(self.entries)
         if enabled:
             if server_id in self.bridge.active_servers or server_id in self._threads:
                 return
             if server_id in self._dead:
                 self.reconnect(server_id)
                 return
-            command = (
-                f"npx -y @modelcontextprotocol/server-filesystem "
-                f"{shlex.quote(str(self.workspace.root))}"
+            self._connect(
+                server_id, entry.command,
+                args=tuple(entry.args), env=entry.env,
             )
-            self._connect(server_id, command)
         else:
             self.deactivate(server_id)
 
     def deactivate(self, server_id: str) -> None:
-        """Cierra el servidor y olvida su configuración."""
         if server_id in self._threads:
             return
         self._dead.discard(server_id)
         self._configs.pop(server_id, None)
         self.bridge.deactivate(server_id)
+        entry = self.entries_by_id().get(server_id)
+        if entry is not None:
+            entry.enabled = False
+            self.store.save(self.entries)
         self.status.emit(f"MCP «{server_id}» desactivado")
         self._emit_changed()
 
     def report_failure(self, server_id: str) -> None:
-        """Marca un servidor como caído. Se llama cuando una llamada MCP
-        devuelve un error que sugiere que el proceso hijo ya no responde.
-
-        La configuración se conserva para poder reconectar. Las herramientas
-        se ocultan del bridge hasta que la reconexión se complete.
-        """
         if server_id in self._dead:
             return
         if server_id not in self._configs:
             return
         if server_id in self._threads:
-            # Todavía se está conectando por primera vez; no hacer nada.
             return
-
         self._dead.add(server_id)
         self.bridge.deactivate(server_id)
         self.status.emit(f"MCP «{server_id}» sin respuesta")
         self._emit_changed()
 
     def reconnect(self, server_id: str) -> None:
-        """Reconecta un servidor caído usando la config guardada."""
         config = self._configs.get(server_id)
-        if config is None:
-            return
-        if server_id in self._threads:
+        if config is None or server_id in self._threads:
             return
         self._dead.discard(server_id)
         self.status.emit(f"Reconectando MCP «{server_id}»…")
         self._connect(server_id, config.command, args=config.args)
 
+    def emit_current_state(self) -> None:
+        """Fuerza el envío de servers_changed con el estado actual.
+
+        Se llama desde AppController después del wiring, para que la
+        sidebar reciba las entries aunque MCPController las emitiera
+        antes de que la señal estuviera conectada.
+        """
+        self._emit_changed()
+
     def shutdown(self) -> None:
         self._shutdown_connections()
 
     # -- implementación ------------------------------------------------------
-
     def _shutdown_connections(self) -> None:
         self.bridge.deactivate()
         for worker in list(self._workers.values()):
@@ -155,23 +156,15 @@ class MCPController(QObject):
         self._configs.clear()
         self._dead.clear()
 
-    def _connect(
-        self,
-        server_id: str,
-        command: str,
-        *,
-        args: tuple[str, ...] | None = None,
-    ) -> None:
+    def _connect(self, server_id, command, *, args=None, env=None):
         try:
-            if args is None:
-                parts = shlex.split(command)
-            else:
-                parts = [command, *args]
+            parts = shlex.split(command) if args is None else [command, *args]
             if not parts:
                 raise ValueError("El comando MCP está vacío.")
             config = MCPServerConfig(
                 command=parts[0],
                 args=tuple(parts[1:]),
+                env=dict(env or {}),
                 cwd=str(self.workspace.root),
             )
             client = MCPClient(config)
@@ -180,11 +173,8 @@ class MCPController(QObject):
             self._emit_changed()
             return
 
-        # Solo guardamos la config al ir a conectar. Así `deactivate`
-        # manual olvida el comando, pero `report_failure` lo conserva.
         self._configs[server_id] = config
         self._dead.discard(server_id)
-
         self.status.emit(f"Consultando herramientas MCP de «{server_id}»…")
 
         thread = QThread(self)
@@ -201,15 +191,13 @@ class MCPController(QObject):
         thread.start()
         self._emit_changed()
 
-    def _on_loaded(self, server_id: str, client: MCPClient, tools: list) -> None:
+    def _on_loaded(self, server_id, client, tools):
         try:
             self.bridge.activate(server_id, client, tools)
             count = sum(
-                1
-                for item in self.bridge.definitions()
-                if item.get("function", {}).get("name", "").startswith(
-                    f"mcp__{server_id}__"
-                )
+                1 for item in self.bridge.definitions()
+                if item.get("function", {}).get("name", "")
+                .startswith(f"mcp__{server_id}__")
             )
             self.status.emit(f"MCP «{server_id}» activo · {count} herramienta(s)")
         except Exception as exc:
@@ -219,14 +207,14 @@ class MCPController(QObject):
             self.error.emit(f"«{server_id}»: {exc}")
         self._emit_changed()
 
-    def _on_error(self, server_id: str, message: str) -> None:
+    def _on_error(self, server_id, message):
         self.bridge.deactivate(server_id)
         self._dead.add(server_id)
         self.status.emit(f"MCP «{server_id}» no disponible")
         self.error.emit(f"«{server_id}»: {message}")
         self._emit_changed()
 
-    def _on_thread_finished(self) -> None:
+    def _on_thread_finished(self):
         finished_ids = [
             sid for sid, thread in self._threads.items() if not thread.isRunning()
         ]
@@ -239,8 +227,9 @@ class MCPController(QObject):
                 thread.deleteLater()
         self._emit_changed()
 
-    def _emit_changed(self) -> None:
+    def _emit_changed(self):
         self.servers_changed.emit(
+            [e.to_dict() for e in self.entries],
             list(self.bridge.active_servers),
             list(self._threads),
             sorted(self._dead),
