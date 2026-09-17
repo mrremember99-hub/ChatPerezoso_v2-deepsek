@@ -93,6 +93,7 @@ class AppController(QObject):
         # agent_changed(Agent). Así el handler real solo recibe objetos.
         s.agent_changed.connect(self._on_agent_name_selected)
         s.agent_edit_requested.connect(self.agent_ctrl.edit_active)
+        s.agent_create_requested.connect(self.agent_ctrl.create_new)
         self.agent_ctrl.agent_changed.connect(self._on_agent_changed)
 
         s.model_refresh_requested.connect(self.model_ctrl.load)

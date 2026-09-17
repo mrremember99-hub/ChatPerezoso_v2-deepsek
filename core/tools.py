@@ -223,18 +223,33 @@ class ToolRegistry:
                 end_line=end if end is not None else None,
             )
         if name == "crear_archivo":
-            return self.workspace.create_file(
+            result = self.workspace.create_file(
                 arguments["path"], arguments.get("content", "")
             )
+            return self._with_verification(result, arguments["path"])
         if name == "crear_carpeta":
             return self.workspace.create_folder(arguments["path"])
         if name == "escribir_archivo":
-            return self.workspace.write_file(
+            result = self.workspace.write_file(
                 arguments["path"], arguments["content"]
             )
+            return self._with_verification(result, arguments["path"])
         if name == "borrar_archivo":
             return self.workspace.delete_file(arguments["path"])
         return f"ERROR: herramienta desconocida: {name}"
+
+    def _with_verification(self, result: str, path: str) -> str:
+        """Añade al resultado el contenido real leído del disco tras crear o
+        escribir un archivo. El modelo (y el usuario, en la caja de resultado
+        de la herramienta) ven lo que hay de verdad, no lo que el modelo cree
+        haber escrito — evita que un error de contenido pase desapercibido.
+        """
+        try:
+            actual = self.workspace.read_file(path)
+        except Exception:
+            return result
+        preview = actual if len(actual) <= 2000 else actual[:2000] + "\n…(truncado)"
+        return f"{result}\n\nContenido verificado en disco:\n---\n{preview}\n---"
 
 
 def _matches_type(value: Any, declared: str) -> bool:

@@ -38,6 +38,42 @@ def test_registry_call(tmp_path):
     assert not (tmp_path / "nuevo.txt").exists()
 
 
+def test_write_result_includes_content_verified_from_disk(tmp_path):
+    """El resultado de crear/escribir debe incluir el contenido real leído
+    del disco, no solo un mensaje de éxito — para que el modelo (y el
+    diálogo/caja de resultado) puedan detectar un contenido equivocado."""
+    tools = ToolRegistry(Workspace(tmp_path))
+
+    created = tools.call(
+        "crear_archivo",
+        {"path": "a.txt", "content": "contenido de prueba"},
+        allow_destructive=True,
+    )
+    assert "Contenido verificado en disco" in created
+    assert "contenido de prueba" in created
+
+    written = tools.call(
+        "escribir_archivo",
+        {"path": "a.txt", "content": "contenido nuevo"},
+        allow_destructive=True,
+    )
+    assert "Contenido verificado en disco" in written
+    assert "contenido nuevo" in written
+    assert "contenido de prueba" not in written
+
+
+def test_write_result_truncates_long_verified_content(tmp_path):
+    tools = ToolRegistry(Workspace(tmp_path))
+    long_content = "x" * 3000
+    result = tools.call(
+        "crear_archivo",
+        {"path": "grande.txt", "content": long_content},
+        allow_destructive=True,
+    )
+    assert "…(truncado)" in result
+    assert len(result) < len(long_content) + 500
+
+
 def test_registry_call_folder(tmp_path):
     tools = ToolRegistry(Workspace(tmp_path))
     bloqueada = tools.call("crear_carpeta", {"path": "fotos"})

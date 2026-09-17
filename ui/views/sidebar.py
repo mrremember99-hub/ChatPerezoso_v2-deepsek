@@ -27,6 +27,7 @@ class Sidebar(QWidget):
     mcp_toggle_requested = Signal(bool)
     agent_changed = Signal(str)
     agent_edit_requested = Signal()
+    agent_create_requested = Signal()
     clear_chat_requested = Signal()
 
     def __init__(self) -> None:
@@ -60,6 +61,12 @@ class Sidebar(QWidget):
         self.agent_combo = QComboBox()
         self.agent_combo.currentTextChanged.connect(self.agent_changed)
         agent_row.addWidget(self.agent_combo, 1)
+        self.agent_new_button = QPushButton("Nuevo")
+        self.agent_new_button.setObjectName("SecondaryButton")
+        self.agent_new_button.clicked.connect(
+            lambda: self.agent_create_requested.emit()
+        )
+        agent_row.addWidget(self.agent_new_button)
         self.agent_edit_button = QPushButton("Editar")
         self.agent_edit_button.setObjectName("SecondaryButton")
         self.agent_edit_button.clicked.connect(

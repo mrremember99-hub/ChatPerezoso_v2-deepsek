@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QWidget
 
 from core.agents import Agent, AgentStore, default_agents
 
-from ..views.dialogs import edit_agent
+from ..views.dialogs import edit_agent, warn
 
 
 class AgentController(QObject):
@@ -60,6 +60,39 @@ class AgentController(QObject):
             return
         self._active_name = name
         self.agent_changed.emit(self.active_agent())
+
+    def create_new(self) -> None:
+        """Abre el diálogo de edición sobre una plantilla en blanco. Si el
+        usuario confirma, el resultado se AÑADE a la lista (no reemplaza al
+        agente activo) y pasa a ser el agente activo."""
+        existing_names = {agent.name for agent in self.agents}
+        base = "Nuevo agente"
+        name = base
+        counter = 2
+        while name in existing_names:
+            name = f"{base} {counter}"
+            counter += 1
+        template = Agent(name=name)
+
+        created = edit_agent(
+            self._parent_widget,
+            agent=template,
+            available_tools=self._available_tools,
+        )
+        if created is None:
+            return
+        if created.name in existing_names:
+            warn(
+                self._parent_widget,
+                "Agente",
+                f"Ya existe un agente llamado «{created.name}».",
+            )
+            return
+
+        self.agents.append(created)
+        self._active_name = created.name
+        self.store.save(self.agents)
+        self.agent_changed.emit(created)
 
     def edit_active(self) -> None:
         current = self.active_agent()

@@ -59,3 +59,60 @@ def test_edit_active_rename_to_existing_name_drops_the_other(qapp, monkeypatch):
     names = [a.name for a in ctrl.agents]
     assert names == ["A", "C"]
     assert ctrl.active_agent().system_prompt == "soy el nuevo C"
+
+
+def test_create_new_appends_and_activates(qapp, monkeypatch):
+    agents = [Agent(name="A"), Agent(name="B")]
+    ctrl = _controller(qapp, agents)
+    ctrl.set_active("A")
+
+    created = Agent(name="Nuevo agente", system_prompt="hola")
+    monkeypatch.setattr(
+        "ui.controllers.agent_controller.edit_agent",
+        lambda *a, **k: created,
+    )
+    ctrl.create_new()
+
+    assert [a.name for a in ctrl.agents] == ["A", "B", "Nuevo agente"]
+    assert ctrl.active_name == "Nuevo agente"
+    assert ctrl.active_agent().system_prompt == "hola"
+    assert ctrl.store.saved is not None
+
+
+def test_create_new_cancelled_dialog_does_nothing(qapp, monkeypatch):
+    agents = [Agent(name="A"), Agent(name="B")]
+    ctrl = _controller(qapp, agents)
+    ctrl.set_active("A")
+
+    monkeypatch.setattr(
+        "ui.controllers.agent_controller.edit_agent",
+        lambda *a, **k: None,
+    )
+    ctrl.create_new()
+
+    assert [a.name for a in ctrl.agents] == ["A", "B"]
+    assert ctrl.active_name == "A"
+
+
+def test_create_new_rejects_duplicate_name(qapp, monkeypatch):
+    agents = [Agent(name="A"), Agent(name="B")]
+    ctrl = _controller(qapp, agents)
+    ctrl.set_active("A")
+
+    # El usuario escribe un nombre que ya existe.
+    duplicate = Agent(name="B", system_prompt="suplantador")
+    monkeypatch.setattr(
+        "ui.controllers.agent_controller.edit_agent",
+        lambda *a, **k: duplicate,
+    )
+    warnings: list[tuple] = []
+    monkeypatch.setattr(
+        "ui.controllers.agent_controller.warn",
+        lambda *a, **k: warnings.append(a),
+    )
+    ctrl.create_new()
+
+    # No se añade ni se activa: sigue habiendo solo A y B, sin cambios.
+    assert [a.name for a in ctrl.agents] == ["A", "B"]
+    assert ctrl.active_name == "A"
+    assert warnings  # se avisó al usuario del nombre duplicado
