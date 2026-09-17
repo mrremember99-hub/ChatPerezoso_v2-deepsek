@@ -1,11 +1,34 @@
+import pytest
+
+from core.intent import ToolIntentGate
 from core.ollama import OllamaClient
+
+
+@pytest.fixture(autouse=True)
+def _register_core_rules(tmp_path):
+    """Registra las reglas del núcleo para que los tests que pasan listas
+    de definiciones (en vez de un ToolProvider) encuentren las reglas."""
+    from core.tools import ToolRegistry
+    from core.workspace import Workspace
+
+    rules = ToolRegistry(Workspace(tmp_path)).intent_rules()
+    ToolIntentGate.register_rules(rules)
+    # Añade la regla MCP para los nombres usados en los tests.
+    from core.intent import IntentRule
+    ToolIntentGate.register_rules({
+        "mcp__saludar": IntentRule(mcp_explicit_name_required=True),
+        "mcp__fs__list_directory": ToolRegistry(Workspace(tmp_path)).intent_rules()["listar_carpeta"],
+        "mcp__fs__read_text_file": ToolRegistry(Workspace(tmp_path)).intent_rules()["leer_archivo"],
+        "mcp__fs__write_file": ToolRegistry(Workspace(tmp_path)).intent_rules()["crear_archivo"],
+    })
+
 
 
 def test_chat_without_tools(monkeypatch):
     client = OllamaClient()
     chunks = []
 
-    def fake_stream(model, messages, tools, on_text, cancel_event=None):
+    def fake_stream(model, messages, tools, on_text, cancel_event=None, options=None):
         assert model == "test-model"
         assert tools is None
         on_text("Hola")
@@ -30,7 +53,7 @@ def test_chat_executes_tool_and_continues(monkeypatch):
         {"role": "assistant", "content": "Hecho."},
     ])
 
-    def fake_stream(model, messages, tools, on_text, cancel_event=None):
+    def fake_stream(model, messages, tools, on_text, cancel_event=None, options=None):
         calls.append((model, len(messages), tools is not None))
         return next(responses)
 
@@ -53,7 +76,7 @@ def test_chat_keeps_tools_on_ollama_tool_error(monkeypatch):
     client = OllamaClient()
     calls = []
 
-    def fake_stream(model, messages, tools, on_text, cancel_event=None):
+    def fake_stream(model, messages, tools, on_text, cancel_event=None, options=None):
         calls.append((messages, tools))
         raise Exception("should not be reached")
 
@@ -79,7 +102,7 @@ def test_chat_does_not_execute_textual_tool_call(monkeypatch):
     responses = iter([{"role": "assistant", "content": "Solicito la herramienta crear_archivo."}])
     calls = []
 
-    def fake_stream(model, messages, tools, on_text, cancel_event=None):
+    def fake_stream(model, messages, tools, on_text, cancel_event=None, options=None):
         return next(responses)
 
     monkeypatch.setattr(client, "_stream", fake_stream)
@@ -98,7 +121,7 @@ def test_chat_hides_tools_for_informative_request(monkeypatch):
     client = OllamaClient()
     stream_tools = []
 
-    def fake_stream(model, messages, tools, on_text, cancel_event=None):
+    def fake_stream(model, messages, tools, on_text, cancel_event=None, options=None):
         stream_tools.append(tools)
         return {"role": "assistant", "content": "El diseño editorial organiza contenido."}
 
@@ -120,7 +143,7 @@ def test_chat_exposes_explicitly_named_mcp_tool(monkeypatch):
     stream_tools = []
     mcp_tools = [{"type": "function", "function": {"name": "mcp__saludar"}}]
 
-    def fake_stream(model, messages, tools, on_text, cancel_event=None):
+    def fake_stream(model, messages, tools, on_text, cancel_event=None, options=None):
         stream_tools.append(tools)
         return {"role": "assistant", "content": "Hola."}
 
@@ -222,7 +245,11 @@ def test_textual_tool_call_detection():
     assert OllamaClient._textual_tool_call_name(
         '{"name": "otra_cosa", "parameters": {}}', tool_names
     ) is None
-    assert OllamaClient._textual_tool_call_name('{"name": "leer_archivo"}', tool_names) is None
+    # Detector relajado: un JSON con "name" de una herramienta conocida
+    # cuenta como llamada textual, aunque no traiga "parameters".
+    assert OllamaClient._textual_tool_call_name(
+        '{"name": "leer_archivo"}', tool_names
+    ) == "leer_archivo"
 
 
 def test_stream_flags_textual_tool_call_without_showing_it(monkeypatch):
@@ -275,7 +302,7 @@ def test_chat_retries_once_after_textual_tool_call_then_succeeds(monkeypatch):
     ])
     calls = []
 
-    def fake_stream(model, messages, tools, on_text, cancel_event=None):
+    def fake_stream(model, messages, tools, on_text, cancel_event=None, options=None):
         return next(responses)
 
     monkeypatch.setattr(client, "_stream", fake_stream)
@@ -298,7 +325,7 @@ def test_chat_gives_up_after_repeated_textual_tool_call(monkeypatch):
         {"role": "assistant", "content": "", "_textual_tool_name": "leer_archivo"},
     ])
 
-    def fake_stream(model, messages, tools, on_text, cancel_event=None):
+    def fake_stream(model, messages, tools, on_text, cancel_event=None, options=None):
         return next(responses)
 
     monkeypatch.setattr(client, "_stream", fake_stream)
@@ -319,7 +346,7 @@ def test_chat_exposes_tools_for_cambiar_archivo(monkeypatch):
     client = OllamaClient()
     stream_tools = []
 
-    def fake_stream(model, messages, tools, on_text, cancel_event=None):
+    def fake_stream(model, messages, tools, on_text, cancel_event=None, options=None):
         stream_tools.append(tools)
         return {"role": "assistant", "content": "Hecho."}
 
@@ -421,7 +448,7 @@ def test_chat_sends_tool_name_with_mcp_tool_result(monkeypatch):
         {"role": "assistant", "content": "He encontrado los archivos."},
     ])
 
-    def fake_stream(model, messages, tools, on_text, cancel_event=None):
+    def fake_stream(model, messages, tools, on_text, cancel_event=None, options=None):
         seen_histories.append([dict(message) for message in messages])
         return next(responses)
 
@@ -456,15 +483,34 @@ def test_textual_shell_tool_call_detection():
     ) is None
 
 
-def test_mcp_filesystem_aliases_allow_read_text_and_write_file():
+def test_mcp_filesystem_aliases_allow_read_text_and_write_file(tmp_path):
+    """Las herramientas MCP que son alias heredan las reglas combinadas del
+    núcleo. write_file combina crear_archivo y escribir_archivo, así que
+    autoriza tanto "crea" como "modifica"."""
     from core.intent import ToolIntentGate
+    from core.tools import ToolRegistry
+    from core.workspace import Workspace
+    from plugins.mcp.bridge import MCPToolBridge
 
-    assert ToolIntentGate.tool_is_requested(
-        "mcp__fs__read_text_file", "lee README.md"
-    )
-    assert ToolIntentGate.tool_is_requested(
+    registry = ToolRegistry(Workspace(tmp_path))
+    core_rules = registry.intent_rules()
+    combined_write = MCPToolBridge._inherit_core_rule("write_file", core_rules)
+    assert combined_write is not None
+
+    rules = {
+        "mcp__fs__read_text_file": core_rules["leer_archivo"],
+        "mcp__fs__write_file": combined_write,
+    }
+    ToolIntentGate.register_rules(rules)
+    gate = ToolIntentGate(rules)
+
+    assert gate.tool_is_requested("mcp__fs__read_text_file", "lee README.md")
+    assert gate.tool_is_requested(
         "mcp__fs__write_file", 'crea un archivo llamado prueba.txt con el texto "hola"'
     )
-    assert ToolIntentGate.tool_is_requested(
+    assert gate.tool_is_requested(
         "mcp__fs__write_file", "modifica el archivo README.md"
+    )
+    assert gate.tool_is_requested(
+        "mcp__fs__write_file", "escribe el archivo README.md con contenido nuevo"
     )

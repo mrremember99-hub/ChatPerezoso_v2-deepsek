@@ -19,6 +19,11 @@ class PlainTextRenderer:
         self.response_text = ""
         self.response_start: int | None = None
         self.response_segment = ""
+        # Posición del documento donde empieza el último mensaje de
+        # usuario. Se usa para regenerar.
+        self.last_user_start: int | None = None
+
+    # -- ciclo de vida -------------------------------------------------------
 
     def reset(self) -> None:
         self.response_text = ""
@@ -29,11 +34,14 @@ class PlainTextRenderer:
         self.response_start = None
         self.response_segment = ""
 
+    # -- mensajes de usuario -------------------------------------------------
+
     def insert_user_message(self, text: str) -> None:
         cursor = self.chat.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         if cursor.position() > 0 and not cursor.atBlockStart():
             cursor.insertBlock()
+        self.last_user_start = cursor.position()
         safe_text = html.escape(text).replace("\n", "<br>")
         cursor.insertHtml(
             f'<table align="right" '
@@ -49,6 +57,8 @@ class PlainTextRenderer:
         cursor.insertBlock()
         self.chat.setTextCursor(cursor)
         self.chat.ensureCursorVisible()
+
+    # -- respuesta en streaming ----------------------------------------------
 
     @staticmethod
     def display_response_text(text: str) -> str:
@@ -118,6 +128,8 @@ class PlainTextRenderer:
         self.chat.setTextCursor(replace_cursor)
         self.chat.ensureCursorVisible()
 
+    # -- eventos de herramienta ---------------------------------------------
+
     def insert_tool_event(self, text: str, color: str) -> None:
         self.reset_response_segment()
         cursor = self.chat.textCursor()
@@ -151,6 +163,8 @@ class PlainTextRenderer:
         self.chat.setTextCursor(cursor)
         self.chat.ensureCursorVisible()
 
+    # -- errores -------------------------------------------------------------
+
     def insert_error(self, message: str) -> None:
         cursor = self.chat.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
@@ -159,4 +173,58 @@ class PlainTextRenderer:
         cursor.setCharFormat(fmt)
         cursor.insertText(f"\n\nError: {message}\n")
         cursor.setCharFormat(QTextCharFormat())
+        self.chat.setTextCursor(cursor)
+
+    # -- cierre de respuesta -------------------------------------------------
+
+    def final_text(self, fallback: str) -> str:
+        """Devuelve el texto final de la respuesta, ya normalizado.
+
+        Si no hubo streaming (``response_text`` vacío), inserta ``fallback``
+        en el chat para que el usuario lo vea. La normalización se aplica
+        siempre al texto devuelto, porque ``response_text`` se acumuló con
+        ``display_response_text`` pero sin el ``clean_response_text`` final
+        (que solo se aplica al segmento visible).
+        """
+        if not self.response_text and fallback:
+            self.on_text(fallback)
+        raw = self.response_text or fallback
+        return self.clean_response_text(self.display_response_text(raw))
+
+    # -- restauración -------------------------------------------------------
+
+    def restore_assistant_message(self, text: str) -> None:
+        """Inserta una respuesta completa sin simular streaming.
+
+        Se usa al cargar una conversación guardada. El flujo es:
+        ``on_text(full_text)`` acumula el texto y lo pinta, y después un
+        ``reset()`` limpia el estado para que la próxima respuesta empiece
+        limpia. El texto queda en el chat como si hubiera terminado ahí.
+        """
+        if not text:
+            return
+        self.on_text(text)
+        self.reset()
+
+    # -- regenerar ----------------------------------------------------------
+
+    def remove_from_last_user(self) -> None:
+        """Borra desde el último mensaje del usuario hasta el final.
+
+        Si no hay ``last_user_start`` registrado, no hace nada. Después
+        de la eliminación se limpia el estado del segmento para que la
+        próxima respuesta empiece en blanco.
+        """
+        if self.last_user_start is None:
+            return
+        cursor = QTextCursor(self.chat.document())
+        cursor.setPosition(self.last_user_start)
+        cursor.movePosition(
+            QTextCursor.MoveOperation.End,
+            QTextCursor.MoveMode.KeepAnchor,
+        )
+        cursor.removeSelectedText()
+        self.last_user_start = None
+        self.response_start = None
+        self.response_segment = ""
         self.chat.setTextCursor(cursor)

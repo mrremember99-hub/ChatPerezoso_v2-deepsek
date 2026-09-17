@@ -1,220 +1,269 @@
+"""Heurística de intención para el uso de herramientas.
+
+Decide, a partir del último mensaje del usuario, si procede ofrecer
+herramientas al modelo y si una llamada de herramienta concreta se
+corresponde con lo que el usuario pidió.
+
+Importante: esto NO es un mecanismo de seguridad. Es un filtro
+anti-alucinación para reducir llamadas de herramientas no solicitadas.
+El control de seguridad real frente a operaciones destructivas es la
+confirmación explícita en la interfaz.
+
+Las reglas concretas de cada herramienta las declara su ``ToolProvider``
+a través del método ``intent_rules()``. Aquí vive solo la maquinaria.
+"""
 from __future__ import annotations
 
 import re
 import unicodedata
+from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 
-class ToolIntentGate:
-    """Heurística de intención para el uso de herramientas.
+_CONJUGATION_SUFFIXES: tuple[str, ...] = (
+    "o", "as", "a", "amos", "áis", "an",
+    "o", "es", "e", "emos", "éis", "en",
+    "o", "es", "e", "imos", "ís", "en",
+    "é", "aste", "ó", "amos", "asteis", "aron",
+    "í", "iste", "ió", "imos", "isteis", "ieron",
+    "e", "es", "e", "emos", "éis", "en",
+    "a", "as", "a", "amos", "áis", "an",
+)
 
-    Decide, a partir del último mensaje del usuario, si procede ofrecer
-    herramientas al modelo y si una llamada de herramienta concreta se
-    corresponde con lo que el usuario pidió.
 
-    Importante: esto NO es un mecanismo de seguridad. Es un filtro
-    anti-alucinación para reducir llamadas de herramientas no solicitadas.
-    El control de seguridad real frente a operaciones destructivas es la
-    confirmación explícita en la interfaz (ver ``core.tools`` y
-    ``plugins.mcp.bridge``), que se aplica siempre, pase o no esta barrera.
+MCP_ACTION_VERBS: tuple[str, ...] = (
+    "usa", "usar", "utiliza", "utilizar", "llama", "llamar",
+    "invoca", "invocar", "ejecuta", "ejecutar", "realiza", "realizar",
+)
 
-    Vive fuera de ``OllamaClient`` a propósito: un cliente HTTP no debería
-    contener reglas de idioma natural en español. Aislarlas aquí permite
-    ajustarlas, sustituirlas o desactivarlas sin tocar el transporte.
+
+# Detecta un nombre de archivo con extensión (por ejemplo "notas.txt").
+_FILENAME_PATTERN = re.compile(
+    r"\b[\w\-]+\.(?:txt|md|markdown|csv|tsv|json|py|js|ts|jsx|tsx|html|htm|css"
+    r"|xml|yaml|yml|log|pdf|docx?|xlsx?|ini|cfg|conf|sh|png|jpe?g|gif|svg|webp|toml)\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_accents(text: str) -> str:
+    return "".join(
+        char for char in unicodedata.normalize("NFD", text.lower())
+        if unicodedata.category(char) != "Mn"
+    )
+
+
+@dataclass(frozen=True)
+class IntentRule:
+    """Reglas de intención para una herramienta concreta.
+
+    Una regla vacía (``IntentRule()``) nunca autoriza la herramienta.
     """
 
-    # Única fuente de verdad para los verbos que activan cada herramienta.
-    _ACTION_VERBS: dict[str, tuple[str, ...]] = {
-        "listar_carpeta": ("lista", "listar", "muestra", "mostrar", "contenido"),
-        "leer_archivo": ("lee", "leer", "abre", "abrir"),
-        "crear_archivo": ("crea", "crear", "cree", "generar", "genera"),
-        "crear_carpeta": ("crea", "crear", "cree", "generar", "genera"),
-        "escribir_archivo": (
-            "escribe", "escribir", "edita", "editar", "actualiza", "actualizar",
-            "reemplaza", "reemplazar", "cambia", "cambiar", "modifica", "modificar",
-        ),
-        "borrar_archivo": ("borra", "borrar", "elimina", "eliminar"),
-    }
+    # Verbos que activan la herramienta ("crea", "lee", "diff").
+    verbs: tuple[str, ...] = ()
 
-    # Detecta un nombre de archivo con extensión (p.ej. "meses_año.txt") como
-    # mención equivalente a la palabra "archivo", que el usuario a menudo omite
-    # cuando ya está nombrando el fichero explícitamente.
-    _FILENAME_PATTERN = re.compile(
-        r"\b[\w\-]+\.(?:txt|md|markdown|csv|tsv|json|py|js|ts|jsx|tsx|html|htm|css"
-        r"|xml|yaml|yml|log|pdf|docx?|xlsx?|ini|cfg|conf|sh|png|jpe?g|gif|svg|webp|toml)\b",
-        re.IGNORECASE,
-    )
+    # Palabras-objetivo del dominio de la herramienta ("archivo", "repo").
+    target_words: tuple[str, ...] = ()
 
-    # Para MCP no podemos inferir la intención a partir de la descripción de
-    # la herramienta. Exigimos que el usuario indique una acción explícita
-    # junto con el nombre de la herramienta.
-    _MCP_ACTION_VERBS: tuple[str, ...] = (
-        "usa", "usar", "utiliza", "utilizar", "llama", "llamar",
-        "invoca", "invocar", "ejecuta", "ejecutar", "realiza", "realizar",
-    )
+    # Si es True (por defecto), además del verbo debe aparecer una
+    # palabra-objetivo o un nombre de archivo (si ``accepts_filename``).
+    requires_target: bool = True
 
-    # Alias semánticos para las herramientas del servidor-filesystem. El bridge
-    # oculta las herramientas locales equivalentes cuando están activas, así que
-    # la barrera de intención debe reconocerlas como operaciones de workspace.
-    _MCP_WORKSPACE_ALIASES: dict[str, tuple[str, ...]] = {
-        # server-filesystem: read_file es legacy; read_text_file es el nombre
-        # recomendado actualmente. Ambos representan la lectura de un archivo.
-        "read_file": ("leer_archivo",),
-        "read_text_file": ("leer_archivo",),
-        "list_directory": ("listar_carpeta",),
-        # write_file cubre tanto crear un archivo nuevo como sobrescribirlo.
-        "write_file": ("crear_archivo", "escribir_archivo"),
-    }
+    # Si es True, un nombre de archivo con extensión cuenta como target válido.
+    accepts_filename: bool = False
 
-    # Leer es un paso previo permitido cuando el usuario ha pedido editar,
-    # modificar o reemplazar un archivo existente. No convierte leer_archivo
-    # en una autorización genérica para otras herramientas.
-    _READ_PREREQUISITE_VERBS: tuple[str, ...] = (
-        "escribe", "escribir", "edita", "editar", "actualiza", "actualizar",
-        "reemplaza", "reemplazar", "cambia", "cambiar", "modifica", "modificar",
-    )
+    # Si es True, esta herramienta puede autorizarse como paso previo cuando
+    # el usuario pide escribir/editar/actualizar algo.
+    is_read_prerequisite: bool = False
 
-    _TARGET_WORDS: tuple[str, ...] = ("archivo", "fichero", "carpeta", "directorio", "workspace")
+    # Regla especial para herramientas MCP genéricas.
+    mcp_explicit_name_required: bool = False
 
-    # Patrones conservadores de negación. La negación se evalúa para la
-    # herramienta concreta que el modelo propone; así "no borres viejo.txt,
-    # pero crea nuevo.txt" puede autorizar la creación sin autorizar el borrado.
-    _NEGATION_WORD = re.compile(r"\bno\b", re.IGNORECASE)
 
-    # "crea una carpeta" y "crea un archivo" comparten verbo ("crea"): sin
-    # distinguir el tipo de objetivo por herramienta, cualquiera de las dos
-    # palabras autorizaría cualquiera de las dos herramientas y el modelo
-    # podría acabar creando un archivo cuando se le pidió una carpeta (o al
-    # revés). Cada herramienta solo acepta las palabras de su propio dominio.
-    _FILE_TARGET_WORDS: tuple[str, ...] = ("archivo", "fichero")
-    _FOLDER_TARGET_WORDS: tuple[str, ...] = ("carpeta", "directorio")
-    _GENERIC_TARGET_WORDS: tuple[str, ...] = ("workspace",)
-    _TARGET_WORDS_BY_TOOL: dict[str, tuple[str, ...]] = {
-        "listar_carpeta": _FOLDER_TARGET_WORDS,
-        "leer_archivo": _FILE_TARGET_WORDS,
-        "crear_archivo": _FILE_TARGET_WORDS,
-        "crear_carpeta": _FOLDER_TARGET_WORDS,
-        "escribir_archivo": _FILE_TARGET_WORDS,
-        "borrar_archivo": _FILE_TARGET_WORDS,
-    }
-    # Herramientas cuyo objetivo puede nombrarse con un nombre de archivo con
-    # extensión (p.ej. "notas.txt") sin decir la palabra "archivo".
-    _FILE_TOOLS: frozenset[str] = frozenset(
-        {"leer_archivo", "crear_archivo", "escribir_archivo", "borrar_archivo"}
-    )
+class ToolIntentGate:
+    """Evalúa si una petición autoriza exponer/ejecutar una herramienta.
 
-    @classmethod
+    Tanto el texto del usuario como las palabras declaradas en las reglas
+    se normalizan (minúsculas + sin acentos) antes de compararse. Así una
+    regla puede declarar ``"dónde"`` y matchear ``"¿dónde está X?"`` aunque
+    el usuario escriba con tilde o sin ella.
+    """
+
+    _RULES_REGISTRY: dict[str, IntentRule] = {}
+
+    def __init__(self, rules: dict[str, IntentRule] | None = None):
+        self.rules: dict[str, IntentRule] = dict(rules or {})
+
+    # -- API pública ---------------------------------------------------------
+
     def tools_for_request(
-        cls, tools: list[dict[str, Any]] | None, last_user_text: str
+        self, tools: list[dict[str, Any]] | None, text: str
     ) -> list[dict[str, Any]] | None:
-        """Expone herramientas solo ante una petición explícita sobre el workspace."""
         if not tools:
             return None
         if not (
-            cls._mentions_workspace_operation(last_user_text)
-            or cls._mentions_mcp_tool(last_user_text, tools)
+            self._mentions_workspace_operation(text)
+            or self._mentions_mcp_tool(text, tools)
         ):
             return None
         return tools
 
-    @classmethod
-    def tool_is_requested(cls, name: str, text: str) -> bool:
-        """Segunda barrera frente a tool calls nativos ajenos a la petición externa."""
-        normalised = cls._normalise(text)
-        tokens = set(normalised.split())
-        if name.startswith("mcp__"):
-            if cls._is_negated_mcp_request(name, text):
+    def tool_is_requested(self, name: str, text: str) -> bool:
+        """Decide si el texto autoriza la herramienta ``name``."""
+        rule = self.rules.get(name)
+        if rule is None:
+            if name.startswith("mcp__"):
+                rule = IntentRule(mcp_explicit_name_required=True)
+            else:
                 return False
-            direct_name = cls._normalise(name)
-            if direct_name in tokens and bool(tokens.intersection(cls._MCP_ACTION_VERBS)):
-                return True
-            original_name = name.rsplit("__", 1)[-1]
-            aliases = cls._MCP_WORKSPACE_ALIASES.get(original_name)
-            if aliases is not None:
-                return any(cls.tool_is_requested(alias, text) for alias in aliases)
+
+        if self._is_negated(rule.verbs, text):
             return False
 
-        verbs = cls._ACTION_VERBS.get(name)
-        if verbs is None:
+        if rule.mcp_explicit_name_required:
+            return self._mcp_explicit_request(name, text)
+
+        normalised = self._normalise(text)
+
+        if rule.requires_target and not self._mentions_target(
+            rule.target_words, text, normalised, rule.accepts_filename
+        ):
             return False
-        if cls._is_negated_tool_request(name, text):
-            return False
-        if not cls._mentions_target_for(name, text, normalised):
-            return False
-        if tokens.intersection(verbs):
+
+        if self._mentions_any_word(normalised, rule.verbs):
             return True
-        return name == "leer_archivo" and bool(tokens.intersection(cls._READ_PREREQUISITE_VERBS))
+
+        if rule.is_read_prerequisite and self._mentions_any_word(
+            normalised, self._read_prerequisite_verbs()
+        ):
+            return True
+        return False
+
+    # -- negación ------------------------------------------------------------
 
     @classmethod
-    def _is_negated_tool_request(cls, name: str, text: str) -> bool:
-        """Devuelve True si la petición niega la acción de ``name``."""
-        verbs = cls._ACTION_VERBS.get(name, ())
+    def _is_negated(cls, verbs: tuple[str, ...], text: str) -> bool:
         if not verbs:
             return False
         normalised = cls._normalise(text)
         for verb in verbs:
-            pattern = rf"\bno\b(?:\s+\w+){{0,3}}\s+{re.escape(verb)}\b"
-            if re.search(pattern, normalised, re.IGNORECASE):
+            v = cls._normalise(verb)
+            if not v:
+                continue
+            for form in _cached_verb_forms(v):
+                pattern = rf"\bno\b(?:\s+\w+){{0,3}}\s+{re.escape(form)}\b"
+                if re.search(pattern, normalised, re.IGNORECASE):
+                    return True
+        return False
+
+    @classmethod
+    def _mcp_explicit_request(cls, name: str, text: str) -> bool:
+        normalised = cls._normalise(text)
+        direct_name = cls._normalise(name)
+        if not re.search(rf"\b{re.escape(direct_name)}\b", normalised):
+            return False
+        if cls._is_negated(MCP_ACTION_VERBS, text):
+            return False
+        return cls._mentions_any_word(normalised, MCP_ACTION_VERBS)
+
+    # -- detección de palabras ----------------------------------------------
+
+    @classmethod
+    def _mentions_any_word(cls, normalised: str, words: tuple[str, ...]) -> bool:
+        """Cierto si alguna de ``words`` aparece con fronteras de palabra.
+
+        Las palabras se normalizan (minúsculas + sin acentos) antes de
+        compararlas. ``\\b`` respeta la transición entre un carácter no-letra
+        ("¿", ",", "?") y una letra, así que "¿dónde" y "dónde?" matchean
+        la palabra normalizada "donde".
+        """
+        for word in words:
+            w = cls._normalise(word)
+            if not w:
+                continue
+            if re.search(rf"\b{re.escape(w)}\b", normalised):
                 return True
         return False
 
     @classmethod
-    def _is_negated_mcp_request(cls, name: str, text: str) -> bool:
-        """Detecta una negación explícita de una herramienta MCP nombrada."""
-        normalised = cls._normalise(text)
-        direct_name = cls._normalise(name)
-        if not direct_name:
-            return False
-        # "no uses mcp__demo__saludar" / "no quiero que uses ..."
-        for verb in cls._MCP_ACTION_VERBS:
-            pattern = rf"\bno\b(?:\s+\w+){{0,3}}\s+{re.escape(verb)}\s+{re.escape(direct_name)}\b"
-            if re.search(pattern, normalised, re.IGNORECASE):
-                return True
-        original_name = name.rsplit("__", 1)[-1]
-        aliases = cls._MCP_WORKSPACE_ALIASES.get(original_name)
-        return bool(aliases) and any(cls._is_negated_tool_request(alias, text) for alias in aliases)
-
-    @classmethod
-    def _mentions_target(cls, text: str, normalised: str) -> bool:
-        """Cierto si el mensaje nombra un archivo/carpeta en general, por
-        palabra o por nombre con extensión. Filtro grueso: no distingue
-        archivo de carpeta (para eso está ``_mentions_target_for``)."""
-        return any(word in normalised for word in cls._TARGET_WORDS) or bool(
-            cls._FILENAME_PATTERN.search(text)
-        )
-
-    @classmethod
-    def _mentions_target_for(cls, name: str, text: str, normalised: str) -> bool:
-        """Cierto si el mensaje nombra el tipo de objetivo que espera esta
-        herramienta en concreto (archivo vs. carpeta), no solo un objetivo
-        genérico del workspace."""
-        words = cls._TARGET_WORDS_BY_TOOL.get(name, cls._TARGET_WORDS) + cls._GENERIC_TARGET_WORDS
-        if any(word in normalised for word in words):
+    def _mentions_target(
+        cls,
+        words: tuple[str, ...],
+        text: str,
+        normalised: str,
+        accepts_filename: bool,
+    ) -> bool:
+        if words and cls._mentions_any_word(normalised, words):
             return True
-        return name in cls._FILE_TOOLS and bool(cls._FILENAME_PATTERN.search(text))
+        if accepts_filename and _FILENAME_PATTERN.search(text):
+            return True
+        return False
+
+    # -- operaciones de workspace -------------------------------------------
 
     @classmethod
     def _mentions_workspace_operation(cls, text: str) -> bool:
         normalised = cls._normalise(text)
-        actions = {verb for verbs in cls._ACTION_VERBS.values() for verb in verbs}
-        return cls._mentions_target(text, normalised) and any(action in normalised for action in actions)
+        for rule in list(cls._RULES_REGISTRY.values()):
+            if rule.mcp_explicit_name_required:
+                continue
+            if rule.requires_target and not cls._mentions_target(
+                rule.target_words, text, normalised, rule.accepts_filename
+            ):
+                continue
+            if cls._mentions_any_word(normalised, rule.verbs):
+                return True
+        return False
 
     @classmethod
     def _mentions_mcp_tool(cls, text: str, tools: list[dict[str, Any]]) -> bool:
-        """Activa MCP solo ante una solicitud explícita de uso de la herramienta."""
         normalised = cls._normalise(text)
-        tokens = set(normalised.split())
-        if not tokens.intersection(cls._MCP_ACTION_VERBS):
+        if not cls._mentions_any_word(normalised, MCP_ACTION_VERBS):
             return False
-        return any(
-            (name := str(item.get("function", {}).get("name", ""))).startswith("mcp__")
-            and cls._normalise(name) in tokens
-            for item in tools
+        for item in tools:
+            name = str(item.get("function", {}).get("name", ""))
+            if not name:
+                continue
+            direct_name = cls._normalise(name)
+            if re.search(rf"\b{re.escape(direct_name)}\b", normalised):
+                return True
+        return False
+
+    # -- registro global -----------------------------------------------------
+
+    @classmethod
+    def register_rules(cls, rules: dict[str, IntentRule]) -> None:
+        cls._RULES_REGISTRY.update(rules)
+
+    @classmethod
+    def unregister_rules(cls, names: list[str]) -> None:
+        for name in names:
+            cls._RULES_REGISTRY.pop(name, None)
+
+    @classmethod
+    def _read_prerequisite_verbs(cls) -> tuple[str, ...]:
+        return (
+            "escribe", "escribir", "edita", "editar", "actualiza", "actualizar",
+            "reemplaza", "reemplazar", "cambia", "cambiar", "modifica", "modificar",
         )
+
+    # -- normalización -------------------------------------------------------
 
     @staticmethod
     def _normalise(text: str) -> str:
-        return "".join(
-            char for char in unicodedata.normalize("NFD", text.lower())
-            if unicodedata.category(char) != "Mn"
-        )
+        return _strip_accents(text)
+
+
+@lru_cache(maxsize=None)
+def _cached_verb_forms(verb: str) -> tuple[str, ...]:
+    """Formas conjugadas a partir de un verbo ya normalizado (sin acentos)."""
+    forms: set[str] = {verb}
+    stem = ""
+    if verb.endswith(("ar", "er", "ir")) and len(verb) > 3:
+        stem = verb[:-2]
+    elif verb and verb[-1] in "aeo" and len(verb) > 3:
+        stem = verb[:-1]
+    if len(stem) >= 2:
+        forms.update(f"{stem}{suffix}" for suffix in _CONJUGATION_SUFFIXES)
+    return tuple(forms)

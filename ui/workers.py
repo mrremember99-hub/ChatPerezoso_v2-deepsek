@@ -28,6 +28,8 @@ class ModelWorker(QObject):
 
 
 class MCPWorker(QObject):
+    """Consulta las herramientas de un servidor MCP en su propio hilo."""
+
     finished = Signal(str, object, list)  # server_id, client, tools
     error = Signal(str, str)              # server_id, message
 
@@ -53,12 +55,22 @@ class ChatWorker(QObject):
     cancelled = Signal()
     error = Signal(str)
 
-    def __init__(self, client: OllamaClient, model: str, messages: list[dict], tools: Any):
+    def __init__(
+        self,
+        client: OllamaClient,
+        model: str,
+        messages: list[dict],
+        tools: Any,
+        options: dict | None = None,
+        system_prompt: str = "",
+    ):
         super().__init__()
         self.client = client
         self.model = model
         self.messages = messages
         self.tools = tools
+        self.options = options
+        self.system_prompt = system_prompt
         self._cancel_event = threading.Event()
         self._confirmation_event: threading.Event | None = None
         self._confirmation_name = ""
@@ -70,10 +82,12 @@ class ChatWorker(QObject):
             result = self.client.chat(
                 self.model,
                 self.messages,
-                self.tools.definitions(),
+                self.tools,   # el provider completo, no solo las definiciones
                 self.text.emit,
                 self._call_tool,
                 cancel_event=self._cancel_event,
+                options=self.options,
+                system_prompt=self.system_prompt,
             )
             self.finished.emit(result)
         except OllamaCancelled:
@@ -90,14 +104,25 @@ class ChatWorker(QObject):
 
     def _call_tool(self, name: str, arguments: dict) -> str:
         self.tool.emit(name)
-        if self.tools.needs_confirmation(name):
+        if self.tools.requires_confirmation(name):
             result = self._request_confirmation(name, arguments)
         else:
-            result = self.tools.call(name, arguments)
+            result = self.tools.call(
+                name,
+                arguments,
+                cancel_event=self._cancel_event,
+            )
         self.tool_result.emit(name, result)
         return result
 
     def _request_confirmation(self, name: str, arguments: dict[str, Any]) -> str:
+        """Pide confirmación a la UI y ejecuta el tool en este mismo hilo.
+
+        La UI solo marca aprobado/rechazado y libera el evento; la ejecución
+        del tool sigue viviendo en el hilo del worker, que es donde se hizo
+        la llamada original a ``client.chat``. Así no hay carreras entre el
+        hilo de UI y este al usar ``self.tools``.
+        """
         event = threading.Event()
         self._confirmation_event = event
         self._confirmation_name = name
@@ -107,7 +132,12 @@ class ChatWorker(QObject):
         event.wait()
 
         if self._confirmation_approved and not self._cancel_event.is_set():
-            result = self.tools.call(name, arguments, allow_destructive=True)
+            result = self.tools.call(
+                name,
+                arguments,
+                allow_destructive=True,
+                cancel_event=self._cancel_event,
+            )
         else:
             result = (
                 "OPERACIÓN CANCELADA POR EL USUARIO: "
@@ -121,6 +151,7 @@ class ChatWorker(QObject):
         return result
 
     def resolve_confirmation(self, approved: bool) -> None:
+        """Llamado desde el hilo de UI. Solo marca el flag y libera el evento."""
         event = self._confirmation_event
         if event is None:
             return

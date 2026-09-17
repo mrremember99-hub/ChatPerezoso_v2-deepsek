@@ -1,0 +1,69 @@
+"""Bloque compacto de diagnóstico para la sidebar.
+
+Muestra tres líneas con información de la sesión actual:
+  · Modelo y parámetros activos
+  · Número de respuestas y tiempo medio
+  · Tokens estimados del contexto
+"""
+from __future__ import annotations
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+
+
+class DiagnosticsPanel(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self._build()
+
+    def _build(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        self.model_label = QLabel("—")
+        self.model_label.setObjectName("DiagnosticLine")
+        self.model_label.setWordWrap(True)
+        layout.addWidget(self.model_label)
+
+        self.response_label = QLabel("Respuestas: 0")
+        self.response_label.setObjectName("DiagnosticLine")
+        layout.addWidget(self.response_label)
+
+        self.context_label = QLabel("Contexto: ~0 tokens")
+        self.context_label.setObjectName("DiagnosticLine")
+        layout.addWidget(self.context_label)
+
+    # -- API pública ---------------------------------------------------------
+
+    def set_model(self, name: str, temperature: float, num_ctx: int) -> None:
+        if not name:
+            self.model_label.setText("—")
+            return
+        params: list[str] = [f"T={temperature:.1f}"]
+        if num_ctx > 0:
+            params.append(f"ctx={_format_ctx(num_ctx)}")
+        self.model_label.setText(f"{name} · {', '.join(params)}")
+
+    def set_responses(self, count: int, average_seconds: float) -> None:
+        if count == 0:
+            self.response_label.setText("Respuestas: 0")
+            return
+        self.response_label.setText(
+            f"Respuestas: {count} · {average_seconds:.1f} s de media"
+        )
+
+    def set_context_tokens(self, tokens: int) -> None:
+        self.context_label.setText(f"Contexto: ~{_format_tokens(tokens)} tokens")
+
+
+def _format_ctx(num_ctx: int) -> str:
+    if num_ctx >= 1000 and num_ctx % 1000 == 0:
+        return f"{num_ctx // 1000}k"
+    return str(num_ctx)
+
+
+def _format_tokens(tokens: int) -> str:
+    if tokens >= 1000:
+        return f"{tokens / 1000:.1f}k"
+    return str(tokens)

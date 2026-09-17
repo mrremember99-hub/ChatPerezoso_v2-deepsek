@@ -69,7 +69,9 @@ def test_registry_rejects_invalid_arguments(tmp_path):
     assert "argumento no permitido" in tools.call(
         "leer_archivo", {"path": "x.txt", "extra": "no"}
     )
-    assert "debe ser texto" in tools.call("leer_archivo", {"path": 123})
+    # El mensaje usa el tipo declarado en el schema ("string" en vez de
+    # "texto"), que es más consistente con la validación por tipo.
+    assert "debe ser string" in tools.call("leer_archivo", {"path": 123})
 
 
 def test_registry_blocks_destructive_operation_by_default(tmp_path):
@@ -103,3 +105,45 @@ def test_registry_marks_every_workspace_write_for_confirmation(tmp_path):
     assert tools.requires_confirmation("borrar_archivo")
     assert not tools.requires_confirmation("listar_carpeta")
     assert not tools.requires_confirmation("leer_archivo")
+
+
+# -- validación de tipos -----------------------------------------------------
+
+def test_registry_rejects_wrong_type(tmp_path):
+    tools = ToolRegistry(Workspace(tmp_path))
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    result = tools.call("leer_archivo", {"path": "a.txt", "start_line": "dos"})
+    assert "debe ser integer" in result
+
+
+def test_registry_rejects_bool_for_int(tmp_path):
+    tools = ToolRegistry(Workspace(tmp_path))
+    result = tools.call("leer_archivo", {"path": "a.txt", "start_line": True})
+    assert "debe ser integer" in result
+
+
+def test_registry_accepts_valid_bool(tmp_path):
+    tools = ToolRegistry(Workspace(tmp_path))
+    result = tools.call("listar_carpeta", {"path": ".", "recursive": True})
+    assert "ERROR" not in result
+
+
+# -- rango de líneas ---------------------------------------------------------
+
+def test_registry_reads_line_range(tmp_path):
+    tools = ToolRegistry(Workspace(tmp_path))
+    (tmp_path / "a.txt").write_text("uno\ndos\ntres\n", encoding="utf-8")
+    result = tools.call("leer_archivo", {"path": "a.txt", "start_line": 2})
+    assert "dos" in result
+    assert "tres" in result
+    assert "uno" not in result
+
+
+# -- listado recursivo -------------------------------------------------------
+
+def test_registry_recursive_listing(tmp_path):
+    tools = ToolRegistry(Workspace(tmp_path))
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "x.txt").write_text("hola", encoding="utf-8")
+    result = tools.call("listar_carpeta", {"recursive": True})
+    assert "x.txt" in result

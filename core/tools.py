@@ -1,84 +1,142 @@
 from __future__ import annotations
 
+import threading
 from typing import Any
 
+from .intent import IntentRule
 from .workspace import Workspace
 
 
+_CONFIRMATION_REQUIRED = frozenset(
+    {"crear_archivo", "crear_carpeta", "escribir_archivo", "borrar_archivo"}
+)
+
+_SPECS: tuple[dict[str, Any], ...] = (
+    {
+        "name": "listar_carpeta",
+        "description": "Lista el contenido de una carpeta del workspace.",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Ruta relativa. Usa '.' para la raíz.",
+            },
+            "recursive": {
+                "type": "boolean",
+                "description": (
+                    "Si es true, muestra el árbol completo con indentación "
+                    "hasta 6 niveles. Por defecto false (solo el primer nivel)."
+                ),
+            },
+        },
+        "required": [],
+    },
+    {
+        "name": "leer_archivo",
+        "description": (
+            "Lee un archivo de texto UTF-8 del workspace. Admite un rango de "
+            "líneas para archivos grandes."
+        ),
+        "properties": {
+            "path": {"type": "string", "description": "Ruta relativa del archivo."},
+            "start_line": {
+                "type": "integer",
+                "description": "Primera línea a leer (1-indexada). Opcional.",
+            },
+            "end_line": {
+                "type": "integer",
+                "description": "Última línea a leer (inclusive). Opcional.",
+            },
+        },
+        "required": ["path"],
+    },
+    {
+        "name": "crear_archivo",
+        "description": "Crea un archivo nuevo dentro del workspace. Falla si ya existe.",
+        "properties": {
+            "path": {"type": "string", "description": "Ruta relativa del archivo."},
+            "content": {
+                "type": "string",
+                "description": "Contenido completo del archivo.",
+            },
+        },
+        "required": ["path"],
+    },
+    {
+        "name": "crear_carpeta",
+        "description": "Crea una carpeta nueva dentro del workspace. Falla si ya existe.",
+        "properties": {
+            "path": {"type": "string", "description": "Ruta relativa de la carpeta."}
+        },
+        "required": ["path"],
+    },
+    {
+        "name": "escribir_archivo",
+        "description": "Escribe o reemplaza el contenido de un archivo dentro del workspace.",
+        "properties": {
+            "path": {"type": "string", "description": "Ruta relativa del archivo."},
+            "content": {
+                "type": "string",
+                "description": "Contenido completo que sustituirá al anterior.",
+            },
+        },
+        "required": ["path", "content"],
+    },
+    {
+        "name": "borrar_archivo",
+        "description": (
+            "Borra un archivo del workspace. La aplicación solicitará confirmación explícita "
+            "al usuario antes de ejecutar el borrado."
+        ),
+        "properties": {
+            "path": {"type": "string", "description": "Ruta relativa del archivo."}
+        },
+        "required": ["path"],
+    },
+)
+
+
+_RULES: dict[str, IntentRule] = {
+    "listar_carpeta": IntentRule(
+        verbs=("lista", "listar", "muestra", "mostrar", "contenido", "árbol", "arbol"),
+        target_words=("carpeta", "directorio", "workspace", "proyecto"),
+    ),
+    "leer_archivo": IntentRule(
+        verbs=("lee", "leer", "abre", "abrir"),
+        target_words=("archivo", "fichero", "workspace"),
+        accepts_filename=True,
+        is_read_prerequisite=True,
+    ),
+    "crear_archivo": IntentRule(
+        verbs=("crea", "crear", "cree", "generar", "genera"),
+        target_words=("archivo", "fichero"),
+        accepts_filename=True,
+    ),
+    "crear_carpeta": IntentRule(
+        verbs=("crea", "crear", "cree", "generar", "genera"),
+        target_words=("carpeta", "directorio"),
+    ),
+    "escribir_archivo": IntentRule(
+        verbs=(
+            "escribe", "escribir", "edita", "editar", "actualiza", "actualizar",
+            "reemplaza", "reemplazar", "cambia", "cambiar", "modifica", "modificar",
+        ),
+        target_words=("archivo", "fichero", "workspace"),
+        accepts_filename=True,
+    ),
+    "borrar_archivo": IntentRule(
+        verbs=("borra", "borrar", "elimina", "eliminar"),
+        target_words=("archivo", "fichero"),
+        accepts_filename=True,
+    ),
+}
+
+
 class ToolRegistry:
-    """Contrato único entre Ollama y las operaciones del workspace.
-
-    Implementa ``core.tool_provider.ToolProvider``: define/ejecuta las
-    herramientas del núcleo. ``plugins.mcp.MCPToolBridge`` implementa el
-    mismo contrato para las herramientas de un servidor MCP.
-    """
-
-    _CONFIRMATION_REQUIRED = frozenset(
-        {"crear_archivo", "crear_carpeta", "escribir_archivo", "borrar_archivo"}
-    )
-
-    _SPECS: tuple[dict[str, Any], ...] = (
-        {
-            "name": "listar_carpeta",
-            "description": "Lista el contenido de una carpeta del workspace.",
-            "properties": {"path": {"type": "string", "description": "Ruta relativa. Usa '.' para la raíz."}},
-            "required": [],
-        },
-        {
-            "name": "leer_archivo",
-            "description": "Lee un archivo de texto UTF-8 del workspace.",
-            "properties": {"path": {"type": "string", "description": "Ruta relativa del archivo."}},
-            "required": ["path"],
-        },
-        {
-            "name": "crear_archivo",
-            "description": "Crea un archivo nuevo dentro del workspace. Falla si ya existe.",
-            "properties": {
-                "path": {"type": "string", "description": "Ruta relativa del archivo."},
-                "content": {"type": "string", "description": "Contenido completo del archivo."},
-            },
-            "required": ["path"],
-        },
-        {
-            "name": "crear_carpeta",
-            "description": "Crea una carpeta nueva dentro del workspace. Falla si ya existe.",
-            "properties": {"path": {"type": "string", "description": "Ruta relativa de la carpeta."}},
-            "required": ["path"],
-        },
-        {
-            "name": "escribir_archivo",
-            "description": "Escribe o reemplaza el contenido de un archivo dentro del workspace.",
-            "properties": {
-                "path": {"type": "string", "description": "Ruta relativa del archivo."},
-                "content": {"type": "string", "description": "Contenido completo que sustituirá al anterior."},
-            },
-            "required": ["path", "content"],
-        },
-        {
-            "name": "borrar_archivo",
-            "description": (
-                "Borra un archivo del workspace. La aplicación solicitará confirmación explícita "
-                "al usuario antes de ejecutar el borrado."
-            ),
-            "properties": {"path": {"type": "string", "description": "Ruta relativa del archivo."}},
-            "required": ["path"],
-        },
-    )
-
     def __init__(self, workspace: Workspace):
         self.workspace = workspace
-        self._handlers = {
-            "listar_carpeta": self.workspace.list_dir,
-            "leer_archivo": self.workspace.read_file,
-            "crear_archivo": self.workspace.create_file,
-            "crear_carpeta": self.workspace.create_folder,
-            "escribir_archivo": self.workspace.write_file,
-            "borrar_archivo": self.workspace.delete_file,
-        }
-        self._spec_by_name = {spec["name"]: spec for spec in self._SPECS}
+        self._spec_by_name = {spec["name"]: spec for spec in _SPECS}
 
     def definitions(self) -> list[dict[str, Any]]:
-        """Devuelve siempre el mismo contrato, sin depender del workspace."""
         return [
             self._fn(
                 spec["name"],
@@ -86,13 +144,14 @@ class ToolRegistry:
                 spec["properties"],
                 spec["required"],
             )
-            for spec in self._SPECS
+            for spec in _SPECS
         ]
 
-    @classmethod
-    def requires_confirmation(cls, name: str) -> bool:
-        """Indica si la herramienta puede escribir en el workspace."""
-        return name in cls._CONFIRMATION_REQUIRED
+    def intent_rules(self) -> dict[str, IntentRule]:
+        return dict(_RULES)
+
+    def requires_confirmation(self, name: str) -> bool:
+        return name in _CONFIRMATION_REQUIRED
 
     @staticmethod
     def _fn(name: str, description: str, properties: dict, required: list[str]) -> dict:
@@ -115,14 +174,11 @@ class ToolRegistry:
         arguments: dict[str, Any],
         *,
         allow_destructive: bool = False,
+        cancel_event: threading.Event | None = None,
     ) -> str:
-        """Ejecuta una herramienta y devuelve un resultado textual estable.
-
-        Las operaciones destructivas requieren autorización explícita de la interfaz.
-        """
+        del cancel_event
         spec = self._spec_by_name.get(name)
-        handler = self._handlers.get(name)
-        if spec is None or handler is None:
+        if spec is None:
             return f"ERROR: herramienta desconocida: {name}"
         if not isinstance(arguments, dict):
             return "ERROR: los argumentos de la herramienta deben ser un objeto."
@@ -134,15 +190,60 @@ class ToolRegistry:
         for field, value in arguments.items():
             if field not in spec["properties"]:
                 return f"ERROR: argumento no permitido para {name}: {field}"
-            if not isinstance(value, str):
-                return f"ERROR: el argumento {field} debe ser texto."
 
-        if name in self._CONFIRMATION_REQUIRED and not allow_destructive:
-            return "ERROR: operación destructiva bloqueada: requiere confirmación explícita del usuario."
+        # Validación de tipos por campo, según el schema.
+        for field, value in arguments.items():
+            declared = spec["properties"][field].get("type", "string")
+            if not _matches_type(value, declared):
+                return f"ERROR: el argumento {field} debe ser {declared}."
+
+        if name in _CONFIRMATION_REQUIRED and not allow_destructive:
+            return (
+                "ERROR: operación destructiva bloqueada: requiere confirmación "
+                "explícita del usuario."
+            )
 
         try:
-            if name == "listar_carpeta" and not arguments.get("path"):
-                arguments = {**arguments, "path": "."}
-            return str(handler(**arguments))
+            return self._dispatch(name, arguments)
         except Exception as exc:
             return f"ERROR: {exc}"
+
+    def _dispatch(self, name: str, arguments: dict[str, Any]) -> str:
+        if name == "listar_carpeta":
+            path = arguments.get("path") or "."
+            recursive = bool(arguments.get("recursive", False))
+            return self.workspace.list_dir(path, recursive=recursive)
+        if name == "leer_archivo":
+            path = arguments["path"]
+            start = arguments.get("start_line")
+            end = arguments.get("end_line")
+            return self.workspace.read_file(
+                path,
+                start_line=start if start is not None else None,
+                end_line=end if end is not None else None,
+            )
+        if name == "crear_archivo":
+            return self.workspace.create_file(
+                arguments["path"], arguments.get("content", "")
+            )
+        if name == "crear_carpeta":
+            return self.workspace.create_folder(arguments["path"])
+        if name == "escribir_archivo":
+            return self.workspace.write_file(
+                arguments["path"], arguments["content"]
+            )
+        if name == "borrar_archivo":
+            return self.workspace.delete_file(arguments["path"])
+        return f"ERROR: herramienta desconocida: {name}"
+
+
+def _matches_type(value: Any, declared: str) -> bool:
+    if declared == "string":
+        return isinstance(value, str)
+    if declared == "boolean":
+        return isinstance(value, bool)
+    if declared == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if declared == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return True

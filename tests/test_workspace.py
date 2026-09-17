@@ -80,3 +80,80 @@ def test_write_limit(tmp_path: Path):
     ws = Workspace(tmp_path)
     with pytest.raises(WorkspaceError):
         ws.write_file("x.txt", "x" * (1_000_001))
+
+
+# -- rango de líneas ---------------------------------------------------------
+
+def test_read_file_with_range(tmp_path):
+    ws = Workspace(tmp_path)
+    (tmp_path / "a.txt").write_text("linea1\nlinea2\nlinea3\nlinea4\n", encoding="utf-8")
+    result = ws.read_file("a.txt", start_line=2, end_line=3)
+    assert "[líneas 2-3 de 4]" in result
+    assert "linea2" in result
+    assert "linea3" in result
+    assert "linea1" not in result
+    assert "linea4" not in result
+
+
+def test_read_file_with_only_start_line(tmp_path):
+    ws = Workspace(tmp_path)
+    (tmp_path / "a.txt").write_text("a\nb\nc\n", encoding="utf-8")
+    result = ws.read_file("a.txt", start_line=2)
+    assert "b" in result
+    assert "c" in result
+    assert "[líneas 2-3 de 3]" in result
+
+
+def test_read_file_with_only_end_line(tmp_path):
+    ws = Workspace(tmp_path)
+    (tmp_path / "a.txt").write_text("a\nb\nc\nd\n", encoding="utf-8")
+    result = ws.read_file("a.txt", end_line=2)
+    assert "a" in result
+    assert "b" in result
+    assert "c" not in result
+
+
+def test_read_file_invalid_range(tmp_path):
+    ws = Workspace(tmp_path)
+    (tmp_path / "a.txt").write_text("a\nb\n", encoding="utf-8")
+    with pytest.raises(WorkspaceError):
+        ws.read_file("a.txt", start_line=5, end_line=2)
+
+
+def test_read_file_range_beyond_eof_is_clamped(tmp_path):
+    ws = Workspace(tmp_path)
+    (tmp_path / "a.txt").write_text("a\nb\nc\n", encoding="utf-8")
+    result = ws.read_file("a.txt", start_line=2, end_line=999)
+    assert "[líneas 2-3 de 3]" in result
+
+
+# -- listado recursivo -------------------------------------------------------
+
+def test_list_dir_recursive_shows_tree(tmp_path):
+    ws = Workspace(tmp_path)
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "archivo.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "raiz.txt").write_text("y", encoding="utf-8")
+
+    result = ws.list_dir(".", recursive=True)
+    assert "sub" in result
+    assert "archivo.txt" in result
+    assert "raiz.txt" in result
+
+
+def test_list_dir_flat_ignores_nested(tmp_path):
+    ws = Workspace(tmp_path)
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "archivo.txt").write_text("x", encoding="utf-8")
+
+    result = ws.list_dir(".")
+    assert "sub" in result
+    assert "archivo.txt" not in result
+
+
+def test_list_dir_recursive_respects_limit(tmp_path):
+    ws = Workspace(tmp_path)
+    for i in range(50):
+        (tmp_path / f"f{i:03d}.txt").write_text("x", encoding="utf-8")
+    result = ws.list_dir(".", recursive=True)
+    assert "truncado" not in result or len(result.splitlines()) <= 201

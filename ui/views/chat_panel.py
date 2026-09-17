@@ -4,8 +4,14 @@ from __future__ import annotations
 from typing import Callable
 
 from PySide6.QtCore import QElapsedTimer, QTimer, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
 
 from .. import design
@@ -16,8 +22,11 @@ RendererFactory = Callable[[QTextEdit], ChatRenderer]
 
 
 class ChatPanel(QWidget):
-    message_submitted = Signal(str)
+    message_submitted = Signal()
     cancel_requested = Signal()
+    regenerate_requested = Signal()
+    copy_requested = Signal()
+    clear_requested = Signal()
 
     def __init__(self, renderer_factory: RendererFactory = PlainTextRenderer) -> None:
         super().__init__()
@@ -37,6 +46,10 @@ class ChatPanel(QWidget):
         self._elapsed_timer = QTimer(self)
         self._elapsed_timer.setInterval(design.ELAPSED_TIMER_INTERVAL_MS)
         self._elapsed_timer.timeout.connect(self._update_elapsed)
+
+        self._install_shortcuts()
+
+    # -- construcción --------------------------------------------------------
 
     def _build(self) -> None:
         layout = QVBoxLayout(self)
@@ -81,18 +94,41 @@ class ChatPanel(QWidget):
         input_row.addWidget(self.send)
         layout.addLayout(input_row)
 
+    def _install_shortcuts(self) -> None:
+        QShortcut(QKeySequence("Ctrl+R"), self).activated.connect(
+            self.regenerate_requested.emit
+        )
+        QShortcut(QKeySequence("Ctrl+Shift+C"), self).activated.connect(
+            self.copy_requested.emit
+        )
+        QShortcut(QKeySequence("Ctrl+L"), self).activated.connect(
+            self._on_clear_shortcut
+        )
+        QShortcut(QKeySequence("Ctrl+K"), self).activated.connect(
+            self.input.setFocus
+        )
+
+    # -- señales de entrada --------------------------------------------------
+
     def _on_submit(self) -> None:
         if self._streaming:
             return
-        text = self.input.toPlainText().strip()
-        if text:
-            self.message_submitted.emit(text)
+        if not self.input.toPlainText().strip():
+            return
+        self.message_submitted.emit()
 
     def _on_send_clicked(self) -> None:
         if self._streaming:
             self.cancel_requested.emit()
         else:
             self._on_submit()
+
+    def _on_clear_shortcut(self) -> None:
+        if self._streaming:
+            return
+        self.clear_requested.emit()
+
+    # -- API pública ---------------------------------------------------------
 
     def set_streaming(self, streaming: bool) -> None:
         self._streaming = streaming
@@ -107,10 +143,23 @@ class ChatPanel(QWidget):
         self.chat.clear()
         self.renderer.reset()
 
+    def restore_conversation(self, messages: list[dict]) -> None:
+        for message in messages:
+            role = message.get("role")
+            content = message.get("content")
+            if not isinstance(content, str) or not content:
+                continue
+            if role == "user":
+                self.renderer.insert_user_message(content)
+            elif role == "assistant":
+                self.renderer.restore_assistant_message(content)
+
     def take_input(self) -> str:
         text = self.input.toPlainText().strip()
         self.input.clear()
         return text
+
+    # -- indicadores ---------------------------------------------------------
 
     def _start_indicators(self) -> None:
         self._thinking_step = 0

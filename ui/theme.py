@@ -44,4 +44,11 @@ QLabel#StatusText { color: #8FA79A; padding-left: 4px; }
 QLabel#ElapsedIndicator { color: #7EE0A8; font-size: 11px; padding: 0 12px; }
 QLabel#ThinkingLabel { color: #7EE0A8; font-size: 15px; font-weight: 600; padding: 0 4px 2px; }
 QWidget#ChatArea { background-color: #0D1211; }
+
+QLabel#DiagnosticLine {
+    color: #8FA79A;
+    font-size: 11px;
+    padding: 1px 0;
+    background-color: transparent;
+}
 """
