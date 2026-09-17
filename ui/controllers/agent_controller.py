@@ -1,12 +1,16 @@
 """Gestiona los agentes: carga, edición y activación."""
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QWidget
 
 from core.agents import Agent, AgentStore, default_agents
 
 from ..views.dialogs import edit_agent, warn
+
+logger = logging.getLogger(__name__)
 
 
 class AgentController(QObject):
@@ -131,4 +135,14 @@ class AgentController(QObject):
     def _resolve_active_name(self, initial: str) -> str:
         if initial and any(a.name == initial for a in self.agents):
             return initial
+        # El agente guardado en config.json ya no existe (renombrado o
+        # borrado). Caemos al primero, pero lo registramos para que sea
+        # diagnosticable. Antes esto era silencioso: el usuario creía
+        # seguir con su agente cuando en realidad estaba con otro.
+        if initial:
+            logger.warning(
+                "Agente guardado %r no existe; activando %r",
+                initial,
+                self.agents[0].name,
+            )
         return self.agents[0].name

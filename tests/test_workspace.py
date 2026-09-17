@@ -157,3 +157,85 @@ def test_list_dir_recursive_respects_limit(tmp_path):
         (tmp_path / f"f{i:03d}.txt").write_text("x", encoding="utf-8")
     result = ws.list_dir(".", recursive=True)
     assert "truncado" not in result or len(result.splitlines()) <= 201
+
+
+# ── Seguridad: symlinks ────────────────────────────────────────────────
+
+def test_symlink_to_outside_is_rejected(tmp_path):
+    """Un symlink dentro del workspace apuntando fuera debe ser rechazado.
+
+    `Workspace._path` usa `.resolve()` + `relative_to()`. Al resolver el
+    symlink, el path resultante cae fuera del workspace y `relative_to`
+    falla. Este test lo verifica explícitamente: si alguien "optimiza"
+    quitando el `.resolve()`, este test lo pilla.
+    """
+    import os
+    import pytest
+    from core.workspace import Workspace, WorkspaceError
+
+    outside = tmp_path / "fuera"
+    outside.mkdir()
+    secret = outside / "secreto.txt"
+    secret.write_text("datos sensibles", encoding="utf-8")
+
+    workspace_dir = tmp_path / "ws"
+    workspace_dir.mkdir()
+
+    link = workspace_dir / "atajo.txt"
+    try:
+        os.symlink(secret, link)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks no soportados en este sistema")
+
+    ws = Workspace(workspace_dir)
+
+    # Leer a través del symlink debe fallar
+    with pytest.raises(WorkspaceError):
+        ws.read_file("atajo.txt")
+
+
+def test_symlink_to_outside_directory_is_rejected(tmp_path):
+    """Un symlink a un directorio externo no debe poder listarse."""
+    import os
+    import pytest
+    from core.workspace import Workspace, WorkspaceError
+
+    outside = tmp_path / "fuera"
+    outside.mkdir()
+    (outside / "secreto.txt").write_text("datos", encoding="utf-8")
+
+    workspace_dir = tmp_path / "ws"
+    workspace_dir.mkdir()
+
+    link = workspace_dir / "atajo_dir"
+    try:
+        os.symlink(outside, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks no soportados en este sistema")
+
+    ws = Workspace(workspace_dir)
+
+    with pytest.raises(WorkspaceError):
+        ws.list_dir("atajo_dir")
+
+
+def test_symlink_inside_workspace_is_allowed(tmp_path):
+    """Un symlink dentro del workspace debe funcionar con normalidad."""
+    import os
+    import pytest
+    from core.workspace import Workspace
+
+    workspace_dir = tmp_path / "ws"
+    workspace_dir.mkdir()
+    real = workspace_dir / "real.txt"
+    real.write_text("contenido", encoding="utf-8")
+
+    link = workspace_dir / "atajo.txt"
+    try:
+        os.symlink(real, link)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks no soportados en este sistema")
+
+    ws = Workspace(workspace_dir)
+    content = ws.read_file("atajo.txt")
+    assert "contenido" in content

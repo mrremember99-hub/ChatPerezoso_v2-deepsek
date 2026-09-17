@@ -190,3 +190,40 @@ def test_provider_passes_extensions(tmp_path):
     )
     assert "a.py" in result
     assert "b.txt" not in result
+
+
+# ── Dependencia de regex.TimeoutError con TimeoutError ────────────────
+
+def test_pathological_regex_does_not_hang_search(tmp_path):
+    """Un patrón catastrófico sobre una línea larga no debe colgar la búsqueda.
+
+    El test mide que el timeout por línea funciona: la búsqueda vuelve
+    en un tiempo acotado, no en minutos.
+    """
+    import time
+    from core.workspace import Workspace
+    from plugins.search import SearchProvider
+
+    # Crear archivo con una línea larga (pero por debajo del límite de
+    # 10 KB que salta el regex) que active backtracking catastrófico
+    # con el patrón "(a+)+$".
+    archivo = tmp_path / "patologico.txt"
+    contenido = "a" * 9000 + "b"  # no matchea, fuerza backtracking
+    archivo.write_text(contenido, encoding="utf-8")
+
+    ws = Workspace(tmp_path)
+    provider = SearchProvider(ws)
+
+    t0 = time.monotonic()
+    resultado = provider.call(
+        "buscar_en_workspace",
+        {"query": "(a+)+$", "path": "."},
+    )
+    elapsed = time.monotonic() - t0
+
+    # No debe tardar más de 5 segundos (el timeout es 0.5s por línea,
+    # así que con una sola línea debería ser menos de 1s).
+    assert elapsed < 5.0, f"Búsqueda patológica tardó {elapsed:.1f}s"
+    # El resultado debe ser un texto (vacío, sin coincidencias, o error
+    # controlado), no un cuelgue.
+    assert isinstance(resultado, str)
