@@ -43,6 +43,13 @@ El núcleo debe ser pequeño, funcional y robusto. Todo lo que no sea imprescind
 
 La primera entrega del plugin usa servidores MCP por stdio y carga el SDK de forma diferida. El núcleo puede ejecutarse sin instalar MCP.
 
+**Actualización:** la UI ya no permite añadir servidores MCP arbitrarios por
+nombre/comando. Se simplificó a un interruptor único que activa/desactiva el
+servidor de archivos (`server-filesystem`) del workspace actual
+(`ui/views/sidebar.py`, `ui/controllers/mcp_controller.py`). El soporte
+interno multi-servidor (`MCPToolBridge`) se mantiene y sigue teniendo
+reconexión automática si el proceso muere, pero no hay UI para más de un
+servidor.
 
 ### Fase 4.1 — Estabilización antes de nuevos plugins
 - [x] Separar llamadas textuales de herramienta del texto visible
@@ -56,7 +63,9 @@ La primera entrega del plugin usa servidores MCP por stdio y carga el SDK de for
 - [x] Añadir pruebas de cancelación y seguridad MCP
 - [x] Limpiar artefactos de desarrollo del paquete distribuible
 - [x] Ejecutar pruebas de integración con Ollama real en el Mac
-- [ ] Prueba manual completa de UI con PySide6 + Ollama + MCP en el Mac
+- [x] Prueba manual de UI con PySide6 + Ollama + MCP en el Mac (edición de
+      archivos y activación MCP verificadas a mano; shell, git, búsqueda,
+      agentes y restauración de historial solo probados por tests, no a mano)
 
 **Bloque A de autorización aplicado:**
 - [x] No autorizar una herramienta por mera mención de su nombre
@@ -74,13 +83,19 @@ no emitió la llamada nativa de herramienta y `hdnh2006/salamandra-7b-instruct:l
 rechazó las herramientas con HTTP 400.
 
 ### Fase 5 — Plugins
-Solo cuando el núcleo esté estable:
-- [ ] Git
-- [ ] Memoria
+- [x] Git — `plugins/git` (solo lectura: status/diff/log/show, sin push/commit/checkout como tools)
+- [x] Búsqueda — `plugins/search` (grep en el workspace, con límites de tamaño/ReDoS)
+- [x] Shell — `plugins/shell` (ejecución de comandos con confirmación obligatoria y lista de riesgos; no estaba en el plan original, se añadió y se revisó a fondo)
+- [x] Diagnósticos — `ui/diagnostics.py` + panel (estadísticas de la sesión)
+- [x] Agentes — `core/agents.py` + `AgentController` (system prompt, temperature, num_ctx, herramientas permitidas por agente)
+- [x] Historial — `core/history.py` (persistencia de conversación entre sesiones; no es memoria a largo plazo ni RAG)
+- [ ] Memoria (más allá del historial de la sesión actual)
 - [ ] Automatización
-- [ ] Diagnósticos
 - [ ] Benchmarks
-- [ ] Otros
+
+### Fase 6 — Arquitectura MVC (no estaba en el plan original)
+- [x] Separación en `ui/views/` (widgets puros) + `ui/controllers/` (lógica) + `ui/rendering/` (renderers inyectables vía protocolo)
+- [x] `core/composite_tools.py` / `core/tool_provider.py`: abstracción común para componer providers (core + MCP + git + search + shell) y filtrarlos por agente
 
 ## Criterio de cierre del núcleo
 Debe poder:
@@ -94,10 +109,10 @@ Debe poder:
 
 No se añade una nueva capa de arquitectura para resolver un problema que todavía no existe.
 
-
-### Estado actual de Fase 4
-
-La segunda entrega conecta el plugin MCP con el flujo normal de herramientas de ChatPerezoso sin añadir dependencias MCP al núcleo. Las herramientas MCP se exponen con el prefijo `mcp__` para evitar colisiones con las herramientas locales. La interfaz permite activar/desactivar un servidor MCP por stdio y consulta sus herramientas al activarlo.
+### Pendiente de verdad ahora mismo
+- [ ] Probar a mano en el Mac: shell, git, búsqueda, agentes (crear/editar/borrar), regenerar respuesta, restaurar conversación desde `history.json`
+- [ ] `pytest-timeout` no está en `requirements.txt`; el test con `@pytest.mark.timeout(15)` en `test_mcp_plugin.py` no aplica el timeout de verdad, solo avisa
+- [ ] Memoria a largo plazo, automatización y benchmarks (Fase 5) siguen sin empezar
 
 
 ### Fase 3 — Duplicidad núcleo/MCP
