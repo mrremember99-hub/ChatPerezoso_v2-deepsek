@@ -194,6 +194,21 @@ QPushButton#McpToggle:disabled {
     border-color: #1A2523;
 }
 
+QLabel#CapabilitiesBadge {
+    font-size: 10px;
+    padding: 2px 0 8px;
+    background-color: transparent;
+}
+QLabel#CapabilitiesBadge[mode="native"] {
+    color: #7EE0A8;
+}
+QLabel#CapabilitiesBadge[mode="xml"] {
+    color: #E0BC7A;
+}
+QLabel#CapabilitiesBadge[mode="unknown"] {
+    color: #5D6E68;
+}
+
 QStatusBar {
     background-color: #0F1614;
     color: #8FA79A;

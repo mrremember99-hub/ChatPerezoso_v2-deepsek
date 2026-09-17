@@ -32,6 +32,30 @@ class ModelWorker(QObject):
             self.error.emit(str(exc))
 
 
+class CapabilitiesWorker(QObject):
+    """Consulta /api/show para saber si el modelo soporta tools.
+
+    Se ejecuta en un hilo aparte porque la consulta implica una
+    peticion HTTP que puede tardar hasta 5s si Ollama esta ocupado.
+    """
+
+    finished = Signal(str, object)  # model_name, ModelCapabilities
+    error = Signal(str, str)        # model_name, mensaje
+
+    def __init__(self, host: str, model: str):
+        super().__init__()
+        self.host = host
+        self.model = model
+
+    def run(self) -> None:
+        from core.model_capabilities import get_capabilities
+        try:
+            caps = get_capabilities(self.host, self.model)
+            self.finished.emit(self.model, caps)
+        except Exception as exc:
+            self.error.emit(self.model, str(exc))
+
+
 class MCPWorker(QObject):
     finished = Signal(str, object, list)
     error = Signal(str, str)

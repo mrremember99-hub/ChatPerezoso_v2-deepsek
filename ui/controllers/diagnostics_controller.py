@@ -41,6 +41,11 @@ class DiagnosticsController(QObject):
 
         chat.streaming_changed.connect(self._on_streaming_changed)
         chat.conversation_changed.connect(self._on_conversation_changed)
+        # La senal textual_tool_attempt puede no existir en fakes
+        # de tests. La conectamos si esta disponible.
+        textual_signal = getattr(chat, "textual_tool_attempt", None)
+        if textual_signal is not None:
+            textual_signal.connect(self._on_textual_tool_attempt)
 
     # -- config del modelo ---------------------------------------------------
 
@@ -68,10 +73,15 @@ class DiagnosticsController(QObject):
             if elapsed >= MIN_RESPONSE_SECONDS and last_text:
                 self.stats.add_response(elapsed)
                 self._refresh_responses()
+        self._refresh_textual_tool()
         self.refresh_context()
 
     def _on_conversation_changed(self) -> None:
         self.refresh_context()
+
+    def _on_textual_tool_attempt(self) -> None:
+        self.stats.note_textual_tool()
+        self._refresh_textual_tool()
 
     def reset(self) -> None:
         self.stats.reset_metrics()
@@ -95,6 +105,12 @@ class DiagnosticsController(QObject):
             self.stats.model,
             self.stats.temperature,
             self.stats.num_ctx,
+        )
+
+    def _refresh_textual_tool(self) -> None:
+        self.panel.set_textual_tool(
+            self.stats.textual_tool_attempts,
+            self.stats.responses,
         )
 
     def _refresh_responses(self) -> None:

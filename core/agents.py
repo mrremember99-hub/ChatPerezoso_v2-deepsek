@@ -92,18 +92,34 @@ def default_agents() -> list[Agent]:
     El usuario puede editarlos o renombrarlos. La idea es que la app sea
     útil desde el primer minuto sin obligar a configurar nada.
     """
+    # Lista EXPLÍCITA de herramientas de solo lectura. No se usa el
+    # comodín "mcp__*" porque expondría también las herramientas MCP de
+    # escritura (write_file, edit_file, create_directory, move_file), y
+    # un agente llamado "Analista" no debería poder destruir archivos.
+    #
+    # Si añades un servidor MCP nuevo con herramientas de solo lectura,
+    # enuméralas aquí para que este agente las reciba.
     read_only_tools = [
+        # Núcleo
         "listar_carpeta",
         "leer_archivo",
         "buscar_en_workspace",
+        # Git (solo lectura)
         "git_status",
         "git_diff",
         "git_log",
         "git_show",
-        # Permite todas las herramientas MCP que se activen en caliente.
-        # El FilteredToolProvider reconoce este comodín y expone cualquier
-        # nombre que empiece por "mcp__", sin tener que enumerarlas.
-        "mcp__*",
+        # MCP server-filesystem: solo lectura
+        "mcp__fs__read_file",
+        "mcp__fs__read_text_file",
+        "mcp__fs__read_media_file",
+        "mcp__fs__read_multiple_files",
+        "mcp__fs__list_directory",
+        "mcp__fs__list_directory_with_sizes",
+        "mcp__fs__directory_tree",
+        "mcp__fs__search_files",
+        "mcp__fs__get_file_info",
+        "mcp__fs__list_allowed_directories",
     ]
     return [
         Agent(

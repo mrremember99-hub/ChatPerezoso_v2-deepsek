@@ -122,7 +122,12 @@ class PlainTextRenderer:
 
         self.response_text += text
         self.response_segment += text
-        self.response_segment = self.clean_response_text(self.response_segment)
+        # El prefijo "PEREZOSO:" solo puede aparecer al principio. Una vez
+        # el segmento supera 80 caracteres, no hay nada que limpiar.
+        # Antes hacíamos lstrip() sobre todo el segmento en cada chunk,
+        # lo que era O(n²) para respuestas largas.
+        if len(self.response_segment) <= 80:
+            self.response_segment = self.clean_response_text(self.response_segment)
 
         cursor = self.chat.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
@@ -155,7 +160,14 @@ class PlainTextRenderer:
 
         self._segment_end = cursor.position()
         self.chat.setTextCursor(cursor)
-        self.chat.ensureCursorVisible()
+        # Solo hacemos scroll si el usuario ya estaba al fondo. Si ha
+        # scrolleado arriba para leer, no lo arrastramos. También
+        # evitamos el repaint cuando el widget no es visible.
+        if self.chat.isVisible():
+            sb = self.chat.verticalScrollBar()
+            at_bottom = sb.value() >= sb.maximum() - 8
+            if at_bottom:
+                self.chat.ensureCursorVisible()
 
     # -- renderizado de Markdown ---------------------------
     def _render_markdown_block(self) -> None:

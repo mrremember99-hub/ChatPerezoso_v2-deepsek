@@ -3,11 +3,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Slot
+from PySide6.QtCore import QObject, QThread, Slot
 from PySide6.QtWidgets import QApplication, QFileDialog
 
 from core.agents import Agent, AgentStore
-from core.composite_tools import CompositeToolProvider, FilteredToolProvider
+from ..workers import CapabilitiesWorker
+from core.composite_tools import (
+    CachedToolProvider,
+    CompositeToolProvider,
+    FilteredToolProvider,
+)
 from core.config import AppConfig
 from core.history import HistoryStore
 from core.mcp_servers import MCPServerStore
@@ -29,6 +34,50 @@ from .mcp_controller import MCPController
 from .model_controller import ModelController
 
 
+# Herramientas cuyos resultados se cachean durante unos segundos.
+# Son de solo lectura: ejecutarlas dos veces con los mismos argumentos
+# no cambia el resultado en un margen de segundos.
+_CACHEABLE_TOOLS = {
+    # núcleo
+    "listar_carpeta",
+    "leer_archivo",
+    # plugins
+    "buscar_en_workspace",
+    "git_status",
+    "git_diff",
+    "git_log",
+    "git_show",
+    # MCP de solo lectura (server-filesystem)
+    "mcp__fs__read_file",
+    "mcp__fs__read_text_file",
+    "mcp__fs__read_media_file",
+    "mcp__fs__read_multiple_files",
+    "mcp__fs__list_directory",
+    "mcp__fs__list_directory_with_sizes",
+    "mcp__fs__directory_tree",
+    "mcp__fs__search_files",
+    "mcp__fs__get_file_info",
+    "mcp__fs__list_allowed_directories",
+}
+
+# Herramientas que, al ejecutarse, invalidan TODO el caché: el
+# workspace puede haber cambiado y los resultados previos son basura.
+_INVALIDATING_TOOLS = {
+    # núcleo
+    "crear_archivo",
+    "crear_carpeta",
+    "escribir_archivo",
+    "borrar_archivo",
+    # plugins
+    "ejecutar_comando",
+    # MCP de escritura
+    "mcp__fs__write_file",
+    "mcp__fs__edit_file",
+    "mcp__fs__create_directory",
+    "mcp__fs__move_file",
+}
+
+
 class AppController(QObject):
     def __init__(self, view: MainWindow) -> None:
         super().__init__()
@@ -42,6 +91,16 @@ class AppController(QObject):
 
         # Descubrimiento dinámico de plugins vía entry points.
         self._plugin_factories = discover_plugin_factories()
+        # Referencia al QThread de consulta de capacidades del modelo.
+        # Solo puede haber uno activo a la vez; si el usuario cambia
+        # de modelo rapidamente, el anterior se descarta.
+        self._caps_thread: QThread | None = None
+        self._caps_worker: CapabilitiesWorker | None = None
+        # Referencia al QThread de consulta de capacidades del modelo.
+        # Solo puede haber uno activo a la vez; si el usuario cambia
+        # de modelo rapidamente, el anterior se descarta.
+        self._caps_thread: QThread | None = None
+        self._caps_worker: CapabilitiesWorker | None = None
         self._rebuild_composite()
 
         self.history_store = HistoryStore()
@@ -85,14 +144,23 @@ class AppController(QObject):
     # -- construcción del composite -----------------------------------------
 
     def _rebuild_composite(self) -> None:
-        """Reconstruye el composite con los plugins disponibles.
+        """Reconstruye el composite con plugins, caché y MCP.
 
         El orden importa: el primero que declara una herramienta es su
         dueño. Los plugins van antes que MCP para que las herramientas
         locales (shell, git, search) ganen si colisionan.
+
+        Envolvemos el composite en CachedToolProvider para absorber
+        ráfagas del modelo que pide el mismo listado o lectura dos veces
+        seguidas. Las operaciones de escritura y shell invalidan el caché.
         """
         plugins = instantiate_plugins(self._plugin_factories, self.workspace)
-        self.composite = CompositeToolProvider([*plugins, self.mcp])
+        inner = CompositeToolProvider([*plugins, self.mcp])
+        self.composite = CachedToolProvider(
+            inner,
+            cacheable=_CACHEABLE_TOOLS,
+            invalidating=_INVALIDATING_TOOLS,
+        )
 
     # -- wiring --------------------------------------------------------------
 
@@ -193,6 +261,14 @@ class AppController(QObject):
         current = self.config.model if self.config.model in models else None
         self.view.sidebar.set_models(models, current)
         self.view.set_status(f"{len(models)} modelo(s) disponibles")
+        # Consultar el modo del modelo activo para mostrar el badge.
+        active_model = self.view.sidebar.current_model() or self.config.model
+        if active_model:
+            self._refresh_capabilities(active_model)
+        # Consultar el modo del modelo activo para mostrar el badge.
+        active_model = self.view.sidebar.current_model() or self.config.model
+        if active_model:
+            self._refresh_capabilities(active_model)
         agent = self.agent_ctrl.active_agent()
         self.diagnostics_ctrl.set_model(
             self.view.sidebar.current_model() or self.config.model,
@@ -214,6 +290,92 @@ class AppController(QObject):
         self.chat_ctrl.set_current_model(name)
         agent = self.agent_ctrl.active_agent()
         self.diagnostics_ctrl.set_model(name, agent.temperature, agent.num_ctx)
+        self._refresh_capabilities(name)
+        self._refresh_capabilities(name)
+
+    def _refresh_capabilities(self, model: str) -> None:
+        """Consulta /api/show en un hilo aparte y actualiza el badge.
+
+        Si ya hay una consulta en curso, se descarta y se lanza la
+        nueva: el usuario suele cambiar de modelo rapido y queremos
+        que gane la ultima seleccion.
+        """
+        if self._caps_thread is not None and self._caps_thread.isRunning():
+            self._caps_thread.quit()
+            self._caps_thread.wait(500)
+        self._caps_thread = QThread(self)
+        self._caps_worker = CapabilitiesWorker(self.config.ollama_host, model)
+        self._caps_worker.moveToThread(self._caps_thread)
+        self._caps_thread.started.connect(self._caps_worker.run)
+        self._caps_worker.finished.connect(self._on_capabilities_ready)
+        self._caps_worker.error.connect(self._on_capabilities_error)
+        self._caps_worker.finished.connect(self._caps_thread.quit)
+        self._caps_worker.error.connect(self._caps_thread.quit)
+        self._caps_thread.finished.connect(self._cleanup_caps_thread)
+        self._caps_thread.start()
+
+    @Slot(str, object)
+    def _on_capabilities_ready(self, model: str, caps) -> None:
+        # Ignorar si el usuario ya ha cambiado de modelo otra vez.
+        if model != self.view.sidebar.current_model():
+            return
+        self.view.sidebar.set_capabilities(caps.tool_mode)
+        # Si el modo viene de un override manual, lo indicamos en el
+        # status para que el usuario sepa que su config está activa.
+        if getattr(caps, "source", "") == "override":
+            self.view.set_status(
+                f"Modo forzado manualmente para {model}: {caps.tool_mode}"
+            )
+
+    @Slot(str, str)
+    def _on_capabilities_error(self, model: str, message: str) -> None:
+        if model == self.view.sidebar.current_model():
+            self.view.sidebar.set_capabilities("unknown")
+
+    def _cleanup_caps_thread(self) -> None:
+        if self._caps_thread is not None:
+            self._caps_thread.deleteLater()
+        self._caps_thread = None
+        self._caps_worker = None
+
+    def _refresh_capabilities(self, model: str) -> None:
+        """Consulta /api/show en un hilo aparte y actualiza el badge.
+
+        Si ya hay una consulta en curso, se descarta y se lanza la
+        nueva: el usuario suele cambiar de modelo rapido y queremos
+        que gane la ultima seleccion.
+        """
+        if self._caps_thread is not None and self._caps_thread.isRunning():
+            self._caps_thread.quit()
+            self._caps_thread.wait(500)
+        self._caps_thread = QThread(self)
+        self._caps_worker = CapabilitiesWorker(self.config.ollama_host, model)
+        self._caps_worker.moveToThread(self._caps_thread)
+        self._caps_thread.started.connect(self._caps_worker.run)
+        self._caps_worker.finished.connect(self._on_capabilities_ready)
+        self._caps_worker.error.connect(self._on_capabilities_error)
+        self._caps_worker.finished.connect(self._caps_thread.quit)
+        self._caps_worker.error.connect(self._caps_thread.quit)
+        self._caps_thread.finished.connect(self._cleanup_caps_thread)
+        self._caps_thread.start()
+
+    @Slot(str, object)
+    def _on_capabilities_ready(self, model: str, caps) -> None:
+        # Ignorar si el usuario ya ha cambiado de modelo otra vez.
+        if model != self.view.sidebar.current_model():
+            return
+        self.view.sidebar.set_capabilities(caps.tool_mode)
+
+    @Slot(str, str)
+    def _on_capabilities_error(self, model: str, message: str) -> None:
+        if model == self.view.sidebar.current_model():
+            self.view.sidebar.set_capabilities("unknown")
+
+    def _cleanup_caps_thread(self) -> None:
+        if self._caps_thread is not None:
+            self._caps_thread.deleteLater()
+        self._caps_thread = None
+        self._caps_worker = None
 
     # -- MCP -----------------------------------------------------------------
 
@@ -252,6 +414,10 @@ class AppController(QObject):
 
             self.agent_ctrl.set_available_tools(self._all_tool_names())
             self._apply_agent(self.agent_ctrl.active_agent())
+
+            # El workspace ha cambiado: cualquier resultado cacheado
+            # (listados, lecturas, git status) apunta al workspace viejo.
+            self.composite.cache.invalidate_all()
 
             self.config.workspace = str(Path(selected).resolve())
             self.config.save()
@@ -306,6 +472,8 @@ class AppController(QObject):
         self.chat_ctrl.clear()
         self.view.chat_panel.clear_chat()
         self.diagnostics_ctrl.reset()
+        # Nueva conversación: descartar resultados cacheados.
+        self.composite.cache.invalidate_all()
         self.view.set_status("Nueva conversación")
 
     # -- ciclo de vida -------------------------------------------------------

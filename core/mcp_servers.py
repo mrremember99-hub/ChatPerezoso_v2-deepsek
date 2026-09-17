@@ -1,4 +1,33 @@
-"""Registro de servidores MCP configurable en disco."""
+"""Registro de servidores MCP configurable en disco.
+
+DECISIÓN DE SEGURIDAD — no revertir sin leer esto
+─────────────────────────────────────────────────
+
+``command`` y ``args`` se leen SIEMPRE de ``mcp_servers.json``, un archivo
+estático del repositorio que solo edita el usuario a mano. NUNCA vienen
+de la UI, del modelo, ni de ningún otro sitio en runtime.
+
+Esto no es una limitación pendiente de "arreglar". Es la mitigación frente
+a la vulnerabilidad de diseño de los SDKs oficiales de MCP documentada por
+OX Security en abril de 2026: los valores de configuración de un servidor
+MCP fluyen directamente a ``subprocess.Popen`` a través del transporte
+STDIO. Si un atacante pudiera controlar ``command`` o ``args`` (por ejemplo,
+a través de un prompt injection que hiciera que el modelo propusiera un
+servidor MCP malicioso, o mediante una UI de "añadir servidor personalizado"
+sin validación), podría ejecutar comandos arbitrarios con los privilegios
+de la app.
+
+Riesgo asumido: el usuario puede editar ``mcp_servers.json`` a mano y meter
+cualquier comando. Eso es aceptable porque el usuario es el dueño de su
+máquina y del archivo.
+
+Regla: si algún día se añade una UI para editar servidores MCP, ``command``
+debe validarse contra una allowlist fija (por ejemplo, solo ``npx`` y
+``python3``) y ``args`` debe validarse contra patrones de nombres de
+paquete. Sin esa validación, NO exponer edición de command/args.
+
+Referencia: https://www.ox.security/blog/mcp-sdk-stdio-vulnerability
+"""
 from __future__ import annotations
 
 import json
@@ -13,6 +42,13 @@ MCP_SERVERS_FILE = BASE_DIR / "mcp_servers.json"
 
 @dataclass
 class MCPServerEntry:
+    """Entrada de configuración de un servidor MCP.
+
+    SEGURIDAD: ``command`` y ``args`` se pasan a subprocess.Popen sin
+    validación (el SDK MCP no los sanitiza). Solo se aceptan valores
+    provenientes de ``mcp_servers.json``. Ver el docstring del módulo.
+    """
+
     id: str
     label: str
     command: str

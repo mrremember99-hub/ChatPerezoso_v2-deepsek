@@ -71,6 +71,9 @@ def build_tools_prompt(tools):
         "",
         "Sin texto antes ni despues. Espera el resultado antes de continuar.",
         "",
+        "Las rutas son RELATIVAS al workspace. Usa \".\" para la raiz, "
+        "nunca \"/\" ni rutas absolutas.",
+        "",
         "### Herramientas disponibles",
         "",
     ]

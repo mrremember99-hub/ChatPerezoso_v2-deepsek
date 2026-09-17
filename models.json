@@ -1,0 +1,12 @@
+{
+  "overrides": {
+    "deepseek-r1:latest": {
+      "mode": "xml",
+      "note": "Ollama declara tools pero el modelo no emite tool_calls nativos"
+    },
+    "hdnh2006/salamandra-7b-instruct:latest": {
+      "mode": "xml",
+      "note": "rechaza tools nativos con HTTP 400"
+    }
+  }
+}

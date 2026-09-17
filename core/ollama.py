@@ -155,7 +155,7 @@ class OllamaClient:
                             result_text = on_tool(name, args)
                         history.append({
                             "role": "user",
-                            "content": f"[Resultado de {name}]\\n{result_text}",
+                            "content": f"[TOOL_RESULT:{name}]\n{result_text}",
                         })
                     continue
 
@@ -315,6 +315,11 @@ class OllamaClient:
             "crear un archivo sin nombre, elige uno razonable y usa la "
             "herramienta directamente; la aplicación se encarga de la "
             "confirmación.\n\n"
+            "## RUTAS\n"
+            "Todas las rutas son RELATIVAS al workspace. Usa \".\" para la "
+            "raíz del workspace, nunca \"/\". Ejemplos válidos: \".\", "
+            "\"subcarpeta\", \"archivo.txt\". NUNCA uses rutas absolutas "
+            "como /, /tmp o /Users.\n\n"
             "## ORDEN DE OPERACIONES\n"
             "Antes de escribir un archivo existente, usa primero la herramienta "
             "de lectura para conocer su contenido completo. El contenido que "
@@ -326,9 +331,26 @@ class OllamaClient:
 
     @staticmethod
     def _last_user_text(history: list[dict[str, Any]]) -> str:
+        """Devuelve el último mensaje del usuario que sea una instrucción real.
+
+        Ignora los resultados de herramientas que en modo XML se envían
+        con rol "user" pero con prefijo [TOOL_RESULT:name]. Es una
+        salvaguarda frente al confused deputy: el contenido de un
+        archivo leído no debe poder reautorizar operaciones.
+
+        El filtro es defensivo. Hoy authorization_text se calcula una
+        sola vez antes del bucle, así que los mensajes de tool result
+        no se consultan. Pero si en el futuro se recalculara por ronda,
+        este filtro evita que el contenido de un archivo se interprete
+        como instrucción.
+        """
         for message in reversed(history):
-            if message.get("role") == "user":
-                return str(message.get("content") or "")
+            if message.get("role") != "user":
+                continue
+            content = str(message.get("content") or "")
+            if content.startswith("[TOOL_RESULT:"):
+                continue
+            return content
         return ""
 
     @staticmethod
@@ -435,7 +457,6 @@ class OllamaClient:
         message["content"] = content
         return message
 
-    @staticmethod
     @staticmethod
     def _watchdog_cancel(
         response: httpx.Response,

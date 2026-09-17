@@ -82,6 +82,13 @@ class Sidebar(QWidget):
         refresh.clicked.connect(lambda: self.model_refresh_requested.emit())
         layout.addWidget(refresh)
 
+        # Badge que muestra el modo de tool calling del modelo activo.
+        # Se rellena en caliente cuando AppController consulta /api/show.
+        self.capabilities_label = QLabel("")
+        self.capabilities_label.setObjectName("CapabilitiesBadge")
+        self.capabilities_label.setProperty("mode", "unknown")
+        layout.addWidget(self.capabilities_label)
+
         # -- MCP --
         mcp_title = QLabel("MCP")
         mcp_title.setObjectName("SectionTitle")
@@ -136,6 +143,25 @@ class Sidebar(QWidget):
 
     def current_model(self) -> str:
         return self.model_combo.currentText().strip()
+
+    def set_capabilities(self, mode: str) -> None:
+        """Refleja el modo de tool calling del modelo activo.
+
+        mode puede ser 'native', 'xml' o 'unknown'.
+        """
+        labels = {
+            "native": "  tool calling nativo",
+            "xml": "  prompt-guided XML",
+            "unknown": "  modo desconocido",
+        }
+        if mode not in labels:
+            mode = "unknown"
+        self.capabilities_label.setText(labels[mode])
+        self.capabilities_label.setProperty("mode", mode)
+        # Forzar el repintado para que el QSS con property selector
+        # se aplique al cambio.
+        self.capabilities_label.style().unpolish(self.capabilities_label)
+        self.capabilities_label.style().polish(self.capabilities_label)
 
     def set_agents(self, names: list[str], current: str) -> None:
         blocked = self.agent_combo.blockSignals(True)

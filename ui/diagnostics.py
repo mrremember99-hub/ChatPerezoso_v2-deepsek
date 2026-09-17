@@ -22,6 +22,13 @@ class SessionStats:
     responses: int = 0
     total_response_seconds: float = 0.0
     context_tokens: int = 0
+    # Cuantas veces el modelo intento usar una herramienta escribiendo
+    # el JSON como texto en lugar de usar tool calling nativo. Si sube,
+    # el modelo no soporta tools o lo esta haciendo mal.
+    textual_tool_attempts: int = 0
+    # Modo de tool calling del modelo actual (native/xml/unknown),
+    # solo informativo.
+    tool_mode: str = "unknown"
 
     # -- métricas derivadas --------------------------------------------------
 
@@ -35,11 +42,16 @@ class SessionStats:
         self.responses += 1
         self.total_response_seconds += max(0.0, seconds)
 
+    def note_textual_tool(self) -> None:
+        """Registra que el modelo intento usar tool calling textual."""
+        self.textual_tool_attempts += 1
+
     def reset_metrics(self) -> None:
         """Reinicia los contadores sin borrar la config del modelo."""
         self.responses = 0
         self.total_response_seconds = 0.0
         self.context_tokens = 0
+        self.textual_tool_attempts = 0
 
     # -- contexto ------------------------------------------------------------
 

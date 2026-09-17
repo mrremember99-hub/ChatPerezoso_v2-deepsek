@@ -171,3 +171,88 @@ class FilteredToolProvider:
 
 def _tool_name(definition: dict[str, Any]) -> str:
     return str(definition.get("function", {}).get("name", "")).strip()
+
+
+class CachedToolProvider:
+    """Envuelve un ToolProvider y cachea las herramientas de solo lectura.
+
+    Se coloca entre el CompositeToolProvider y el ChatController. El
+    Composite no sabe que está cacheado; el ChatController tampoco.
+
+    Args:
+        source: provider subyacente.
+        cacheable: nombres de herramientas cuyos resultados se cachean.
+        invalidating: nombres de herramientas que, al ejecutarse, vacían
+            el caché completo (escrituras, borrados, shell).
+        cache: instancia compartida de ToolCache. Si no se pasa, se crea
+            una nueva. Útil para compartir entre providers.
+    """
+
+    def __init__(
+        self,
+        source: ToolProvider,
+        *,
+        cacheable: set[str] | None = None,
+        invalidating: set[str] | None = None,
+        cache: "ToolCache | None" = None,
+    ):
+        from .tool_cache import ToolCache
+        self.source = source
+        self._cacheable = set(cacheable or ())
+        self._invalidating = set(invalidating or ())
+        self.cache = cache or ToolCache()
+
+    # -- catálogo (delegación directa) ---------------------------------------
+
+    def definitions(self):
+        return self.source.definitions()
+
+    def intent_rules(self):
+        return self.source.intent_rules()
+
+    def requires_confirmation(self, name: str) -> bool:
+        return self.source.requires_confirmation(name)
+
+    # -- ejecución -----------------------------------------------------------
+
+    def call(
+        self,
+        name: str,
+        arguments: dict,
+        *,
+        allow_destructive: bool = False,
+        cancel_event=None,
+    ) -> str:
+        # Herramientas que invalidan el caché completo: se ejecutan y
+        # limpian. El workspace pudo cambiar.
+        if name in self._invalidating:
+            result = self.source.call(
+                name, arguments,
+                allow_destructive=allow_destructive,
+                cancel_event=cancel_event,
+            )
+            self.cache.invalidate_all()
+            return result
+
+        # Herramientas no cacheables: bypass directo.
+        if name not in self._cacheable:
+            return self.source.call(
+                name, arguments,
+                allow_destructive=allow_destructive,
+                cancel_event=cancel_event,
+            )
+
+        # Cacheables: consultar caché primero.
+        cached = self.cache.get(name, arguments)
+        if cached is not None:
+            return cached
+
+        result = self.source.call(
+            name, arguments,
+            allow_destructive=allow_destructive,
+            cancel_event=cancel_event,
+        )
+        # No cachear errores: un fallo puede ser transitorio.
+        if not result.startswith("ERROR"):
+            self.cache.put(name, arguments, result)
+        return result

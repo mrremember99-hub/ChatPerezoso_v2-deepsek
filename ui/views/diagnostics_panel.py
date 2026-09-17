@@ -34,6 +34,14 @@ class DiagnosticsPanel(QWidget):
         self.context_label.setObjectName("DiagnosticLine")
         layout.addWidget(self.context_label)
 
+        # Linea que solo aparece cuando hay intentos de tool calling
+        # textual (indica que el modelo no soporta tools nativos).
+        self.textual_label = QLabel("")
+        self.textual_label.setObjectName("DiagnosticLine")
+        self.textual_label.setStyleSheet("color: #E0BC7A;")
+        self.textual_label.setVisible(False)
+        layout.addWidget(self.textual_label)
+
     # -- API pública ---------------------------------------------------------
 
     def set_model(self, name: str, temperature: float, num_ctx: int) -> None:
@@ -52,6 +60,18 @@ class DiagnosticsPanel(QWidget):
         self.response_label.setText(
             f"Respuestas: {count} · {average_seconds:.1f} s de media"
         )
+
+    def set_textual_tool(self, attempts: int, responses: int) -> None:
+        if attempts == 0:
+            self.textual_label.setVisible(False)
+            return
+        if responses > 0:
+            pct = (attempts / responses) * 100
+            text = f"Tool-call textual: {attempts}/{responses} ({pct:.0f}%)"
+        else:
+            text = f"Tool-call textual: {attempts}"
+        self.textual_label.setText(text)
+        self.textual_label.setVisible(True)
 
     def set_context_tokens(self, tokens: int) -> None:
         self.context_label.setText(f"Contexto: ~{_format_tokens(tokens)} tokens")

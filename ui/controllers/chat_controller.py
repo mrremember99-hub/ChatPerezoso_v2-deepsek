@@ -42,6 +42,7 @@ class ChatController(QObject):
     error_message = Signal(str)
     conversation_changed = Signal()
     mcp_error = Signal(str)
+    textual_tool_attempt = Signal()
 
     def __init__(
         self,
@@ -230,6 +231,13 @@ class ChatController(QObject):
 
     def _on_done(self, result: str) -> None:
         response_text = self.renderer.final_text(result)
+        # Detectar intento de tool calling textual en el texto final.
+        # OllamaClient devuelve este mensaje cuando el modelo escribio
+        # el JSON como texto dos veces seguidas.
+        if "escribiste el JSON de la herramienta" in response_text.lower() or \
+           "no logro invocar" in response_text.lower() or \
+           "no logró invocar" in response_text.lower():
+            self.textual_tool_attempt.emit()
         summary = self._summarize_actions()
         if summary:
             self.renderer.insert_narration(summary, active=False)
