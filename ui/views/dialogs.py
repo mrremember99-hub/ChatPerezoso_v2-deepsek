@@ -41,7 +41,9 @@ def _confirm_shell(parent: QWidget, arguments: dict) -> bool:
 
     dialog = QDialog(parent)
     dialog.setWindowTitle("Confirmar comando")
-    dialog.setMinimumWidth(520)
+    dialog.setMinimumSize(600, 300)
+    dialog.setMaximumSize(700, 560)
+    dialog.resize(640, 400)
     layout = QVBoxLayout(dialog)
     layout.setSpacing(12)
 
@@ -114,7 +116,7 @@ def _confirm_shell(parent: QWidget, arguments: dict) -> bool:
 
 def _confirm_generic(parent: QWidget, name: str, arguments: dict) -> bool:
     # Casos con contenido largo: usamos diálogo con scroll.
-    if name in {"crear_archivo", "escribir_archivo"}:
+    if _is_write_tool(name):
         return _confirm_file_write(parent, name, arguments)
 
     if name == "borrar_archivo":
@@ -129,11 +131,7 @@ def _confirm_generic(parent: QWidget, name: str, arguments: dict) -> bool:
         text = f"¿Quieres crear la carpeta «{path}»?"
         title = "Confirmar creación de carpeta"
     else:
-        text = (
-            f"La herramienta «{name}» puede modificar o ejecutar acciones.\n\n"
-            f"Argumentos: {arguments}\n\n¿Quieres permitir esta operación?"
-        )
-        title = "Confirmar operación"
+        return _confirm_generic_with_scroll(parent, name, arguments)
 
     reply = QMessageBox.question(
         parent,
@@ -145,6 +143,80 @@ def _confirm_generic(parent: QWidget, name: str, arguments: dict) -> bool:
     return reply == QMessageBox.StandardButton.Yes
 
 
+def _confirm_generic_with_scroll(
+    parent: QWidget, name: str, arguments: dict
+) -> bool:
+    """Fallback para herramientas sin confirmación específica.
+
+    Muestra los argumentos en un visor con scroll y tamaño fijo. Sin esto,
+    una herramienta MCP con argumentos largos (por ejemplo un bloque de
+    código) hacía crecer el diálogo más allá de la pantalla.
+    """
+    import json as _json
+
+    dialog = QDialog(parent)
+    dialog.setWindowTitle(f"Confirmar: {name}")
+    dialog.setMinimumSize(640, 440)
+    dialog.setMaximumSize(640, 440)
+    dialog.resize(640, 440)
+    layout = QVBoxLayout(dialog)
+    layout.setSpacing(10)
+
+    question = QLabel(
+        f"La herramienta <b>{html.escape(name)}</b> puede modificar o "
+        "ejecutar acciones. ¿Quieres permitirla?"
+    )
+    question.setTextFormat(Qt.TextFormat.RichText)
+    question.setWordWrap(True)
+    layout.addWidget(question)
+
+    layout.addWidget(QLabel("<b>Argumentos</b>:"))
+
+    args_view = QPlainTextEdit()
+    try:
+        rendered = _json.dumps(arguments, indent=2, ensure_ascii=False)
+    except (TypeError, ValueError):
+        rendered = str(arguments)
+    args_view.setPlainText(rendered)
+    args_view.setReadOnly(True)
+    args_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+    args_view.setMaximumHeight(240)
+    args_view.setMinimumHeight(160)
+    font = QFont("Menlo")
+    font.setStyleHint(QFont.StyleHint.Monospace)
+    font.setPointSize(11)
+    args_view.setFont(font)
+    layout.addWidget(args_view)
+
+    buttons = QDialogButtonBox(
+        QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok
+    )
+    buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Permitir")
+    buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Cancelar")
+    buttons.accepted.connect(dialog.accept)
+    buttons.rejected.connect(dialog.reject)
+    layout.addWidget(buttons)
+
+    return dialog.exec() == QDialog.DialogCode.Accepted
+
+
+# Nombres de herramientas (nativas o MCP) que escriben contenido en archivos.
+# Se usa para decidir si un diálogo debe mostrar el contenido con scroll
+# en lugar de volcar los argumentos como texto plano.
+_WRITE_TOOL_HINTS = (
+    "crear_archivo",
+    "escribir_archivo",
+    "write_file",
+    "edit_file",
+    "create_file",
+)
+
+
+def _is_write_tool(name: str) -> bool:
+    """Cierto si la herramienta escribe contenido en un archivo."""
+    return any(hint in name for hint in _WRITE_TOOL_HINTS)
+
+
 def _confirm_file_write(parent: QWidget, name: str, arguments: dict) -> bool:
     """Diálogo de confirmación para crear/escribir archivos.
 
@@ -154,13 +226,36 @@ def _confirm_file_write(parent: QWidget, name: str, arguments: dict) -> bool:
     """
     path = str(arguments.get("path", ""))
     content = str(arguments.get("content", ""))
-    action = "crear" if name == "crear_archivo" else "escribir o reemplazar"
+    is_mcp = name.startswith("mcp__")
+    if "write_file" in name or "create_file" in name or name == "crear_archivo":
+        action = "escribir"
+    else:
+        action = "modificar"
+
+    # Para herramientas MCP, el argumento puede llamarse "content" o "text".
+    if not content:
+        for key in ("text", "body", "data"):
+            if key in arguments and isinstance(arguments[key], str):
+                content = arguments[key]
+                break
+
+    # Edits de mcp__fs__edit_file: mostrar como lista JSON legible.
+    if not content and "edits" in arguments:
+        import json as _json
+        try:
+            content = _json.dumps(arguments["edits"], indent=2, ensure_ascii=False)
+        except (TypeError, ValueError):
+            content = str(arguments.get("edits", ""))
+
     size_bytes = len(content.encode("utf-8"))
 
     dialog = QDialog(parent)
-    dialog.setWindowTitle("Confirmar escritura")
-    dialog.setMinimumWidth(560)
-    dialog.setMaximumWidth(720)
+    dialog.setWindowTitle(f"Confirmar: {name}" if name.startswith("mcp__") else "Confirmar escritura")
+    # Doble constraint: en macOS, setFixedSize a veces no respeta el
+    # tamaño si el contenido interno pide más. Forzamos min=max=640x440.
+    dialog.setMinimumSize(640, 440)
+    dialog.setMaximumSize(640, 440)
+    dialog.resize(640, 440)
     layout = QVBoxLayout(dialog)
     layout.setSpacing(10)
 
@@ -182,8 +277,12 @@ def _confirm_file_write(parent: QWidget, name: str, arguments: dict) -> bool:
     content_view = QPlainTextEdit()
     content_view.setPlainText(content if content else "(vacío)")
     content_view.setReadOnly(True)
-    content_view.setFixedHeight(220)
-    content_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+    content_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+    # Límite de altura: el widget no debe pedir más de 220px, aunque
+    # el documento sea enorme. Esto evita que el layout del diálogo
+    # se expanda pese al setMaximumSize.
+    content_view.setMaximumHeight(220)
+    content_view.setMinimumHeight(160)
     font = QFont("Menlo")
     font.setStyleHint(QFont.StyleHint.Monospace)
     font.setPointSize(11)

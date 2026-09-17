@@ -266,6 +266,21 @@ def test_stream_flags_textual_tool_call_without_showing_it(monkeypatch):
             })
             yield json_module.dumps({"message": {}, "done": True})
 
+        def iter_bytes(self, chunk_size=4096):
+            # _stream pide bytes y los parte por \n para comprobar el
+            # cancel_event con más frecuencia. Este método replica el
+            # comportamiento de httpx real, devolviendo cada línea del
+            # stream con su salto de línea correspondiente.
+            lines = [
+                json_module.dumps({
+                    "message": {"content": '{"name": "leer_archivo", "parameters": {"path": "x.txt"}}'},
+                    "done": False,
+                }),
+                json_module.dumps({"message": {}, "done": True}),
+            ]
+            for line in lines:
+                yield (line + "\n").encode("utf-8")
+
     class FakeStreamCtx:
         def __enter__(self):
             return FakeResponse()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 from typing import Any, Callable
@@ -8,6 +9,11 @@ from typing import Any, Callable
 import httpx
 
 from .intent import ToolIntentGate
+from .model_capabilities import get_capabilities
+from .xml_tools import build_tools_prompt, parse_tool_calls, strip_tool_call_blocks
+
+
+logger = logging.getLogger(__name__)
 
 
 class OllamaError(Exception):
@@ -19,31 +25,32 @@ class OllamaCancelled(OllamaError):
 
 
 class OllamaClient:
-    """Cliente de transporte para la API de Ollama."""
+    """Cliente de transporte para la API de Ollama.
+
+    Soporta dos modos de tool calling:
+      · NATIVE: si el modelo declara `tools` en /api/show. Se envía el
+        parámetro `tools` al payload y se leen los tool_calls nativos.
+      · XML:    si el modelo no declara `tools`. Las herramientas se
+        describen en el system prompt y el modelo responde con bloques
+        <tool_call>{...}</tool_call>, que parseamos con xml_tools.
+
+    Esta bifurcación evita el regex sobre JSON crudo (frágil y lleno de
+    falsos positivos) para modelos como deepseek-r1 que nunca emiten
+    tool_calls nativos.
+    """
 
     _TEXTUAL_CALL_NAME = re.compile(r'"name"\s*:\s*"([a-zA-Z0-9_]+)"')
     _TEXTUAL_SHELL_CALL = re.compile(r"(?:^|\n)\s*\$\s*([a-zA-Z0-9_]+)(?:\s|$)")
 
     def __init__(self, host: str = "http://localhost:11434"):
         self.host = host.rstrip("/")
-        # Timeouts agresivos: leemos en trozos pequeños para poder
-        # comprobar el cancel_event con frecuencia. El timeout de read
-        # de 1s no limita la generación total (Ollama reenvía keepalive
-        # en cada chunk); solo limita cuánto esperamos sin ver datos.
-        self.timeout = httpx.Timeout(connect=10.0, read=1.0, write=30.0, pool=10.0)
+        self.timeout = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
         self._active_response: httpx.Response | None = None
         self._active_lock = threading.Lock()
 
     # -- API pública ---------------------------------------------------------
 
     def force_close_active(self) -> None:
-        """Cierra la respuesta HTTP activa.
-
-        Llamado desde el hilo de cancelación. Puede o no interrumpir un
-        iter_lines() bloqueado según el estado del socket, pero en
-        combinación con el timeout de read corto del _stream garantiza
-        que la cancelación se note en <1s.
-        """
         with self._active_lock:
             response = self._active_response
         if response is not None:
@@ -78,29 +85,88 @@ class OllamaClient:
     ) -> str:
         if not model:
             raise OllamaError("No hay un modelo seleccionado.")
+
+        # 1. Detectar capacidades del modelo (cacheado).
+        caps = get_capabilities(self.host, model)
+        use_xml = caps.tool_mode == "xml"
+        logger.debug(
+            "Modelo %s: tool_mode=%s (probed=%s)",
+            model, caps.tool_mode, caps.probed,
+        )
+
+        # 2. Preparar historial y reglas de intención.
         history = [dict(message) for message in messages]
         definitions = self._extract_definitions(tools)
         authorization_text = self._last_user_text(history)
         gate = self._build_intent_gate(tools)
         active_tools = gate.tools_for_request(definitions, authorization_text)
-        tool_prompt = self._tool_system_prompt(active_tools) if active_tools else ""
+        tool_names = {
+            str(item.get("function", {}).get("name", ""))
+            for item in (active_tools or [])
+            if item.get("function", {}).get("name")
+        }
+
+        # 3. Componer el system prompt según el modo.
+        if use_xml:
+            tool_prompt = build_tools_prompt(active_tools) if active_tools else ""
+        else:
+            tool_prompt = self._tool_system_prompt(active_tools) if active_tools else ""
         self._inject_system_prompts(history, system_prompt, tool_prompt)
-        tools_enabled = bool(active_tools)
+
+        # En modo XML, con tools activas, buffereamos todo el stream
+        # (no podemos saber si el modelo escribe texto o un bloque XML
+        # hasta el final). Sin tools activas, streaming normal.
+        buffer_only = use_xml and bool(active_tools)
+
         final_text = ""
         textual_retry_used = False
 
         for _ in range(max_rounds):
             self._check_cancel(cancel_event)
+
             message = self._stream(
                 model,
                 history,
-                active_tools if tools_enabled else None,
-                on_text,
+                active_tools if not use_xml else None,
+                None if buffer_only else on_text,
                 cancel_event=cancel_event,
                 options=options,
             )
-            tool_calls = message.get("tool_calls") or []
+
             content = str(message.get("content") or "")
+
+            # ---- Modo XML: parsear bloques del texto ----
+            if use_xml and active_tools:
+                xml_calls = parse_tool_calls(content, known_tools=tool_names)
+                visible = strip_tool_call_blocks(content)
+
+                if xml_calls:
+                    if visible:
+                        on_text(visible)
+                    history.append({"role": "assistant", "content": content})
+                    for name, args in xml_calls:
+                        if not gate.tool_is_requested(name, authorization_text):
+                            result_text = (
+                                "ERROR: llamada de herramienta bloqueada: la "
+                                "última petición del usuario no solicita esa "
+                                "operación sobre el workspace."
+                            )
+                        else:
+                            result_text = on_tool(name, args)
+                        history.append({
+                            "role": "user",
+                            "content": f"[Resultado de {name}]\\n{result_text}",
+                        })
+                    continue
+
+                # Sin bloques XML: es la respuesta final.
+                if visible:
+                    on_text(visible)
+                    final_text += visible
+                return final_text
+
+            # ---- Modo NATIVE: tool_calls nativos ----
+            tool_calls = message.get("tool_calls") or []
 
             if not tool_calls:
                 textual_name = message.get("_textual_tool_name")
@@ -146,14 +212,17 @@ class OllamaClient:
                 if not gate.tool_is_requested(name, authorization_text):
                     result_text = (
                         "ERROR: llamada de herramienta bloqueada: la última "
-                        "petición del usuario no solicita esa operación sobre el "
-                        "workspace."
+                        "petición del usuario no solicita esa operación sobre "
+                        "el workspace."
                     )
                 else:
                     result_text = on_tool(name, arguments)
                 history.append({
-                    "role": "tool", "content": result_text, "tool_name": name
+                    "role": "tool",
+                    "content": result_text,
+                    "tool_name": name,
                 })
+
         raise OllamaError("Se alcanzó el límite de rondas de herramientas.")
 
     # -- extracción y construcción de gates ---------------------------------
@@ -284,7 +353,7 @@ class OllamaClient:
         model: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
-        on_text: Callable[[str], None],
+        on_text: Callable[[str], None] | None,
         *,
         cancel_event: threading.Event | None = None,
         options: dict[str, Any] | None = None,
@@ -302,6 +371,7 @@ class OllamaClient:
 
         message: dict[str, Any] = {"role": "assistant", "content": ""}
         content_parts: list[str] = []
+        watchdog_stop = threading.Event()
 
         try:
             with httpx.stream(
@@ -309,50 +379,36 @@ class OllamaClient:
             ) as response:
                 with self._active_lock:
                     self._active_response = response
+
+                # Watchdog: si el usuario cancela, cierra la respuesta
+                # desde otro hilo. La iteración en curso recibirá
+                # httpx.HTTPError y saldremos con OllamaCancelled.
+                watchdog = None
+                if cancel_event is not None:
+                    watchdog = threading.Thread(
+                        target=self._watchdog_cancel,
+                        args=(response, cancel_event, watchdog_stop),
+                        daemon=True,
+                    )
+                    watchdog.start()
+
                 try:
                     response.raise_for_status()
-                    # Iteramos manualmente sobre las líneas para poder
-                    # comprobar el cancel_event incluso cuando no hay
-                    # datos disponibles. El read timeout de 1s hace que
-                    # iter_lines() lance ReadTimeout si no hay datos; lo
-                    # capturamos y comprobamos cancel_event.
-                    buffer = ""
-                    for raw_chunk in response.iter_bytes(chunk_size=4096):
+                    for line in response.iter_lines():
                         if cancel_event is not None and cancel_event.is_set():
                             raise OllamaCancelled(
                                 "Operación cancelada por el usuario."
                             )
-                        buffer += raw_chunk.decode("utf-8", errors="replace")
-                        while "\n" in buffer:
-                            line, buffer = buffer.split("\n", 1)
-                            line = line.strip()
-                            if not line:
-                                continue
-                            self._handle_line(line, message, content_parts)
-                            if message.get("_done"):
-                                break
+                        if not line:
+                            continue
+                        self._handle_line(line, message, content_parts)
                         if message.get("_done"):
                             break
-                    # Línea final sin \n
-                    if buffer.strip() and not message.get("_done"):
-                        self._handle_line(buffer.strip(), message, content_parts)
                 finally:
+                    watchdog_stop.set()
                     with self._active_lock:
                         self._active_response = None
 
-        except httpx.ReadTimeout:
-            # El read timeout se dispara cuando Ollama no envía datos en
-            # 1s. Esto es normal con modelos lentos o entre chunks. En
-            # lugar de abortar, continuamos con el stream activo. Pero
-            # como ya salimos del `with`, la conexión está cerrada, así
-            # que en la práctica esto no debería ocurrir con la
-            # iteración por bytes.
-            if cancel_event is not None and cancel_event.is_set():
-                raise OllamaCancelled("Operación cancelada por el usuario.")
-            raise OllamaError(
-                "Ollama dejó de responder durante más de 1 segundo. "
-                "Comprueba que el servidor sigue activo."
-            ) from None
         except httpx.HTTPError as exc:
             if cancel_event is not None and cancel_event.is_set():
                 raise OllamaCancelled("Operación cancelada por el usuario.") from exc
@@ -361,7 +417,7 @@ class OllamaClient:
         content = "".join(content_parts)
         message.pop("_done", None)
 
-        if content and not message.get("tool_calls"):
+        if content and not message.get("tool_calls") and on_text is not None:
             tool_names = {
                 str(item.get("function", {}).get("name", ""))
                 for item in (tools or [])
@@ -378,6 +434,28 @@ class OllamaClient:
                 on_text(content)
         message["content"] = content
         return message
+
+    @staticmethod
+    @staticmethod
+    def _watchdog_cancel(
+        response: httpx.Response,
+        cancel_event: threading.Event,
+        stop_event: threading.Event,
+    ) -> None:
+        """Cierra la respuesta si el cancel_event se activa.
+
+        Se ejecuta en un hilo aparte mientras dura el streaming. Sin esto,
+        la cancelación solo se notaría en el siguiente chunk (que puede
+        tardar con un modelo lento).
+        """
+        while not stop_event.is_set():
+            if cancel_event.is_set():
+                try:
+                    response.close()
+                except Exception:
+                    pass
+                return
+            stop_event.wait(0.1)
 
     @staticmethod
     def _handle_line(
