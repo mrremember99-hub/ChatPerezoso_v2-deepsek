@@ -254,23 +254,13 @@ def test_textual_tool_call_detection():
 
 def test_stream_flags_textual_tool_call_without_showing_it(monkeypatch):
     import json as json_module
+    import httpx
 
     class FakeResponse:
         def raise_for_status(self):
             return None
 
-        def iter_lines(self):
-            yield json_module.dumps({
-                "message": {"content": '{"name": "leer_archivo", "parameters": {"path": "x.txt"}}'},
-                "done": False,
-            })
-            yield json_module.dumps({"message": {}, "done": True})
-
-        def iter_bytes(self, chunk_size=4096):
-            # _stream pide bytes y los parte por \n para comprobar el
-            # cancel_event con más frecuencia. Este método replica el
-            # comportamiento de httpx real, devolviendo cada línea del
-            # stream con su salto de línea correspondiente.
+        async def aiter_bytes(self, chunk_size=1024):
             lines = [
                 json_module.dumps({
                     "message": {"content": '{"name": "leer_archivo", "parameters": {"path": "x.txt"}}'},
@@ -282,14 +272,23 @@ def test_stream_flags_textual_tool_call_without_showing_it(monkeypatch):
                 yield (line + "\n").encode("utf-8")
 
     class FakeStreamCtx:
-        def __enter__(self):
+        async def __aenter__(self):
             return FakeResponse()
 
-        def __exit__(self, *args):
+        async def __aexit__(self, *args):
             return False
 
-    import httpx as httpx_module
-    monkeypatch.setattr(httpx_module, "stream", lambda *a, **k: FakeStreamCtx())
+    class FakeAsyncClient:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        def stream(self, *a, **k):
+            return FakeStreamCtx()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
 
     client = OllamaClient()
     seen = []
@@ -532,16 +531,8 @@ def test_mcp_filesystem_aliases_allow_read_text_and_write_file(tmp_path):
 
 
 def test_chat_native_mode_does_not_duplicate_text_in_on_text(monkeypatch):
-    """Regresión: en modo nativo, el texto se muestra UNA vez.
-
-    El `_stream` en modo nativo llama a `on_text()` durante el
-    streaming. La estrategia nativa NO debe marcar `visible_text`
-    (porque chat() volvería a llamar a on_text y duplicaría el texto).
-
-    Este test verifica el contrato entre _stream, la estrategia y el
-    bucle de chat(). Sin él, un cambio futuro en cualquiera de las tres
-    piezas podría reintroducir el duplicado silenciosamente.
-    """
+    """Regresion: en modo nativo, el texto se muestra UNA vez."""
+    import json as _json
     import httpx
     from core import model_capabilities
 
@@ -553,25 +544,28 @@ def test_chat_native_mode_does_not_duplicate_text_in_on_text(monkeypatch):
 
     monkeypatch.setattr(httpx, "post", lambda *a, **k: _ShowResponse())
 
-    import json as _json
-
     lineas = [
-        (_json.dumps({"message": {"content": "Hola"}, "done": False}) + "\n").encode("utf-8"),
-        (_json.dumps({"message": {}, "done": True}) + "\n").encode("utf-8"),
+        _json.dumps({"message": {"content": "Hola"}, "done": False}),
+        _json.dumps({"message": {}, "done": True}),
     ]
 
     class _FakeResponse:
         def raise_for_status(self): return None
-        def close(self): pass
-        def iter_bytes(self, chunk_size=1024):
+        async def aiter_bytes(self, chunk_size=1024):
             for linea in lineas:
-                yield linea
+                yield (linea + "\n").encode("utf-8")
 
     class _FakeCtx:
-        def __enter__(self): return _FakeResponse()
-        def __exit__(self, *a): return False
+        async def __aenter__(self): return _FakeResponse()
+        async def __aexit__(self, *a): return False
 
-    monkeypatch.setattr(httpx, "stream", lambda *a, **k: _FakeCtx())
+    class _FakeAsyncClient:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        def stream(self, *a, **k): return _FakeCtx()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
 
     from core.ollama import OllamaClient
     client = OllamaClient()
@@ -585,5 +579,4 @@ def test_chat_native_mode_does_not_duplicate_text_in_on_text(monkeypatch):
     )
 
     assert result == "Hola"
-    # El texto debe aparecer UNA sola vez
     assert chunks == ["Hola"], f"Texto duplicado: {chunks}"

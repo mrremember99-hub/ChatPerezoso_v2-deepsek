@@ -1,3 +1,5 @@
 mcp>=2,<3
 psutil>=5.9
-regex>=2024.5.15markdown>=3.5
+regex>=2024.5.15
+markdown>=3.5
+pygments>=2.17

@@ -120,6 +120,12 @@ class ChatPanel(QWidget):
 
     def _on_send_clicked(self) -> None:
         if self._streaming:
+            # Feedback inmediato: aunque la cancelación real solo se
+            # aplica en el próximo chunk (httpx sync no se puede
+            # interrumpir sin segfault), el usuario ve que su pulsación
+            # se ha registrado.
+            self.send.setText("Cancelando…")
+            self.send.setEnabled(False)
             self.cancel_requested.emit()
         else:
             self._on_submit()
@@ -133,6 +139,7 @@ class ChatPanel(QWidget):
     def set_streaming(self, streaming: bool) -> None:
         self._streaming = streaming
         self.send.setText("Detener" if streaming else "Enviar")
+        self.send.setEnabled(True)  # puede haber quedado deshabilitado al cancelar
         self.input.setEnabled(not streaming)
         if streaming:
             self._start_indicators()

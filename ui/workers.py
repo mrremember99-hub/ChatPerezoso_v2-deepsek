@@ -123,13 +123,15 @@ class ChatWorker(QObject):
             self.error.emit(str(exc))
 
     def cancel(self) -> None:
+        """Marca la cancelación. El stream la detectará en el próximo chunk.
+
+        NO cerramos la respuesta HTTP desde este hilo: httpx/httpcore
+        no es thread-safe para cerrar una respuesta mientras otro hilo
+        está dentro de iter_bytes(), y hacerlo causaba un segfault en
+        macOS. La cancelación se detecta entre chunks, que en la
+        práctica es < 200 ms para modelos que envían datos regularmente.
+        """
         self._cancel_event.set()
-        # Forzar el cierre de la respuesta HTTP activa. Sin esto, un
-        # iter_lines() bloqueado en el socket no ve el cancel_event.
-        try:
-            self.client.force_close_active()
-        except Exception:
-            pass
         event = self._confirmation_event
         if event is not None:
             self._confirmation_approved = False

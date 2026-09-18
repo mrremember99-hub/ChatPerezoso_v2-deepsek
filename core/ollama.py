@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import codecs
 import json
 import logging
@@ -9,6 +10,7 @@ from typing import Any, Callable
 
 import httpx
 
+from .async_runner import AsyncRunner, _CancelledByEvent
 from .intent import ToolIntentGate
 from .model_capabilities import get_capabilities
 from .tool_strategies import (
@@ -51,19 +53,63 @@ class OllamaClient:
     def __init__(self, host: str = "http://localhost:11434"):
         self.host = host.rstrip("/")
         self.timeout = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
-        self._active_response: httpx.Response | None = None
-        self._active_lock = threading.Lock()
+        # Runner dedicado para corrutinas httpx. Ver core/async_runner.py.
+        self._async_runner = AsyncRunner(name="OllamaAsync")
+        # Cliente HTTP persistente, creado la primera vez y reutilizado
+        # entre turnos. Vive dentro del loop del runner (httpx.AsyncClient
+        # está atado al loop en el que se crea). Se cierra al shutdown.
+        self._http_client: httpx.AsyncClient | None = None
+        self._async_runner.set_close_callback(self._close_http_client)
 
     # -- API pública ---------------------------------------------------------
 
     def force_close_active(self) -> None:
-        with self._active_lock:
-            response = self._active_response
-        if response is not None:
+        """No-op por compatibilidad.
+
+        Antes cerrábamos la respuesta HTTP desde otro hilo, pero httpx
+        sync no es thread-safe para eso y causaba segfaults. Ahora la
+        cancelación se hace vía future.cancel() en el event loop del
+        AsyncRunner, que interrumpe el await sin tocar el socket.
+        """
+        pass
+
+    # -- cliente HTTP persistente -------------------------------------------
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Devuelve el AsyncClient persistente, creándolo si hace falta.
+
+        El cliente vive dentro del event loop del runner. Se reutiliza
+        entre turnos para no recrear el pool de conexiones cada vez.
+        """
+        # getattr defensivo: los mocks de tests pueden no exponer is_closed.
+        if (
+            self._http_client is None
+            or getattr(self._http_client, "is_closed", False)
+        ):
+            self._http_client = httpx.AsyncClient(
+                timeout=self.timeout,
+                limits=httpx.Limits(
+                    max_keepalive_connections=2,
+                    max_connections=4,
+                ),
+            )
+        return self._http_client
+
+    async def _close_http_client(self) -> None:
+        """Cierra el AsyncClient persistente. Se ejecuta dentro del loop."""
+        if (
+            self._http_client is not None
+            and not getattr(self._http_client, "is_closed", True)
+        ):
             try:
-                response.close()
-            except Exception:
-                pass
+                await self._http_client.aclose()
+            except Exception as exc:
+                logger.warning("Error cerrando AsyncClient: %s", exc)
+        self._http_client = None
+
+    def shutdown(self) -> None:
+        """Libera recursos del cliente. Llamar al cerrar la app."""
+        self._async_runner.close()
 
     def list_models(self) -> list[str]:
         try:
@@ -352,6 +398,41 @@ class OllamaClient:
         cancel_event: threading.Event | None = None,
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Wrapper síncrono. Delega en _stream_async vía AsyncRunner."""
+        try:
+            return self._async_runner.submit(
+                self._stream_async(
+                    model, messages, tools, on_text,
+                    cancel_event=cancel_event, options=options,
+                ),
+                cancel_event=cancel_event,
+            )
+        except _CancelledByEvent:
+            raise OllamaCancelled("Operación cancelada por el usuario.")
+        except TimeoutError as exc:
+            raise OllamaError(
+                "Ollama dejó de responder durante demasiado tiempo."
+            ) from exc
+        except httpx.HTTPError as exc:
+            if cancel_event is not None and cancel_event.is_set():
+                raise OllamaCancelled(
+                    "Operación cancelada por el usuario."
+                ) from exc
+            raise OllamaError(str(exc)) from exc
+        except asyncio.CancelledError:
+            raise OllamaCancelled("Operación cancelada por el usuario.")
+
+    async def _stream_async(
+        self,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        on_text: Callable[[str], None] | None,
+        *,
+        cancel_event: threading.Event | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Corrutina cancelable. Emite deltas según llegan."""
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -366,101 +447,100 @@ class OllamaClient:
         message: dict[str, Any] = {"role": "assistant", "content": ""}
         content_parts: list[str] = []
         buffer = ""
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        buffering_textual = False
 
-        try:
-            with httpx.stream(
-                "POST", f"{self.host}/api/chat", json=payload, timeout=self.timeout
-            ) as response:
-                with self._active_lock:
-                    self._active_response = response
-                try:
-                    response.raise_for_status()
+        client = await self._get_client()
+        async with client.stream(
+            "POST", f"{self.host}/api/chat", json=payload
+        ) as response:
+            response.raise_for_status()
 
-                    # Leemos en chunks de 1024 bytes. Cada chunk
-                    # comprueba el cancel_event. Con iter_lines() el
-                    # hilo se quedaba bloqueado esperando la siguiente
-                    # linea y no veia el cancel hasta que Ollama
-                    # enviara algo nuevo.
-                    # Decoder incremental: retiene bytes de un caracter
-                    # multibyte partido en el limite de los chunks de
-                    # 1024 bytes y los completa en la siguiente llamada.
-                    # Sin esto, cualquier 'ñ', 'á', '¿' o emoji que caiga
-                    # justo en el corte se corrompe a U+FFFD de forma
-                    # intermitente (depende de donde caiga el corte).
-                    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-                    for raw_chunk in response.iter_bytes(chunk_size=1024):
-                        if cancel_event is not None and cancel_event.is_set():
-                            raise OllamaCancelled(
-                                "Operación cancelada por el usuario."
-                            )
-                        buffer += decoder.decode(raw_chunk)
-                        while "\n" in buffer:
-                            line, buffer = buffer.split("\n", 1)
-                            line = line.strip()
-                            if not line:
-                                continue
-                            self._handle_line(line, message, content_parts)
-                            if message.get("_done"):
-                                break
-                        if message.get("_done"):
-                            break
+            # Streaming con buffering adaptativo: emitimos cada delta
+            # en cuanto llega. Si el primer caracter parece una tool
+            # call textual (empieza por { o [), activamos buffering
+            # para no mostrar el JSON crudo al usuario.
+            async for raw_chunk in response.aiter_bytes(chunk_size=1024):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise OllamaCancelled(
+                        "Operación cancelada por el usuario."
+                    )
+                buffer += decoder.decode(raw_chunk)
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+                    delta = self._handle_line(line, message, content_parts)
+                    if delta and on_text is not None and not buffering_textual:
+                        prefix = delta.lstrip()[:1]
+                        if prefix in ("{", "["):
+                            buffering_textual = True
+                        else:
+                            on_text(delta)
+                    if message.get("_done"):
+                        break
+                if message.get("_done"):
+                    break
 
-                    # Flush final del decoder: por si quedaron bytes
-                    # pendientes de un caracter multibyte al cerrar.
-                    tail = decoder.decode(b"", final=True)
-                    if tail:
-                        buffer += tail
-
-                    # Linea final sin salto
-                    if buffer.strip() and not message.get("_done"):
-                        self._handle_line(buffer.strip(), message, content_parts)
-
-                finally:
-                    with self._active_lock:
-                        self._active_response = None
-
-        except httpx.HTTPError as exc:
-            if cancel_event is not None and cancel_event.is_set():
-                raise OllamaCancelled("Operación cancelada por el usuario.") from exc
-            raise OllamaError(str(exc)) from exc
+            tail = decoder.decode(b"", final=True)
+            if tail:
+                buffer += tail
+            if buffer.strip() and not message.get("_done"):
+                delta = self._handle_line(
+                    buffer.strip(), message, content_parts
+                )
+                if delta and on_text is not None and not buffering_textual:
+                    prefix = delta.lstrip()[:1]
+                    if prefix in ("{", "["):
+                        buffering_textual = True
+                    else:
+                        on_text(delta)
 
         content = "".join(content_parts)
         message.pop("_done", None)
 
-        if content and not message.get("tool_calls") and on_text is not None:
+        textual_name: str | None = None
+        if content and not message.get("tool_calls"):
             tool_names = {
                 str(item.get("function", {}).get("name", ""))
                 for item in (tools or [])
                 if item.get("function", {}).get("name")
             }
-            textual_name = (
-                self._textual_tool_call_name(content, tool_names)
-                if tool_names
-                else None
-            )
-            if textual_name:
-                message["_textual_tool_name"] = textual_name
-            else:
-                on_text(content)
+            if tool_names:
+                textual_name = self._textual_tool_call_name(content, tool_names)
+                if textual_name:
+                    message["_textual_tool_name"] = textual_name
+
+        # Si activamos buffering pero NO resulto ser tool call, el
+        # usuario no ha visto nada: emitimos el texto completo.
+        if buffering_textual and on_text is not None and not textual_name:
+            on_text(content)
+
         message["content"] = content
         return message
+
     @staticmethod
     def _handle_line(
         line: str,
         message: dict[str, Any],
         content_parts: list[str],
-    ) -> None:
+    ) -> str | None:
+        """Procesa una línea NDJSON. Devuelve el delta si lo hay."""
         try:
             data = json.loads(line)
         except ValueError:
-            return
+            return None
         chunk = data.get("message") or {}
+        delta: str | None = None
         if chunk.get("content"):
-            content_parts.append(str(chunk["content"]))
+            delta = str(chunk["content"])
+            content_parts.append(delta)
         if chunk.get("tool_calls"):
             message.setdefault("tool_calls", []).extend(chunk["tool_calls"])
         if data.get("done"):
             message["_done"] = True
+        return delta
 
     @staticmethod
     def _check_cancel(cancel_event: threading.Event | None) -> None:

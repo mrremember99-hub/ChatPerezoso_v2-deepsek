@@ -11,6 +11,9 @@ from __future__ import annotations
 import codecs
 
 
+REPLACEMENT_CHAR = chr(0xFFFD)
+
+
 def test_incremental_decoder_handles_split_multibyte():
     """Un carácter 'ñ' partido entre dos chunks se decodifica bien."""
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
@@ -18,7 +21,7 @@ def test_incremental_decoder_handles_split_multibyte():
     chunk2 = b"\xb1" + b"ana"
     result = decoder.decode(chunk1) + decoder.decode(chunk2)
     assert result == "mañana"
-    assert "\ufffd" not in result
+    assert REPLACEMENT_CHAR not in result
 
 
 def test_incremental_decoder_handles_emoji_split():
@@ -27,7 +30,7 @@ def test_incremental_decoder_handles_emoji_split():
     chunks = [b"\xf0", b"\x9f", b"\x98", b"\x80"]
     result = "".join(decoder.decode(c) for c in chunks)
     assert result == "😀"
-    assert "\ufffd" not in result
+    assert REPLACEMENT_CHAR not in result
 
 
 def test_naive_decode_corrupts_split_multibyte():
@@ -35,7 +38,7 @@ def test_naive_decode_corrupts_split_multibyte():
     chunk1 = b"ma" + b"\xc3"
     chunk2 = b"\xb1" + b"ana"
     naive = chunk1.decode("utf-8", errors="replace") + chunk2.decode("utf-8", errors="replace")
-    assert "\ufffd" in naive
+    assert REPLACEMENT_CHAR in naive
     assert naive != "mañana"
 
 
@@ -45,7 +48,7 @@ def test_decoder_final_flush():
     partial = decoder.decode(b"\xc3")
     assert partial == ""
     tail = decoder.decode(b"", final=True)
-    assert "\ufffd" in tail
+    assert REPLACEMENT_CHAR in tail
 
 
 def test_stream_preserves_spanish_characters(monkeypatch):
@@ -66,9 +69,10 @@ def test_stream_preserves_spanish_characters(monkeypatch):
     ]
 
     class _FakeResponse:
-        def raise_for_status(self): return None
-        def close(self): pass
-        def iter_bytes(self, chunk_size=1024):
+        def raise_for_status(self):
+            return None
+
+        async def aiter_bytes(self, chunk_size=1024):
             # Emitimos byte a byte: así todo carácter multibyte cae
             # partido entre chunks consecutivos.
             for linea in lineas:
@@ -76,10 +80,26 @@ def test_stream_preserves_spanish_characters(monkeypatch):
                     yield linea[i:i+1]
 
     class _FakeCtx:
-        def __enter__(self): return _FakeResponse()
-        def __exit__(self, *a): return False
+        async def __aenter__(self):
+            return _FakeResponse()
 
-    monkeypatch.setattr(httpx, "stream", lambda *a, **k: _FakeCtx())
+        async def __aexit__(self, *a):
+            return False
+
+    class _FakeAsyncClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def stream(self, *a, **k):
+            return _FakeCtx()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
 
     client = OllamaClient()
     capturado = []
@@ -92,4 +112,4 @@ def test_stream_preserves_spanish_characters(monkeypatch):
 
     assert result["content"] == "mañana"
     assert "".join(capturado) == "mañana"
-    assert "\ufffd" not in result["content"]
+    assert REPLACEMENT_CHAR not in result["content"]

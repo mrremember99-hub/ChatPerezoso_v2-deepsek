@@ -60,12 +60,7 @@ def test_last_user_text_multiple_tool_results_then_user():
 
 
 def test_xml_tool_result_uses_prefixed_content(monkeypatch):
-    """El tool result en modo XML debe llevar el prefijo [TOOL_RESULT:name].
-
-    Sin el prefijo, el contenido del archivo podría confundirse con una
-    instrucción del usuario si alguien mueve el cálculo de authorization
-    en el futuro.
-    """
+    """El tool result en modo XML debe llevar el prefijo [TOOL_RESULT:name]."""
     import json as _json
     import httpx
 
@@ -75,7 +70,6 @@ def test_xml_tool_result_uses_prefixed_content(monkeypatch):
 
     model_capabilities.clear_cache()
 
-    # Forzar modo XML para el modelo de prueba
     class _ShowResponse:
         def raise_for_status(self): return None
         def json(self): return {"capabilities": []}
@@ -83,14 +77,12 @@ def test_xml_tool_result_uses_prefixed_content(monkeypatch):
     monkeypatch.setattr(httpx, "post", lambda *a, **k: _ShowResponse())
 
     rounds = iter([
-        # Round 1: el modelo emite un tool call XML
         [
             {"message": {"content":
                 '<tool_call>{"name": "listar_carpeta", "arguments": {}}</tool_call>'
             }, "done": False},
             {"message": {}, "done": True},
         ],
-        # Round 2: respuesta final
         [
             {"message": {"content": "Hecho."}, "done": False},
             {"message": {}, "done": True},
@@ -99,39 +91,39 @@ def test_xml_tool_result_uses_prefixed_content(monkeypatch):
 
     captured_payloads = []
 
-    class _FakeStreamResponse:
+    class _FakeResponse:
         def __init__(self, lines):
             self._lines = lines
         def raise_for_status(self): return None
-        def close(self): pass
-        def iter_lines(self):
+        async def aiter_bytes(self, chunk_size=1024):
             for line in self._lines:
-                yield line
-
-        def iter_bytes(self, chunk_size=4096):
-            # _stream lee con iter_bytes para comprobar el cancel_event
-            # con frecuencia. Enviamos cada línea con su salto de línea.
-            for line in self._lines:
-                yield (line + chr(10)).encode("utf-8")
+                yield (line + "\n").encode("utf-8")
 
     class _FakeStreamCtx:
         def __init__(self, lines):
             self._lines = lines
-        def __enter__(self):
-            return _FakeStreamResponse(self._lines)
-        def __exit__(self, *a):
+        async def __aenter__(self):
+            return _FakeResponse(self._lines)
+        async def __aexit__(self, *a):
             return False
 
-    def fake_stream(method, url, json=None, timeout=None):
-        captured_payloads.append(json)
-        try:
-            round_data = next(rounds)
-        except StopIteration:
-            round_data = []
-        lines = [_json.dumps(c) for c in round_data]
-        return _FakeStreamCtx(lines)
+    class _FakeAsyncClient:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        def stream(self, *a, **k):
+            captured_payloads.append(k.get("json"))
+            try:
+                round_data = next(rounds)
+            except StopIteration:
+                round_data = []
+            lines = [_json.dumps(c) for c in round_data]
+            return _FakeStreamCtx(lines)
 
-    monkeypatch.setattr(httpx, "stream", fake_stream)
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
 
     class _Tools:
         def definitions(self):
@@ -147,19 +139,18 @@ def test_xml_tool_result_uses_prefixed_content(monkeypatch):
         def requires_confirmation(self, name):
             return False
 
+    tools = _Tools()
     client = OllamaClient()
     client.chat(
         "test-xml",
         [{"role": "user", "content": "lista la carpeta"}],
-        _Tools(),
+        tools,
         lambda t: None,
-        on_tool=_Tools().call,
+        on_tool=tools.call,
     )
 
-    # El segundo round debe llevar el tool result con el prefijo
     assert len(captured_payloads) >= 2
     second_round = captured_payloads[1]
-    # Buscar un mensaje con el prefijo
     contents = [m["content"] for m in second_round["messages"]]
     prefixed = [c for c in contents if c.startswith("[TOOL_RESULT:listar_carpeta]")]
     assert prefixed, f"No hay tool result con prefijo. Contenidos: {contents}"

@@ -65,10 +65,11 @@ def _patch_show(monkeypatch, capabilities):
 
 
 def _patch_stream(monkeypatch, rounds):
-    """Sustituye httpx.stream para devolver los rounds dados.
+    """Sustituye httpx.AsyncClient para devolver los rounds dados.
 
     Cada round es una lista de diccionarios que se convierten a las
-    líneas NDJSON que Ollama enviaría.
+    líneas NDJSON que Ollama enviaría. El cliente ahora usa la API
+    async (AsyncClient.aiter_bytes), no la sync.
     """
     import httpx
     captured_payloads = []
@@ -78,38 +79,37 @@ def _patch_stream(monkeypatch, rounds):
         def __init__(self, lines):
             self._lines = lines
         def raise_for_status(self): return None
-        def close(self): pass
-        def iter_lines(self):
-            for line in self._lines:
-                yield line
-
-        def iter_bytes(self, chunk_size=4096):
-            # _stream lee con iter_bytes para comprobar el cancel_event
-            # con frecuencia. Enviamos cada línea con su salto de línea.
+        async def aiter_bytes(self, chunk_size=1024):
             for line in self._lines:
                 yield (line + chr(10)).encode("utf-8")
 
     class _FakeStreamCtx:
         def __init__(self, lines):
             self._lines = lines
-        def __enter__(self):
+        async def __aenter__(self):
             return _FakeStreamResponse(self._lines)
-        def __exit__(self, *a):
+        async def __aexit__(self, *a):
             return False
 
-    def fake_stream(method, url, json=None, timeout=None):
-        captured_payloads.append(json)
-        try:
-            round_data = next(iter_round)
-        except StopIteration:
-            round_data = []
-        lines = []
-        for chunk in round_data:
-            lines.append(json_module_dumps(chunk))
-        return _FakeStreamCtx(lines)
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        def stream(self, method, url, **kwargs):
+            captured_payloads.append(kwargs.get("json"))
+            try:
+                round_data = next(iter_round)
+            except StopIteration:
+                round_data = []
+            lines = [json_module_dumps(c) for c in round_data]
+            return _FakeStreamCtx(lines)
 
-    monkeypatch.setattr(httpx, "stream", fake_stream)
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
     return captured_payloads
+
 
 
 def json_module_dumps(obj):

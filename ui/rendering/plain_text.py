@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QColor, QTextBlockFormat, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import QTextEdit
 
@@ -10,6 +11,13 @@ from core.tool_result import ToolResult
 
 from .. import design
 from .markdown_renderer import to_html
+
+
+# Frecuencia con la que volcamos el texto acumulado al QTextDocument.
+# 32 ms ~= 30 fps. Suficiente para percibir streaming fluido sin
+# saturar el layout de QTextDocument con cientos de operaciones por
+# segundo. Ajustable si se ve lento o a tirones.
+_RENDER_INTERVAL_MS = 32
 
 
 class PlainTextRenderer:
@@ -22,6 +30,12 @@ class PlainTextRenderer:
         self.response_segment = ""
         self.last_user_start = None
         self._segment_end = None
+        # Buffer de micro-batching: acumula deltas y los vuelca al
+        # documento cada _RENDER_INTERVAL_MS.
+        self._pending_text: list[str] = []
+        self._flush_timer = QTimer(self.chat)
+        self._flush_timer.setSingleShot(True)
+        self._flush_timer.timeout.connect(self._flush_pending)
 
     # -- ciclo de vida ------------------------------------
     def reset(self) -> None:
@@ -29,6 +43,9 @@ class PlainTextRenderer:
         self.response_start = None
         self.response_segment = ""
         self._segment_end = None
+        self._pending_text.clear()
+        if self._flush_timer.isActive():
+            self._flush_timer.stop()
 
     def reset_response_segment(self) -> None:
         if (
@@ -116,19 +133,39 @@ class PlainTextRenderer:
         return stripped
 
     def on_text(self, text: str) -> None:
+        """Acumula el delta y programa un volcado al documento.
+
+        El volcado real lo hace _flush_pending cada _RENDER_INTERVAL_MS.
+        El usuario ve streaming fluido, pero el QTextDocument solo
+        recibe ~30 actualizaciones/segundo en lugar de una por chunk.
+        """
         text = self.display_response_text(text)
         if not text:
             return
 
         self.response_text += text
         self.response_segment += text
-        # El prefijo "PEREZOSO:" solo puede aparecer al principio. Una vez
-        # el segmento supera 80 caracteres, no hay nada que limpiar.
-        # Antes hacíamos lstrip() sobre todo el segmento en cada chunk,
-        # lo que era O(n²) para respuestas largas.
         if len(self.response_segment) <= 80:
             self.response_segment = self.clean_response_text(self.response_segment)
 
+        self._pending_text.append(text)
+
+        # Si el timer no esta corriendo, arrancarlo. Si ya lo esta,
+        # la nueva llamada se acumula y se volcara con el resto.
+        if not self._flush_timer.isActive():
+            self._flush_timer.start(_RENDER_INTERVAL_MS)
+
+    def _flush_pending(self) -> None:
+        """Vuelca al QTextDocument todo el texto pendiente."""
+        if not self._pending_text:
+            return
+
+        text = "".join(self._pending_text)
+        self._pending_text.clear()
+        self._append_plain_text(text)
+
+    def _append_plain_text(self, text: str) -> None:
+        """Aplica el texto acumulado al documento. Antiguo on_text."""
         cursor = self.chat.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
 
@@ -160,14 +197,12 @@ class PlainTextRenderer:
 
         self._segment_end = cursor.position()
         self.chat.setTextCursor(cursor)
-        # Solo hacemos scroll si el usuario ya estaba al fondo. Si ha
-        # scrolleado arriba para leer, no lo arrastramos. También
-        # evitamos el repaint cuando el widget no es visible.
         if self.chat.isVisible():
             sb = self.chat.verticalScrollBar()
             at_bottom = sb.value() >= sb.maximum() - 8
             if at_bottom:
                 self.chat.ensureCursorVisible()
+
 
     # -- renderizado de Markdown ---------------------------
     def _render_markdown_block(self) -> None:
@@ -289,8 +324,15 @@ class PlainTextRenderer:
 
     # -- cierre de respuesta -----------------------------
     def final_text(self, fallback: str) -> str:
+        # Forzar volcado del buffer pendiente antes del Markdown final.
+        if self._flush_timer.isActive():
+            self._flush_timer.stop()
+        self._flush_pending()
+
         if not self.response_text and fallback:
             self.on_text(fallback)
+            self._flush_pending()
+
         raw = self.response_text or fallback
         cleaned = self.clean_response_text(self.display_response_text(raw))
 
