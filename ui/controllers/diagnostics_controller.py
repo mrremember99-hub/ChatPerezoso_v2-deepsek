@@ -1,18 +1,20 @@
 """Calcula las estadísticas de sesión y las refleja en el panel.
 
-Escucha las señales del ``ChatController`` y del ``Sidebar``:
-  · ``streaming_changed(True)``  → arranca el cronómetro
-  · ``streaming_changed(False)`` → cierra el cronómetro y cuenta la respuesta
-  · ``conversation_changed``     → recalcula los tokens del contexto
-  · ``assistant_message``        → asegura el recuento tras respuesta
+Escucha las señales del ``ChatController``:
+  · ``state_changed(STREAMING)``  → arranca el cronómetro
+  · ``state_changed(CANCELLING)`` → ignora (el worker aún trabaja)
+  · ``state_changed(IDLE/ERROR)`` → cierra el cronómetro y cuenta
+  · ``conversation_changed``      → recalcula los tokens del contexto
+  · ``textual_tool_attempt``      → cuenta intentos de tool-call textual
 
-No mide las tool calls individuales: la suma del tiempo ya incluye su coste
-y el usuario ve en el chat cuándo se han ejecutado.
+No mide las tool calls individuales: la suma del tiempo ya incluye su
+coste y el usuario ve en el chat cuándo se han ejecutado.
 """
 from __future__ import annotations
 
 from PySide6.QtCore import QElapsedTimer, QObject
 
+from ..chat_state import ChatState
 from ..diagnostics import SessionStats
 from ..views.diagnostics_panel import DiagnosticsPanel
 from .chat_controller import ChatController
@@ -39,7 +41,14 @@ class DiagnosticsController(QObject):
         self._timer = QElapsedTimer()
         self._in_flight = False
 
-        chat.streaming_changed.connect(self._on_streaming_changed)
+        # Preferimos state_changed (mas expresivo). Fallback a
+        # streaming_changed para fakes de tests que solo tienen el
+        # signal booleano.
+        state_signal = getattr(chat, "state_changed", None)
+        if state_signal is not None:
+            state_signal.connect(self._on_state_changed)
+        else:
+            chat.streaming_changed.connect(self._on_streaming_changed)
         chat.conversation_changed.connect(self._on_conversation_changed)
         # La senal textual_tool_attempt puede no existir en fakes
         # de tests. La conectamos si esta disponible.
@@ -57,15 +66,22 @@ class DiagnosticsController(QObject):
 
     # -- contadores ----------------------------------------------------------
 
-    def _on_streaming_changed(self, streaming: bool) -> None:
-        if streaming:
+    def _on_state_changed(self, state: ChatState) -> None:
+        """Handler principal: reacciona a los cambios de estado del chat."""
+        if state is ChatState.STREAMING:
+            # Nueva generación: arrancar cronómetro.
             self._timer.start()
             self._in_flight = True
+        elif state is ChatState.CANCELLING:
+            # El usuario pulsó Detener pero el worker aún no ha
+            # terminado. Mantenemos el cronómetro corriendo: el
+            # tiempo de cancelación forma parte del tiempo total.
+            pass
         elif self._in_flight:
+            # IDLE o ERROR: fin de la generación. Contamos como
+            # respuesta solo si hubo texto real y pasó el umbral.
             self._in_flight = False
             elapsed = self._timer.elapsed() / 1000
-            # Contamos como respuesta solo si hubo texto real. Una
-            # cancelación de 1s sin respuesta no debe inflar la media.
             last_text = ""
             last_text_getter = getattr(self.chat, "last_assistant_text", None)
             if callable(last_text_getter):
@@ -75,6 +91,13 @@ class DiagnosticsController(QObject):
                 self._refresh_responses()
         self._refresh_textual_tool()
         self.refresh_context()
+
+    def _on_streaming_changed(self, streaming: bool) -> None:
+        """Fallback para fakes de tests con la señal booleana antigua."""
+        if streaming:
+            self._on_state_changed(ChatState.STREAMING)
+        else:
+            self._on_state_changed(ChatState.IDLE)
 
     def _on_conversation_changed(self) -> None:
         self.refresh_context()
