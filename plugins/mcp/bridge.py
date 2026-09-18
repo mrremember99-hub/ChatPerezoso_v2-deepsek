@@ -27,6 +27,42 @@ class MCPToolBridge:
         "crear_carpeta": frozenset({"create_directory"}),
     }
 
+    # ────────────────────────────────────────────────────────────────
+    # DECISIÓN DE SEGURIDAD: lista blanca local de herramientas de solo
+    # lectura por servidor MCP.
+    #
+    # NO confiamos en las anotaciones readOnlyHint/destructiveHint que
+    # declara el propio servidor MCP. Son metadatos no verificables: un
+    # servidor malicioso o mal implementado podría declarar
+    # readOnlyHint: true sobre una herramienta que borra archivos y la
+    # app se saltaría la confirmación del usuario.
+    #
+    # Esta lista es la única fuente de verdad. Si un servidor no está
+    # aquí, TODAS sus herramientas requieren confirmación.
+    #
+    # Para añadir un servidor nuevo:
+    #   1. Verificar el código fuente del servidor.
+    #   2. Enumerar aquí SOLO las herramientas que no modifican nada.
+    #   3. Si hay duda, no añadirlo: el coste de confirmar de más es
+    #      mucho menor que el coste de confirmar de menos.
+    # ────────────────────────────────────────────────────────────────
+    _TRUSTED_READONLY: dict[str, frozenset[str]] = {
+        # server-filesystem oficial de Anthropic.
+        # Referencia: https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem
+        "fs": frozenset({
+            "read_file",
+            "read_text_file",
+            "read_media_file",
+            "read_multiple_files",
+            "list_directory",
+            "list_directory_with_sizes",
+            "directory_tree",
+            "search_files",
+            "get_file_info",
+            "list_allowed_directories",
+        }),
+    }
+
     def __init__(self, local_tools: ToolRegistry):
         self.local_tools = local_tools
         self._servers: dict[str, MCPClient] = {}
@@ -92,7 +128,34 @@ class MCPToolBridge:
                 if destructive is None:
                     destructive = annotations.get("destructive_hint")
                 if isinstance(read_only, bool):
-                    self._mcp_readonly[exposed] = read_only and destructive is not True
+                    hint_readonly = read_only and destructive is not True
+                    self._mcp_readonly[exposed] = hint_readonly
+                    # Avisamos si el servidor declara readOnly pero la
+                    # herramienta no está en nuestra lista blanca. No
+                    # cambiamos la decisión (sigue requiriendo
+                    # confirmación), pero lo registramos para detectar
+                    # servidores que mienten o que simplemente no
+                    # conocemos todavía.
+                    from ._base import MCPError  # noqa: F401 (silencia linters)
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    trusted = self._TRUSTED_READONLY.get(server_id, frozenset())
+                    if hint_readonly and name not in trusted:
+                        logger.warning(
+                            "MCP %s declara %s como readOnlyHint, pero no "
+                            "esta en la lista blanca local. Seguira "
+                            "requiriendo confirmacion. Si es de solo "
+                            "lectura, anadelo a _TRUSTED_READONLY en "
+                            "plugins/mcp/bridge.py.",
+                            server_id, exposed,
+                        )
+                    elif not hint_readonly and name in trusted:
+                        logger.warning(
+                            "MCP %s declara %s como NO readOnly, pero esta "
+                            "en nuestra lista blanca. La lista blanca "
+                            "tiene prioridad. Revisar el servidor.",
+                            server_id, exposed,
+                        )
 
         self._rebuild_definitions()
         return list(self._definitions)
@@ -202,12 +265,34 @@ class MCPToolBridge:
     # -- confirmación --------------------------------------------------------
 
     def requires_confirmation(self, name: str) -> bool:
-        if name.startswith("mcp__"):
-            hint = self._mcp_readonly.get(name)
-            if hint is not None:
-                return not hint
+        """Decide si una herramienta MCP requiere confirmación del usuario.
+
+        La decisión se basa en la lista blanca local _TRUSTED_READONLY,
+        NO en las anotaciones readOnlyHint del servidor MCP. El servidor
+        no es una fuente de confianza: sus anotaciones son metadatos no
+        verificables que podrían declarar readOnly sobre una herramienta
+        destructiva.
+
+        El hint del servidor se sigue leyendo (en activate) pero solo
+        para registrarlo en logs y detectar servidores que mienten o
+        están mal implementados.
+        """
+        if not name.startswith("mcp__"):
+            return self.local_tools.requires_confirmation(name)
+
+        # Extraer server_id del nombre expuesto: mcp__{server}__{tool}
+        partes = name.split("__", 2)
+        if len(partes) < 3:
+            return True  # mal formado -> siempre confirmar
+        server_id, tool_name = partes[1], partes[2]
+
+        trusted = self._TRUSTED_READONLY.get(server_id)
+        if trusted is None:
+            # Servidor no en la lista blanca: todo requiere confirmación.
             return True
-        return self.local_tools.requires_confirmation(name)
+        # Solo las herramientas explícitamente listadas se consideran
+        # de solo lectura. El resto, siempre confirman.
+        return tool_name not in trusted
 
     # -- ejecución -----------------------------------------------------------
 

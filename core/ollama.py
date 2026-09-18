@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import json
 import logging
 import re
@@ -10,6 +11,11 @@ import httpx
 
 from .intent import ToolIntentGate
 from .model_capabilities import get_capabilities
+from .tool_strategies import (
+    NativeToolStrategy,
+    XmlToolStrategy,
+    authorize_and_execute,
+)
 from .xml_tools import build_tools_prompt, parse_tool_calls, strip_tool_call_blocks
 
 
@@ -88,13 +94,15 @@ class OllamaClient:
 
         # 1. Detectar capacidades del modelo (cacheado).
         caps = get_capabilities(self.host, model)
-        use_xml = caps.tool_mode == "xml"
         logger.debug(
             "Modelo %s: tool_mode=%s (probed=%s)",
             model, caps.tool_mode, caps.probed,
         )
 
-        # 2. Preparar historial y reglas de intención.
+        # 2. Elegir estrategia según el modo detectado.
+        strategy = self._choose_strategy(caps, tools)
+
+        # 3. Preparar historial y reglas de intención.
         history = [dict(message) for message in messages]
         definitions = self._extract_definitions(tools)
         authorization_text = self._last_user_text(history)
@@ -106,19 +114,16 @@ class OllamaClient:
             if item.get("function", {}).get("name")
         }
 
-        # 3. Componer el system prompt según el modo.
-        if use_xml:
-            tool_prompt = build_tools_prompt(active_tools) if active_tools else ""
-        else:
-            tool_prompt = self._tool_system_prompt(active_tools) if active_tools else ""
+        # 4. Componer el system prompt según la estrategia.
+        tool_prompt = (
+            strategy.prepare_system_prompt(active_tools) if active_tools else ""
+        )
         self._inject_system_prompts(history, system_prompt, tool_prompt)
 
-        # En modo XML, con tools activas, buffereamos todo el stream
-        # (no podemos saber si el modelo escribe texto o un bloque XML
-        # hasta el final). Sin tools activas, streaming normal.
-        buffer_only = use_xml and bool(active_tools)
+        send_tools = active_tools if strategy.should_send_tools_param() else None
+        buffer_only = strategy.needs_full_buffer(bool(active_tools))
 
-        final_text = ""
+        # 5. Bucle de rondas delegando en la estrategia.
         textual_retry_used = False
 
         for _ in range(max_rounds):
@@ -127,103 +132,70 @@ class OllamaClient:
             message = self._stream(
                 model,
                 history,
-                active_tools if not use_xml else None,
+                send_tools,
                 None if buffer_only else on_text,
                 cancel_event=cancel_event,
                 options=options,
             )
 
-            content = str(message.get("content") or "")
+            result = strategy.process_round(message, tool_names)
 
-            # ---- Modo XML: parsear bloques del texto ----
-            if use_xml and active_tools:
-                xml_calls = parse_tool_calls(content, known_tools=tool_names)
-                visible = strip_tool_call_blocks(content)
-
-                if xml_calls:
-                    if visible:
-                        on_text(visible)
-                    history.append({"role": "assistant", "content": content})
-                    for name, args in xml_calls:
-                        if not gate.tool_is_requested(name, authorization_text):
-                            result_text = (
-                                "ERROR: llamada de herramienta bloqueada: la "
-                                "última petición del usuario no solicita esa "
-                                "operación sobre el workspace."
-                            )
-                        else:
-                            result_text = on_tool(name, args)
-                        history.append({
-                            "role": "user",
-                            "content": f"[TOOL_RESULT:{name}]\n{result_text}",
-                        })
+            # Reintento por tool calling textual (solo nativo).
+            if result.retry_requested:
+                if not textual_retry_used:
+                    textual_retry_used = True
+                    history.append({
+                        "role": "assistant",
+                        "content": result.assistant_content,
+                    })
+                    history.append({"role": "user", "content": result.retry_message})
                     continue
-
-                # Sin bloques XML: es la respuesta final.
-                if visible:
-                    on_text(visible)
-                    final_text += visible
+                # Ya se reintentó una vez: fallar con mensaje al usuario.
+                final_text = (
+                    "No se pudo completar la operación: el modelo no logró "
+                    "invocar la herramienta mediante la llamada nativa tras "
+                    "reintentarlo. Reformula la petición."
+                )
+                on_text(final_text)
                 return final_text
 
-            # ---- Modo NATIVE: tool_calls nativos ----
-            tool_calls = message.get("tool_calls") or []
+            # Mostrar al usuario el texto visible (sin bloques XML).
+            if result.visible_text:
+                on_text(result.visible_text)
 
-            if not tool_calls:
-                textual_name = message.get("_textual_tool_name")
-                if textual_name:
-                    if not textual_retry_used:
-                        textual_retry_used = True
-                        history.append({"role": "assistant", "content": content})
-                        history.append({
-                            "role": "user",
-                            "content": (
-                                f"Has escrito el JSON de la herramienta "
-                                f"«{textual_name}» como texto normal. No ejecutes "
-                                "herramientas así. Repite la operación usando "
-                                "EXCLUSIVAMENTE la llamada nativa de tool calling "
-                                "que Ollama expone en el parámetro `tools`. No "
-                                "escribas JSON en el mensaje."
-                            ),
-                        })
-                        continue
-                    final_text = (
-                        f"No se pudo completar la operación: el modelo no logró "
-                        f"invocar «{textual_name}» mediante la llamada nativa tras "
-                        "reintentarlo. Reformula la petición."
-                    )
-                    on_text(final_text)
-                    return final_text
-                if content:
-                    final_text += content
-                return final_text
+            # Respuesta final.
+            if result.is_final:
+                return result.final_text
 
-            history.append(message)
-            for call in tool_calls:
-                function = call.get("function", {})
-                name = str(function.get("name", ""))
-                arguments = function.get("arguments", {})
-                if isinstance(arguments, str):
-                    try:
-                        arguments = json.loads(arguments)
-                    except ValueError:
-                        arguments = {}
-                if not isinstance(arguments, dict):
-                    arguments = {}
-                if not gate.tool_is_requested(name, authorization_text):
-                    result_text = (
-                        "ERROR: llamada de herramienta bloqueada: la última "
-                        "petición del usuario no solicita esa operación sobre "
-                        "el workspace."
-                    )
-                else:
-                    result_text = on_tool(name, arguments)
+            # Hay tool calls: ejecutar y volver a la siguiente ronda.
+            if result.tool_calls:
                 history.append({
-                    "role": "tool",
-                    "content": result_text,
-                    "tool_name": name,
+                    "role": "assistant",
+                    "content": result.assistant_content,
                 })
+                for name, args in result.tool_calls:
+                    result_text = authorize_and_execute(
+                        name, args, gate, authorization_text, on_tool
+                    )
+                    history.append(strategy.format_tool_result(name, result_text))
+                continue
+
+            # Sin tool calls y sin ser final: caso raro (no debería
+            # ocurrir con las estrategias actuales). Cerramos.
+            return result.final_text
 
         raise OllamaError("Se alcanzó el límite de rondas de herramientas.")
+
+    @staticmethod
+    def _choose_strategy(caps, tools) -> Any:
+        """Selecciona la estrategia según el modo de tool calling.
+
+        Devuelve NativeToolStrategy o XmlToolStrategy. Añadir un tercer
+        modo sería añadir una rama aquí, sin tocar el bucle de chat().
+        """
+        if caps.tool_mode == "xml":
+            return XmlToolStrategy()
+        return NativeToolStrategy()
 
     # -- extracción y construcción de gates ---------------------------------
 
@@ -409,12 +381,19 @@ class OllamaClient:
                     # hilo se quedaba bloqueado esperando la siguiente
                     # linea y no veia el cancel hasta que Ollama
                     # enviara algo nuevo.
+                    # Decoder incremental: retiene bytes de un caracter
+                    # multibyte partido en el limite de los chunks de
+                    # 1024 bytes y los completa en la siguiente llamada.
+                    # Sin esto, cualquier 'ñ', 'á', '¿' o emoji que caiga
+                    # justo en el corte se corrompe a U+FFFD de forma
+                    # intermitente (depende de donde caiga el corte).
+                    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
                     for raw_chunk in response.iter_bytes(chunk_size=1024):
                         if cancel_event is not None and cancel_event.is_set():
                             raise OllamaCancelled(
                                 "Operación cancelada por el usuario."
                             )
-                        buffer += raw_chunk.decode("utf-8", errors="replace")
+                        buffer += decoder.decode(raw_chunk)
                         while "\n" in buffer:
                             line, buffer = buffer.split("\n", 1)
                             line = line.strip()
@@ -425,6 +404,12 @@ class OllamaClient:
                                 break
                         if message.get("_done"):
                             break
+
+                    # Flush final del decoder: por si quedaron bytes
+                    # pendientes de un caracter multibyte al cerrar.
+                    tail = decoder.decode(b"", final=True)
+                    if tail:
+                        buffer += tail
 
                     # Linea final sin salto
                     if buffer.strip() and not message.get("_done"):

@@ -529,3 +529,61 @@ def test_mcp_filesystem_aliases_allow_read_text_and_write_file(tmp_path):
     assert gate.tool_is_requested(
         "mcp__fs__write_file", "escribe el archivo README.md con contenido nuevo"
     )
+
+
+def test_chat_native_mode_does_not_duplicate_text_in_on_text(monkeypatch):
+    """Regresión: en modo nativo, el texto se muestra UNA vez.
+
+    El `_stream` en modo nativo llama a `on_text()` durante el
+    streaming. La estrategia nativa NO debe marcar `visible_text`
+    (porque chat() volvería a llamar a on_text y duplicaría el texto).
+
+    Este test verifica el contrato entre _stream, la estrategia y el
+    bucle de chat(). Sin él, un cambio futuro en cualquiera de las tres
+    piezas podría reintroducir el duplicado silenciosamente.
+    """
+    import httpx
+    from core import model_capabilities
+
+    model_capabilities.clear_cache()
+
+    class _ShowResponse:
+        def raise_for_status(self): return None
+        def json(self): return {"capabilities": ["tools"]}
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _ShowResponse())
+
+    import json as _json
+
+    lineas = [
+        (_json.dumps({"message": {"content": "Hola"}, "done": False}) + "\n").encode("utf-8"),
+        (_json.dumps({"message": {}, "done": True}) + "\n").encode("utf-8"),
+    ]
+
+    class _FakeResponse:
+        def raise_for_status(self): return None
+        def close(self): pass
+        def iter_bytes(self, chunk_size=1024):
+            for linea in lineas:
+                yield linea
+
+    class _FakeCtx:
+        def __enter__(self): return _FakeResponse()
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(httpx, "stream", lambda *a, **k: _FakeCtx())
+
+    from core.ollama import OllamaClient
+    client = OllamaClient()
+    chunks = []
+    result = client.chat(
+        "test-native",
+        [{"role": "user", "content": "Hola"}],
+        None,
+        chunks.append,
+        lambda *_: "",
+    )
+
+    assert result == "Hola"
+    # El texto debe aparecer UNA sola vez
+    assert chunks == ["Hola"], f"Texto duplicado: {chunks}"

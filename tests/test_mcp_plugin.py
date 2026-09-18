@@ -212,7 +212,14 @@ def test_bridge_blocks_destructive_mcp_tool_without_confirmation(tmp_path):
     ) == "BORRADO"
 
 
-def test_bridge_honors_readonly_hint_without_confirmation(tmp_path):
+def test_bridge_ignores_readonly_hint_for_unknown_server(tmp_path):
+    """Un servidor NO listado en _TRUSTED_READONLY no puede saltarse
+    la confirmacion aunque su herramienta se declare readOnlyHint=True.
+
+    Este test reemplaza al antiguo test_bridge_honors_readonly_hint_...
+    que verificaba el comportamiento viejo (vulnerable): confiar en las
+    anotaciones que el propio servidor declara sobre si mismo.
+    """
     from core.tools import ToolRegistry
     from core.workspace import Workspace
     from plugins.mcp import MCPToolBridge
@@ -230,9 +237,60 @@ def test_bridge_honors_readonly_hint_without_confirmation(tmp_path):
             return "CONTENIDO"
 
     bridge = MCPToolBridge(ToolRegistry(Workspace(tmp_path)))
+    # Servidor "demo" no esta en _TRUSTED_READONLY, asi que aunque la
+    # herramienta se llame "read_file" y declare readOnly, confirmamos.
     bridge.activate("demo", ReadOnlyHintedClient())
-    assert not bridge.requires_confirmation("mcp__demo__read_file")
-    assert bridge.call("mcp__demo__read_file", {"path": "x.txt"}) == "CONTENIDO"
+    assert bridge.requires_confirmation("mcp__demo__read_file") is True
+
+
+def test_bridge_trusted_readonly_tools_skip_confirmation(tmp_path):
+    """Un servidor SI listado en _TRUSTED_READONLY, con una herramienta
+    tambien listada, no requiere confirmacion."""
+    from core.tools import ToolRegistry
+    from core.workspace import Workspace
+    from plugins.mcp import MCPToolBridge
+
+    class FsClient(FakeMCPClient):
+        def list_tools(self):
+            return [{
+                "name": "read_file",
+                "description": "Lee un archivo.",
+                "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}},
+                "annotations": {"readOnlyHint": True},
+            }]
+
+        def call_tool(self, name, arguments, *, cancel_event=None):
+            return "CONTENIDO"
+
+    bridge = MCPToolBridge(ToolRegistry(Workspace(tmp_path)))
+    bridge.activate("fs", FsClient())
+    assert bridge.requires_confirmation("mcp__fs__read_file") is False
+
+
+def test_bridge_trusted_server_unknown_tool_still_confirms(tmp_path):
+    """Un servidor de confianza con una herramienta NO listada sigue
+    requiriendo confirmacion. La confianza es por herramienta, no por
+    servidor entero."""
+    from core.tools import ToolRegistry
+    from core.workspace import Workspace
+    from plugins.mcp import MCPToolBridge
+
+    class FsClient(FakeMCPClient):
+        def list_tools(self):
+            return [{
+                "name": "write_file",
+                "description": "Escribe un archivo.",
+                "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}},
+            }]
+
+        def call_tool(self, name, arguments, *, cancel_event=None):
+            return "OK"
+
+    bridge = MCPToolBridge(ToolRegistry(Workspace(tmp_path)))
+    bridge.activate("fs", FsClient())
+    # write_file NO esta en la whitelist de 'fs', asi que confirma
+    assert bridge.requires_confirmation("mcp__fs__write_file") is True
+
 
 
 def test_bridge_readonly_hint_ignored_if_also_destructive(tmp_path):
