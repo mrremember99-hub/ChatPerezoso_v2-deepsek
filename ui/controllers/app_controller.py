@@ -7,6 +7,8 @@ from PySide6.QtCore import QObject, QThread, Slot
 from PySide6.QtWidgets import QApplication, QFileDialog
 
 from core.agents import Agent, AgentStore
+
+from ..chat_state import ChatState
 from ..workers import CapabilitiesWorker
 from core.composite_tools import (
     CachedToolProvider,
@@ -194,7 +196,7 @@ class AppController(QObject):
         cp.regenerate_requested.connect(self._on_regenerate)
         cp.copy_requested.connect(self._on_copy_last_response)
         cp.clear_requested.connect(self._clear_chat)
-        self.chat_ctrl.streaming_changed.connect(self._on_streaming_changed)
+        self.chat_ctrl.state_changed.connect(self._on_state_changed)
         self.chat_ctrl.status.connect(self.view.set_status)
         self.chat_ctrl.mcp_error.connect(self.mcp_ctrl.report_failure)
 
@@ -427,10 +429,16 @@ class AppController(QObject):
         clipboard.setText(text)
         self.view.set_status("Respuesta copiada")
 
-    @Slot(bool)
-    def _on_streaming_changed(self, streaming: bool) -> None:
-        self.view.chat_panel.set_streaming(streaming)
-        self.view.sidebar.set_busy(streaming)
+    @Slot(object)
+    def _on_state_changed(self, state: ChatState) -> None:
+        """Refleja el estado del chat en la UI.
+
+        El panel recibe el ChatState completo (sabe diferenciar
+        STREAMING de CANCELLING). La sidebar solo necesita saber si
+        hay trabajo en curso, asi que recibe is_active como bool.
+        """
+        self.view.chat_panel.set_state(state)
+        self.view.sidebar.set_busy(state.is_active)
 
     def _clear_chat(self) -> None:
         if self.chat_ctrl.is_streaming():

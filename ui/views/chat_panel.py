@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import design
+from ..chat_state import ChatState
 from ..rendering import ChatRenderer, PlainTextRenderer
 from ..theme import DOCUMENT_STYLESHEET
 from ..widgets import ChatInput, ChatView
@@ -38,7 +39,7 @@ class ChatPanel(QWidget):
 
         self._elapsed = QElapsedTimer()
         self._thinking_step = 0
-        self._streaming = False
+        self._state: ChatState = ChatState.IDLE
 
         self._thinking_timer = QTimer(self)
         self._thinking_timer.setInterval(design.THINKING_TIMER_INTERVAL_MS)
@@ -112,18 +113,17 @@ class ChatPanel(QWidget):
 
     # -- señales de entrada --------------------------------------------------
     def _on_submit(self) -> None:
-        if self._streaming:
+        if self._state.is_active:
             return
         if not self.input.toPlainText().strip():
             return
         self.message_submitted.emit()
 
     def _on_send_clicked(self) -> None:
-        if self._streaming:
-            # Feedback inmediato: aunque la cancelación real solo se
-            # aplica en el próximo chunk (httpx sync no se puede
-            # interrumpir sin segfault), el usuario ve que su pulsación
-            # se ha registrado.
+        if self._state.is_active:
+            # Feedback inmediato: aunque la cancelación real puede tardar
+            # unos ms (el evento se propaga al worker asincrono), el
+            # usuario ve que su pulsación se ha registrado.
             self.send.setText("Cancelando…")
             self.send.setEnabled(False)
             self.cancel_requested.emit()
@@ -131,19 +131,45 @@ class ChatPanel(QWidget):
             self._on_submit()
 
     def _on_clear_shortcut(self) -> None:
-        if self._streaming:
+        if self._state.is_active:
             return
         self.clear_requested.emit()
 
     # -- API pública ---------------------------------------------------------
+    @property
+    def state(self) -> ChatState:
+        """Estado actual del panel."""
+        return self._state
+
     def set_streaming(self, streaming: bool) -> None:
-        self._streaming = streaming
-        self.send.setText("Detener" if streaming else "Enviar")
-        self.send.setEnabled(True)  # puede haber quedado deshabilitado al cancelar
-        self.input.setEnabled(not streaming)
-        if streaming:
+        """Compatibilidad: convierte bool a ChatState."""
+        self.set_state(ChatState.STREAMING if streaming else ChatState.IDLE)
+
+    def set_state(self, state: ChatState) -> None:
+        """Refleja el estado del ChatController en la UI.
+
+        IDLE / ERROR: botón "Enviar", input activo, indicadores parados.
+        STREAMING:    botón "Detener", input deshabilitado, indicadores activos.
+        CANCELLING:   botón "Cancelando…" deshabilitado, indicadores activos.
+        """
+        self._state = state
+
+        if state is ChatState.STREAMING:
+            self.send.setText("Detener")
+            self.send.setEnabled(True)
+            self.input.setEnabled(False)
             self._start_indicators()
+        elif state is ChatState.CANCELLING:
+            self.send.setText("Cancelando…")
+            self.send.setEnabled(False)
+            self.input.setEnabled(False)
+            # No reiniciamos los indicadores: siguen corriendo mientras
+            # el worker termina de cancelar.
         else:
+            # IDLE o ERROR
+            self.send.setText("Enviar")
+            self.send.setEnabled(True)
+            self.input.setEnabled(True)
             self._stop_indicators()
 
     def clear_chat(self) -> None:

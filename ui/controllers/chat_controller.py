@@ -12,6 +12,8 @@ from core.ollama import OllamaClient
 from core.tool_provider import ToolProvider
 from core.tool_result import ToolResult
 
+from ..chat_state import ChatState
+
 from ..rendering import ChatRenderer
 from ..views.dialogs import confirm_tool
 from ..workers import ChatWorker
@@ -50,7 +52,8 @@ _NARRATION_TEMPLATES = {
 
 
 class ChatController(QObject):
-    streaming_changed = Signal(bool)
+    streaming_changed = Signal(bool)  # DEPRECADO: usar state_changed
+    state_changed = Signal(object)  # ChatState
     status = Signal(str)
     assistant_message = Signal(str)
     error_message = Signal(str)
@@ -77,7 +80,7 @@ class ChatController(QObject):
         self.messages: list[dict] = list(initial_messages or [])
         self._thread: QThread | None = None
         self._worker: ChatWorker | None = None
-        self._streaming = False
+        self._state: ChatState = ChatState.IDLE
         self._last_model = ""
         self._last_options: dict[str, Any] | None = None
         self._last_system_prompt = ""
@@ -94,8 +97,25 @@ class ChatController(QObject):
         self._persist_timer.timeout.connect(self._do_persist)
 
     # -- API pública ---------------------------------------------------------
+    @property
+    def state(self) -> ChatState:
+        """Estado actual del chat."""
+        return self._state
+
     def is_streaming(self) -> bool:
-        return self._streaming
+        """Compatibilidad: True si el chat está activo (streaming o cancelando)."""
+        return self._state.is_active
+
+    def _set_state(self, new_state: ChatState) -> None:
+        """Cambia el estado y emite las señales correspondientes."""
+        if new_state is self._state:
+            return
+        old_is_active = self._state.is_active
+        self._state = new_state
+        self.state_changed.emit(new_state)
+        new_is_active = new_state.is_active
+        if old_is_active != new_is_active:
+            self.streaming_changed.emit(new_is_active)
 
     def rebind_tools(self, tools: ToolProvider) -> None:
         self.tools = tools
@@ -130,7 +150,7 @@ class ChatController(QObject):
         options: dict[str, Any] | None = None,
         system_prompt: str | None = None,
     ) -> None:
-        if self._streaming or not text or not model:
+        if self._state.is_active or not text or not model:
             return
         self._last_model = model
         if options is not None:
@@ -142,13 +162,12 @@ class ChatController(QObject):
         self._append_message({"role": "user", "content": text})
         self.renderer.reset()
         self._current_actions = []
-        self._streaming = True
-        self.streaming_changed.emit(True)
+        self._set_state(ChatState.STREAMING)
         self.status.emit("Generando…")
         self._spawn_worker(model, self._last_options, self._last_system_prompt)
 
     def regenerate(self, model: str) -> None:
-        if self._streaming or not self.messages or not model:
+        if self._state.is_active or not self.messages or not model:
             return
         last_user_idx: int | None = None
         for i in range(len(self.messages) - 1, -1, -1):
@@ -194,9 +213,10 @@ class ChatController(QObject):
     def cancel(self) -> None:
         if self._worker is not None:
             self._worker.cancel()
+            self._set_state(ChatState.CANCELLING)
 
     def clear(self) -> None:
-        if self._streaming:
+        if self._state.is_active:
             return
         self.messages.clear()
         if self._persist_timer.isActive():
@@ -355,8 +375,10 @@ class ChatController(QObject):
         self._finish("Error")
 
     def _finish(self, status: str) -> None:
-        self._streaming = False
-        self.streaming_changed.emit(False)
+        if status == "Error":
+            self._set_state(ChatState.ERROR)
+        else:
+            self._set_state(ChatState.IDLE)
         self.status.emit(status)
         self.renderer.reset()
 
