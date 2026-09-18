@@ -265,10 +265,6 @@ class AppController(QObject):
         active_model = self.view.sidebar.current_model() or self.config.model
         if active_model:
             self._refresh_capabilities(active_model)
-        # Consultar el modo del modelo activo para mostrar el badge.
-        active_model = self.view.sidebar.current_model() or self.config.model
-        if active_model:
-            self._refresh_capabilities(active_model)
         agent = self.agent_ctrl.active_agent()
         self.diagnostics_ctrl.set_model(
             self.view.sidebar.current_model() or self.config.model,
@@ -291,7 +287,6 @@ class AppController(QObject):
         agent = self.agent_ctrl.active_agent()
         self.diagnostics_ctrl.set_model(name, agent.temperature, agent.num_ctx)
         self._refresh_capabilities(name)
-        self._refresh_capabilities(name)
 
     def _refresh_capabilities(self, model: str) -> None:
         """Consulta /api/show en un hilo aparte y actualiza el badge.
@@ -320,6 +315,9 @@ class AppController(QObject):
         if model != self.view.sidebar.current_model():
             return
         self.view.sidebar.set_capabilities(caps.tool_mode)
+        # Propagar el limite de contexto al ChatController para que la
+        # compactacion del historial se adapte al modelo activo.
+        self.chat_ctrl.set_context_limit(caps.context_length)
         # Si el modo viene de un override manual, lo indicamos en el
         # status para que el usuario sepa que su config está activa.
         if getattr(caps, "source", "") == "override":
@@ -338,38 +336,6 @@ class AppController(QObject):
         self._caps_thread = None
         self._caps_worker = None
 
-    def _refresh_capabilities(self, model: str) -> None:
-        """Consulta /api/show en un hilo aparte y actualiza el badge.
-
-        Si ya hay una consulta en curso, se descarta y se lanza la
-        nueva: el usuario suele cambiar de modelo rapido y queremos
-        que gane la ultima seleccion.
-        """
-        if self._caps_thread is not None and self._caps_thread.isRunning():
-            self._caps_thread.quit()
-            self._caps_thread.wait(500)
-        self._caps_thread = QThread(self)
-        self._caps_worker = CapabilitiesWorker(self.config.ollama_host, model)
-        self._caps_worker.moveToThread(self._caps_thread)
-        self._caps_thread.started.connect(self._caps_worker.run)
-        self._caps_worker.finished.connect(self._on_capabilities_ready)
-        self._caps_worker.error.connect(self._on_capabilities_error)
-        self._caps_worker.finished.connect(self._caps_thread.quit)
-        self._caps_worker.error.connect(self._caps_thread.quit)
-        self._caps_thread.finished.connect(self._cleanup_caps_thread)
-        self._caps_thread.start()
-
-    @Slot(str, object)
-    def _on_capabilities_ready(self, model: str, caps) -> None:
-        # Ignorar si el usuario ya ha cambiado de modelo otra vez.
-        if model != self.view.sidebar.current_model():
-            return
-        self.view.sidebar.set_capabilities(caps.tool_mode)
-
-    @Slot(str, str)
-    def _on_capabilities_error(self, model: str, message: str) -> None:
-        if model == self.view.sidebar.current_model():
-            self.view.sidebar.set_capabilities("unknown")
 
     def _cleanup_caps_thread(self) -> None:
         if self._caps_thread is not None:
@@ -489,6 +455,9 @@ class AppController(QObject):
         self.config.width = self.view.width()
         self.config.height = self.view.height()
         self.config.save()
+        # Orden importante: primero los controllers que usan ollama
+        # (para que su worker termine), despues el propio ollama.
         self.chat_ctrl.shutdown()
         self.mcp_ctrl.shutdown()
         self.model_ctrl.shutdown()
+        self.ollama.shutdown()

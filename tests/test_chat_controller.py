@@ -13,7 +13,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QObject
 
 from core.tool_result import ToolResult
-from ui.controllers.chat_controller import ChatController, MAX_HISTORY_MESSAGES
+from ui.controllers.chat_controller import ChatController, MIN_TURNS_TO_KEEP
 
 
 # -- dobles de prueba --------------------------------------------------------
@@ -174,33 +174,91 @@ def controller(qapp, monkeypatch):
     return ctrl, renderer
 
 
-# -- historial ---------------------------------------------------------------
+# -- historial: compactacion por tokens --------------------------------------
 
-def test_history_under_limit_is_kept_intact(controller):
+def test_compact_uses_default_when_context_unknown(controller):
+    """Sin context_limit, se asume 4096 tokens (default de Ollama)."""
     ctrl, _ = controller
-    for i in range(MAX_HISTORY_MESSAGES):
-        ctrl._append_message({"role": "user", "content": str(i)})
-    assert len(ctrl.messages) == MAX_HISTORY_MESSAGES
-    assert ctrl.messages[0]["content"] == "0"
+    # 4 mensajes x 100 chars = 400 chars = 100 tokens, muy por debajo
+    # del 70% de 4096.
+    ctrl.messages = [
+        {"role": "user", "content": "x" * 100},
+        {"role": "assistant", "content": "y" * 100},
+        {"role": "user", "content": "x" * 100},
+        {"role": "assistant", "content": "y" * 100},
+    ]
+    ctrl._compact_if_needed()
+    assert len(ctrl.messages) == 4
 
 
-def test_history_over_limit_cuts_at_first_user(controller):
+def test_compact_triggers_near_context_limit(controller):
+    """Con context_limit bajo, se compacta cuando se supera el 70%."""
     ctrl, _ = controller
-    for i in range(MAX_HISTORY_MESSAGES + 5):
-        role = "user" if i % 2 == 0 else "assistant"
-        ctrl._append_message({"role": role, "content": str(i)})
-    assert len(ctrl.messages) <= MAX_HISTORY_MESSAGES
-    assert ctrl.messages[0]["role"] == "user"
+    ctrl.set_context_limit(1000)
+    # 12 turnos con 500 chars cada uno = 12000 chars = 3000 tokens
+    # 70% de 1000 = 700 tokens -> se compacta
+    ctrl.messages = []
+    for i in range(12):
+        ctrl.messages.append({"role": "user", "content": "x" * 500})
+        ctrl.messages.append({"role": "assistant", "content": "y" * 500})
+    ctrl._compact_if_needed()
+    assert len(ctrl.messages) < 24
+    user_count = sum(1 for m in ctrl.messages if m.get("role") == "user")
+    assert user_count >= MIN_TURNS_TO_KEEP
 
 
-def test_history_cut_does_not_leave_orphan_assistant(controller):
+def test_compact_respects_agent_num_ctx(controller):
+    """Si el agente fija num_ctx, se usa el menor entre ese y el del modelo."""
     ctrl, _ = controller
-    for i in range(MAX_HISTORY_MESSAGES):
-        role = "user" if i % 2 == 0 else "assistant"
-        ctrl._append_message({"role": role, "content": str(i)})
-    ctrl._append_message({"role": "assistant", "content": "final"})
-    assert ctrl.messages[0]["role"] == "user"
-    assert len(ctrl.messages) <= MAX_HISTORY_MESSAGES
+    ctrl.set_context_limit(131072)
+    ctrl.set_current_options({"num_ctx": 2048})
+    ctrl.messages = []
+    for i in range(20):
+        ctrl.messages.append({"role": "user", "content": "x" * 400})
+        ctrl.messages.append({"role": "assistant", "content": "y" * 400})
+    # 40 mensajes x 400 chars = 16000 chars = 4000 tokens
+    # 70% de 2048 = 1433 -> se compacta
+    ctrl._compact_if_needed()
+    assert len(ctrl.messages) < 40
+
+
+def test_compact_does_not_break_with_few_turns(controller):
+    """Con pocos turnos, no se compacta aunque el contexto sea pequeño."""
+    ctrl, _ = controller
+    ctrl.set_context_limit(100)
+    ctrl.messages = [
+        {"role": "user", "content": "x" * 1000},
+        {"role": "assistant", "content": "y" * 1000},
+    ]
+    ctrl._compact_if_needed()
+    assert len(ctrl.messages) == 2
+
+
+def test_compact_preserves_recent_messages(controller):
+    """El contenido mas reciente nunca se pierde."""
+    ctrl, _ = controller
+    ctrl.set_context_limit(500)
+    ctrl.messages = []
+    for i in range(20):
+        ctrl.messages.append({"role": "user", "content": f"pregunta {i}" * 20})
+        ctrl.messages.append({"role": "assistant", "content": f"respuesta {i}" * 20})
+    ctrl._compact_if_needed()
+    if ctrl.messages:
+        assert "respuesta 19" in ctrl.messages[-1]["content"]
+
+
+def test_set_context_limit_accepts_zero(controller):
+    """set_context_limit(0) significa desconocido, usa el default."""
+    ctrl, _ = controller
+    ctrl.set_context_limit(0)
+    assert ctrl._context_limit == 0
+
+
+def test_set_context_limit_ignores_negative(controller):
+    """Valores negativos se clampean a 0."""
+    ctrl, _ = controller
+    ctrl.set_context_limit(-100)
+    assert ctrl._context_limit == 0
 
 
 # -- send --------------------------------------------------------------------
@@ -384,10 +442,69 @@ def test_persists_after_each_turn(tmp_path, qapp, monkeypatch):
     renderer.on_text("respuesta")
     ctrl._on_done("respuesta")
 
+    # La persistencia es debounced (500 ms). Con el timer activo, el
+    # archivo puede no estar escrito todavia. Forzamos el flush para
+    # verificar el contrato de "al cerrar/forzar, se persiste".
+    ctrl._persist_now()
+
     history = store.load()
     assert history is not None
     assert [m["role"] for m in history.messages] == ["user", "assistant"]
     assert history.model == "modelo"
+
+
+def test_persist_is_debounced_not_immediate(tmp_path, qapp, monkeypatch):
+    """Verifica que la persistencia NO ocurre inmediatamente tras cada
+    mensaje, sino que se difiere 500 ms con el timer."""
+    from core.history import HistoryStore
+
+    renderer = FakeRenderer()
+    owner = QObject()
+    store = HistoryStore(tmp_path / "h.json")
+    ctrl = ChatController(
+        parent=owner,
+        parent_widget=None,
+        client=object(),
+        tools=FakeTools(),
+        renderer=renderer,
+        store=store,
+        initial_messages=[],
+    )
+    ctrl._owner = owner
+
+    ctrl._append_message({"role": "user", "content": "hola"})
+
+    # El archivo NO debe existir todavía: la persistencia es diferida.
+    assert not (tmp_path / "h.json").exists()
+    # Y el timer debe estar activo.
+    assert ctrl._persist_timer.isActive()
+
+
+def test_persist_now_forces_immediate_write(tmp_path, qapp, monkeypatch):
+    """Forzar con _persist_now escribe a disco inmediatamente."""
+    from core.history import HistoryStore
+
+    renderer = FakeRenderer()
+    owner = QObject()
+    store = HistoryStore(tmp_path / "h.json")
+    ctrl = ChatController(
+        parent=owner,
+        parent_widget=None,
+        client=object(),
+        tools=FakeTools(),
+        renderer=renderer,
+        store=store,
+        initial_messages=[],
+    )
+    ctrl._owner = owner
+
+    ctrl._append_message({"role": "user", "content": "hola"})
+    ctrl._persist_now()
+
+    history = store.load()
+    assert history is not None
+    assert len(history.messages) == 1
+    assert history.messages[0]["content"] == "hola"
 
 
 def test_loads_initial_messages(tmp_path, qapp, monkeypatch):

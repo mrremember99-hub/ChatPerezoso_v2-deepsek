@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import QWidget
 
 import logging
@@ -19,8 +19,18 @@ from ..workers import ChatWorker
 logger = logging.getLogger(__name__)
 
 
-MAX_HISTORY_MESSAGES = 60
-MIN_TURNS_TO_KEEP = 12
+# Numero minimo de turnos (user+assistant) que se conservan al
+# compactar. Aunque el contexto se llene, no bajamos de aqui.
+MIN_TURNS_TO_KEEP = 8
+
+# Ratio de conversion chars -> tokens (estandar para es/en).
+_CHARS_PER_TOKEN = 4
+
+# Limite por defecto si no conocemos el del modelo.
+_FALLBACK_CONTEXT_TOKENS = 4096
+
+# Umbral de compactacion: 70% del contexto efectivo.
+_COMPACT_THRESHOLD = 0.70
 
 
 _NARRATION_TEMPLATES = {
@@ -72,6 +82,16 @@ class ChatController(QObject):
         self._last_options: dict[str, Any] | None = None
         self._last_system_prompt = ""
         self._current_actions: list[ToolResult] = []
+        # Limite de contexto del modelo activo, en tokens. 0 = desconocido.
+        self._context_limit: int = 0
+        # Debounce de persistencia: en lugar de escribir todo el
+        # historial a disco por cada mensaje, acumulamos cambios y
+        # escribimos 500 ms despues del ultimo. Reduce el trabajo
+        # sincrono en el hilo de UI de N escrituras por turno a 1.
+        self._persist_timer = QTimer(self)
+        self._persist_timer.setSingleShot(True)
+        self._persist_timer.setInterval(500)
+        self._persist_timer.timeout.connect(self._do_persist)
 
     # -- API pública ---------------------------------------------------------
     def is_streaming(self) -> bool:
@@ -88,6 +108,13 @@ class ChatController(QObject):
 
     def set_current_system_prompt(self, system_prompt: str) -> None:
         self._last_system_prompt = system_prompt or ""
+
+    def set_context_limit(self, tokens: int) -> None:
+        """Limite de contexto efectivo del modelo activo, en tokens.
+
+        0 significa 'desconocido': se usa _FALLBACK_CONTEXT_TOKENS.
+        """
+        self._context_limit = max(0, int(tokens))
 
     def last_assistant_text(self) -> str:
         for message in reversed(self.messages):
@@ -172,6 +199,8 @@ class ChatController(QObject):
         if self._streaming:
             return
         self.messages.clear()
+        if self._persist_timer.isActive():
+            self._persist_timer.stop()
         self.store.clear()
         self.conversation_changed.emit()
 
@@ -181,7 +210,9 @@ class ChatController(QObject):
         if self._thread is not None and self._thread.isRunning():
             self._thread.quit()
             self._thread.wait(2000)
-        self._persist()
+        # Forzar persistencia inmediata: no podemos esperar 500ms si
+        # estamos cerrando.
+        self._persist_now()
 
     # -- historial -----------------------------------------------------------
     def _append_message(self, message: dict) -> None:
@@ -191,24 +222,72 @@ class ChatController(QObject):
         self.conversation_changed.emit()
 
     def _compact_if_needed(self) -> None:
-        """Trunca por turnos user/assistant, no por mensaje.
+        """Compacta el historial cuando se acerca al limite del contexto.
 
-        Antes se cortaba por número de mensajes, lo que podía dejar un
-        mensaje ``tool`` huérfano (sin su ``assistant``) y confundir al
-        modelo. Ahora se conservan los últimos N turnos completos.
+        Estima los tokens del historial (ratio 4 chars/token) y, si
+        superan el 70% del contexto efectivo del modelo, corta por el
+        punto donde empieza un mensaje de usuario, dejando siempre al
+        menos MIN_TURNS_TO_KEEP turnos completos.
+
+        Si el agente fija num_ctx, se usa el menor entre ese valor y el
+        context_length del modelo.
         """
-        if len(self.messages) <= MAX_HISTORY_MESSAGES:
+        effective_ctx = self._context_limit
+        if self._last_options and self._last_options.get("num_ctx"):
+            try:
+                num_ctx = int(self._last_options["num_ctx"])
+            except (TypeError, ValueError):
+                num_ctx = 0
+            if num_ctx > 0:
+                if effective_ctx > 0:
+                    effective_ctx = min(num_ctx, effective_ctx)
+                else:
+                    effective_ctx = num_ctx
+        if effective_ctx <= 0:
+            effective_ctx = _FALLBACK_CONTEXT_TOKENS
+
+        total_chars = sum(
+            len(m["content"]) for m in self.messages
+            if isinstance(m.get("content"), str)
+        )
+        estimated_tokens = total_chars // _CHARS_PER_TOKEN
+
+        threshold = int(effective_ctx * _COMPACT_THRESHOLD)
+        if estimated_tokens < threshold:
             return
+
         user_positions = [
             i for i, m in enumerate(self.messages) if m.get("role") == "user"
         ]
         if len(user_positions) <= MIN_TURNS_TO_KEEP:
             return
+
         cut_at = user_positions[-MIN_TURNS_TO_KEEP]
         self.messages = self.messages[cut_at:]
+        logger.info(
+            "Historial compactado a %d mensajes (~%d tokens, limite %d)",
+            len(self.messages), estimated_tokens, effective_ctx,
+        )
 
     def _persist(self) -> None:
+        """Programa la persistencia con debounce.
+
+        No escribe a disco directamente. Rearranca un timer de 500 ms
+        que ejecutara _do_persist cuando no haya mas cambios. Asi una
+        rafaga de _append_message() (user + assistant + tool results)
+        produce una sola escritura.
+        """
+        self._persist_timer.start()
+
+    def _do_persist(self) -> None:
+        """Escribe el historial a disco. Llamado por el timer o forzado."""
         self.store.save(self.messages, model=self._last_model)
+
+    def _persist_now(self) -> None:
+        """Fuerza la escritura inmediata. Se usa al cerrar o limpiar."""
+        if self._persist_timer.isActive():
+            self._persist_timer.stop()
+        self._do_persist()
 
     # -- slots internos ------------------------------------------------------
     @Slot(str)
