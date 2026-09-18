@@ -428,7 +428,7 @@ class OllamaClient:
         except asyncio.CancelledError:
             raise OllamaCancelled("Operación cancelada por el usuario.")
 
-    async def _iter_ollama_events(
+    async def iter_ollama_events(
         self,
         payload: dict[str, Any],
         *,
@@ -467,7 +467,7 @@ class OllamaClient:
                     line = line.strip()
                     if not line:
                         continue
-                    event = self._handle_line_event(
+                    event = self.parse_ollama_line(
                         line, message, content_parts
                     )
                     if event is not None:
@@ -481,7 +481,7 @@ class OllamaClient:
             if tail:
                 buffer += tail
             if buffer.strip() and not message.get("_done"):
-                event = self._handle_line_event(
+                event = self.parse_ollama_line(
                     buffer.strip(), message, content_parts
                 )
                 if event is not None:
@@ -501,7 +501,7 @@ class OllamaClient:
         cancel_event: threading.Event | None = None,
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Wrapper sync-friendly sobre _iter_ollama_events.
+        """Wrapper sync-friendly sobre iter_ollama_events.
 
         Consume el iterador y aplica la logica de buffering
         adaptativo + callbacks. Mantenemos esta capa para no romper
@@ -521,7 +521,7 @@ class OllamaClient:
         message: dict[str, Any] = {}
         buffering_textual = False
 
-        async for event in self._iter_ollama_events(
+        async for event in self.iter_ollama_events(
             payload, cancel_event=cancel_event
         ):
             if isinstance(event, TextDelta):
@@ -557,7 +557,7 @@ class OllamaClient:
         return message
 
     @staticmethod
-    def _handle_line_event(
+    def parse_ollama_line(
         line: str,
         message: dict[str, Any],
         content_parts: list[str],
