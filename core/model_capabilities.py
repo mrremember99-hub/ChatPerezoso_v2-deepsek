@@ -26,6 +26,11 @@ class ModelCapabilities:
     # De donde sale el modo: "override" si viene de models.json,
     # "probe" si viene de /api/show, "fallback" si no pudimos consultar.
     source: str = "probe"
+    # Longitud del contexto del modelo en tokens, segun el GGUF.
+    # 0 = desconocido (no pudimos consultar /api/show o el modelo no
+    # expone model_info). En ese caso el llamante debe asumir un valor
+    # conservador (4096, el default de Ollama).
+    context_length: int = 0
 
     @property
     def tool_mode(self) -> ToolMode:
@@ -88,13 +93,44 @@ def _probe(host, model, *, timeout):
         return ModelCapabilities(name=model, native_tools=True, probed=False, source="fallback")
 
     caps_lower = {str(c).lower() for c in raw_caps}
+    context_length = _extract_context_length(data.get("model_info"))
     return ModelCapabilities(
         name=model,
         native_tools="tools" in caps_lower,
         vision="vision" in caps_lower,
         thinking="thinking" in caps_lower,
         probed=True,
+        context_length=context_length,
     )
+
+
+def _extract_context_length(model_info) -> int:
+    """Extrae la longitud del contexto del bloque model_info de /api/show.
+
+    La clave varia por arquitectura: "llama.context_length",
+    "gemma4.context_length", "qwen2.context_length", etc. Buscamos
+    cualquier clave que termine en ".context_length" y sea un entero.
+
+    Tambien aceptamos "context_length" sin prefijo por si alguna
+    version de Ollama lo expone plano.
+
+    Devuelve 0 si no se encuentra (desconocido).
+    """
+    if not isinstance(model_info, dict):
+        return 0
+    for key, value in model_info.items():
+        if not isinstance(key, str):
+            continue
+        if key == "context_length" or key.endswith(".context_length"):
+            # Excluir bool explicitamente: isinstance(True, int) es True
+            # en Python, pero un booleano no es un context_length valido.
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int) and value > 0:
+                return value
+            if isinstance(value, float) and value > 0:
+                return int(value)
+    return 0
 
 
 def clear_cache():

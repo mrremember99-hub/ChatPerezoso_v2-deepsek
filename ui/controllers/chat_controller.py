@@ -5,6 +5,8 @@ from typing import Any
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 from PySide6.QtWidgets import QWidget
 
+import logging
+
 from core.history import HistoryStore
 from core.ollama import OllamaClient
 from core.tool_provider import ToolProvider
@@ -14,9 +16,11 @@ from ..rendering import ChatRenderer
 from ..views.dialogs import confirm_tool
 from ..workers import ChatWorker
 
+logger = logging.getLogger(__name__)
+
 
 MAX_HISTORY_MESSAGES = 60
-RECENT_TURNS_TO_KEEP = 12
+MIN_TURNS_TO_KEEP = 12
 
 
 _NARRATION_TEMPLATES = {
@@ -198,9 +202,9 @@ class ChatController(QObject):
         user_positions = [
             i for i, m in enumerate(self.messages) if m.get("role") == "user"
         ]
-        if len(user_positions) <= RECENT_TURNS_TO_KEEP:
+        if len(user_positions) <= MIN_TURNS_TO_KEEP:
             return
-        cut_at = user_positions[-RECENT_TURNS_TO_KEEP]
+        cut_at = user_positions[-MIN_TURNS_TO_KEEP]
         self.messages = self.messages[cut_at:]
 
     def _persist(self) -> None:

@@ -108,3 +108,94 @@ def test_capabilities_different_models_not_shared_in_cache(monkeypatch):
     get_capabilities("http://localhost:11434", "modelo-a")
     get_capabilities("http://localhost:11434", "modelo-b")
     assert len(calls) == 2
+
+
+# ── context_length ─────────────────────────────────────────────────────
+
+def test_context_length_extracted_from_llama_arch(monkeypatch):
+    """model_info con clave 'llama.context_length' se extrae."""
+    _patch_post(monkeypatch, data={
+        "capabilities": ["tools"],
+        "model_info": {"llama.context_length": 131072},
+    })
+    caps = get_capabilities("http://localhost:11434", "llama3.1")
+    assert caps.context_length == 131072
+
+
+def test_context_length_extracted_from_qwen_arch(monkeypatch):
+    """Otras arquitecturas usan prefijos distintos."""
+    _patch_post(monkeypatch, data={
+        "capabilities": ["tools"],
+        "model_info": {"qwen2.context_length": 32768},
+    })
+    caps = get_capabilities("http://localhost:11434", "qwen2.5")
+    assert caps.context_length == 32768
+
+
+def test_context_length_accepts_flat_key(monkeypatch):
+    """Algunas versiones de Ollama exponen 'context_length' sin prefijo."""
+    _patch_post(monkeypatch, data={
+        "capabilities": ["tools"],
+        "model_info": {"context_length": 8192},
+    })
+    caps = get_capabilities("http://localhost:11434", "modelo")
+    assert caps.context_length == 8192
+
+
+def test_context_length_unknown_returns_zero(monkeypatch):
+    """Sin model_info o sin la clave, context_length es 0 (desconocido)."""
+    _patch_post(monkeypatch, data={"capabilities": ["tools"]})
+    caps = get_capabilities("http://localhost:11434", "modelo")
+    assert caps.context_length == 0
+
+
+def test_context_length_ignores_invalid_values(monkeypatch):
+    """Valores no numéricos o negativos se ignoran."""
+    for valor in [None, "muchos", -1, 0, True]:
+        _patch_post(monkeypatch, data={
+            "capabilities": ["tools"],
+            "model_info": {"llama.context_length": valor},
+        })
+        clear_cache()
+        caps = get_capabilities("http://localhost:11434", "modelo")
+        assert caps.context_length == 0, f"Valor inválido {valor!r} aceptado"
+
+
+def test_context_length_from_float(monkeypatch):
+    """Algunos modelos exponen el valor como float (131072.0)."""
+    _patch_post(monkeypatch, data={
+        "capabilities": ["tools"],
+        "model_info": {"llama.context_length": 131072.0},
+    })
+    caps = get_capabilities("http://localhost:11434", "modelo")
+    assert caps.context_length == 131072
+    assert isinstance(caps.context_length, int)
+
+
+def test_context_length_on_fallback_error(monkeypatch):
+    """Si /api/show falla, context_length es 0 (desconocido)."""
+    import httpx
+    request = httpx.Request("POST", "http://localhost:11434/api/show")
+    _patch_post(
+        monkeypatch,
+        raise_exc=httpx.ConnectError("no server", request=request),
+    )
+    caps = get_capabilities("http://localhost:11434", "modelo")
+    assert caps.context_length == 0
+    assert caps.probed is False
+
+
+def test_context_length_on_override(monkeypatch):
+    """Con override manual, context_length es 0 (no consultamos /api/show)."""
+    from core.models_config import set_override
+
+    set_override("modelo-forzado", "xml")
+    try:
+        caps = get_capabilities("http://localhost:11434", "modelo-forzado")
+        assert caps.context_length == 0
+        assert caps.source == "override"
+    finally:
+        # Limpiar el override al terminar
+        from core.models_config import ModelsConfig
+        cfg = ModelsConfig()
+        cfg.remove("modelo-forzado")
