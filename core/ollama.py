@@ -6,11 +6,17 @@ import json
 import logging
 import re
 import threading
-from typing import Any, Callable
+from typing import Any, AsyncIterator, Callable
 
 import httpx
 
 from .async_runner import AsyncRunner, _CancelledByEvent
+from .stream_events import (
+    StreamEvent,
+    StreamFinished,
+    TextDelta,
+    ToolCallsDelta,
+)
 from .intent import ToolIntentGate
 from .model_capabilities import get_capabilities
 from .tool_strategies import (
@@ -422,6 +428,69 @@ class OllamaClient:
         except asyncio.CancelledError:
             raise OllamaCancelled("Operación cancelada por el usuario.")
 
+    async def _iter_ollama_events(
+        self,
+        payload: dict[str, Any],
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> AsyncIterator[StreamEvent]:
+        """Itera sobre los eventos del stream de Ollama.
+
+        Puro parsing NDJSON + emision de eventos tipados. No conoce
+        callbacks ni la UI. Emite:
+          - TextDelta por cada fragmento de texto.
+          - ToolCallsDelta por cada bloque de tool_calls nativos.
+          - StreamFinished al final, con el mensaje completo.
+
+        Los errores se propagan por excepcion (OllamaError,
+        OllamaCancelled), no como eventos.
+        """
+        message: dict[str, Any] = {"role": "assistant", "content": ""}
+        content_parts: list[str] = []
+        buffer = ""
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
+        client = await self._get_client()
+        async with client.stream(
+            "POST", f"{self.host}/api/chat", json=payload
+        ) as response:
+            response.raise_for_status()
+
+            async for raw_chunk in response.aiter_bytes(chunk_size=1024):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise OllamaCancelled(
+                        "Operacion cancelada por el usuario."
+                    )
+                buffer += decoder.decode(raw_chunk)
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+                    event = self._handle_line_event(
+                        line, message, content_parts
+                    )
+                    if event is not None:
+                        yield event
+                    if message.get("_done"):
+                        break
+                if message.get("_done"):
+                    break
+
+            tail = decoder.decode(b"", final=True)
+            if tail:
+                buffer += tail
+            if buffer.strip() and not message.get("_done"):
+                event = self._handle_line_event(
+                    buffer.strip(), message, content_parts
+                )
+                if event is not None:
+                    yield event
+
+        message.pop("_done", None)
+        message["content"] = "".join(content_parts)
+        yield StreamFinished(message=message)
+
     async def _stream_async(
         self,
         model: str,
@@ -432,7 +501,12 @@ class OllamaClient:
         cancel_event: threading.Event | None = None,
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Corrutina cancelable. Emite deltas según llegan."""
+        """Wrapper sync-friendly sobre _iter_ollama_events.
+
+        Consume el iterador y aplica la logica de buffering
+        adaptativo + callbacks. Mantenemos esta capa para no romper
+        la firma de chat() todavia.
+        """
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -444,62 +518,23 @@ class OllamaClient:
         if options:
             payload["options"] = options
 
-        message: dict[str, Any] = {"role": "assistant", "content": ""}
-        content_parts: list[str] = []
-        buffer = ""
-        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        message: dict[str, Any] = {}
         buffering_textual = False
 
-        client = await self._get_client()
-        async with client.stream(
-            "POST", f"{self.host}/api/chat", json=payload
-        ) as response:
-            response.raise_for_status()
-
-            # Streaming con buffering adaptativo: emitimos cada delta
-            # en cuanto llega. Si el primer caracter parece una tool
-            # call textual (empieza por { o [), activamos buffering
-            # para no mostrar el JSON crudo al usuario.
-            async for raw_chunk in response.aiter_bytes(chunk_size=1024):
-                if cancel_event is not None and cancel_event.is_set():
-                    raise OllamaCancelled(
-                        "Operación cancelada por el usuario."
-                    )
-                buffer += decoder.decode(raw_chunk)
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
-                    line = line.strip()
-                    if not line:
-                        continue
-                    delta = self._handle_line(line, message, content_parts)
-                    if delta and on_text is not None and not buffering_textual:
-                        prefix = delta.lstrip()[:1]
-                        if prefix in ("{", "["):
-                            buffering_textual = True
-                        else:
-                            on_text(delta)
-                    if message.get("_done"):
-                        break
-                if message.get("_done"):
-                    break
-
-            tail = decoder.decode(b"", final=True)
-            if tail:
-                buffer += tail
-            if buffer.strip() and not message.get("_done"):
-                delta = self._handle_line(
-                    buffer.strip(), message, content_parts
-                )
-                if delta and on_text is not None and not buffering_textual:
-                    prefix = delta.lstrip()[:1]
+        async for event in self._iter_ollama_events(
+            payload, cancel_event=cancel_event
+        ):
+            if isinstance(event, TextDelta):
+                if on_text is not None and not buffering_textual:
+                    prefix = event.text.lstrip()[:1]
                     if prefix in ("{", "["):
                         buffering_textual = True
                     else:
-                        on_text(delta)
+                        on_text(event.text)
+            elif isinstance(event, StreamFinished):
+                message = event.message
 
-        content = "".join(content_parts)
-        message.pop("_done", None)
-
+        content = message.get("content", "")
         textual_name: str | None = None
         if content and not message.get("tool_calls"):
             tool_names = {
@@ -508,7 +543,9 @@ class OllamaClient:
                 if item.get("function", {}).get("name")
             }
             if tool_names:
-                textual_name = self._textual_tool_call_name(content, tool_names)
+                textual_name = self._textual_tool_call_name(
+                    content, tool_names
+                )
                 if textual_name:
                     message["_textual_tool_name"] = textual_name
 
@@ -517,9 +554,40 @@ class OllamaClient:
         if buffering_textual and on_text is not None and not textual_name:
             on_text(content)
 
-        message["content"] = content
         return message
 
+    @staticmethod
+    def _handle_line_event(
+        line: str,
+        message: dict[str, Any],
+        content_parts: list[str],
+    ) -> StreamEvent | None:
+        """Procesa una linea NDJSON. Devuelve un StreamEvent o None."""
+        try:
+            data = json.loads(line)
+        except ValueError:
+            return None
+        chunk = data.get("message") or {}
+
+        calls_raw = chunk.get("tool_calls")
+        if calls_raw:
+            message.setdefault("tool_calls", []).extend(calls_raw)
+
+        delta: str | None = None
+        if chunk.get("content"):
+            delta = str(chunk["content"])
+            content_parts.append(delta)
+
+        if data.get("done"):
+            message["_done"] = True
+
+        if delta is not None:
+            return TextDelta(delta)
+        if calls_raw:
+            return ToolCallsDelta(calls=tuple(calls_raw))
+        return None
+
+    @staticmethod
     @staticmethod
     def _handle_line(
         line: str,
