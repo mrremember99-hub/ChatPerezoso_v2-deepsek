@@ -25,6 +25,7 @@ from . import token_calibration
 from .model_capabilities import get_capabilities
 from .models_config import get_override
 from .tool_strategies import (
+    RoundResult,
     NativeToolStrategy,
     XmlToolStrategy,
     authorize_and_execute,
@@ -59,6 +60,14 @@ class _ChatContext:
     tool_names: set[str]
     send_tools: list[dict[str, Any]] | None
     buffer_only: bool
+
+
+@dataclass
+class _RoundExecution:
+    """Resumen de una ronda con tool calls."""
+    round_signature: str | None
+    had_block: bool
+    had_execution: bool
 
 
 
@@ -303,51 +312,13 @@ class OllamaClient:
 
             # Hay tool calls: ejecutar y volver a la siguiente ronda.
             if result.tool_calls:
-                # El mensaje assistant del historial DEBE incluir los
-                # tool_calls que emitió el modelo. Sin esto, el chat
-                # template del modelo en Ollama ve un mensaje `tool`
-                # huérfano en la siguiente ronda y el modelo vuelve a
-                # llamar a la misma herramienta en bucle.
-                history.append({
-                    "role": "assistant",
-                    "content": result.assistant_content,
-                    "tool_calls": [
-                        {
-                            "function": {
-                                "name": name,
-                                "arguments": args,
-                            }
-                        }
-                        for name, args in result.tool_calls
-                    ],
-                })
-                round_had_block = False
-                round_had_execution = False
-                round_signature: str | None = None
-                for name, args in result.tool_calls:
-                    result_text = authorize_and_execute(
-                        name, args, gate, authorization_text, on_tool
-                    )
-                    # authorize_and_execute devuelve el mensaje de
-                    # bloqueo cuando el gate rechaza, o el resultado
-                    # real cuando ejecuta. Distinguimos por prefijo.
-                    if result_text.startswith("OPERACIÓN NO AUTORIZADA"):
-                        round_had_block = True
-                    else:
-                        round_had_execution = True
-                        # Firma estable: nombre + args ordenados.
-                        try:
-                            import json as _json
-                            key = _json.dumps(
-                                {"name": name, "args": args},
-                                sort_keys=True,
-                                ensure_ascii=False,
-                                default=str,
-                            )
-                        except Exception:
-                            key = f"{name}:{args!r}"
-                        round_signature = key
-                    history.append(strategy.format_tool_result(name, result_text))
+                # Ejecutar las tool calls. El mensaje assistant con
+                # tool_calls se appendea dentro del metodo para que el
+                # chat template del modelo entienda la cadena.
+                execution = self._execute_round_tools(ctx, result)
+                round_signature = execution.round_signature
+                round_had_block = execution.had_block
+                round_had_execution = execution.had_execution
 
                 # Detección de "sin progreso": si el modelo repite la
                 # misma operación con los mismos argumentos dos veces
@@ -524,6 +495,54 @@ class OllamaClient:
                 ctx.on_metrics(round_metrics)
             except Exception:
                 pass
+
+    @staticmethod
+    def _execute_round_tools(
+        ctx: _ChatContext,
+        result: RoundResult,
+    ) -> _RoundExecution:
+        """Ejecuta las tool calls de una ronda.
+
+        Appendea el mensaje assistant con tool_calls al historial
+        (necesario para que el chat template del modelo entienda la
+        cadena tool_call -> tool_result), ejecuta cada tool via
+        `authorize_and_execute`, y devuelve el resumen.
+        """
+        ctx.history.append({
+            "role": "assistant",
+            "content": result.assistant_content,
+            "tool_calls": [
+                {"function": {"name": name, "arguments": args}}
+                for name, args in result.tool_calls
+            ],
+        })
+        had_block = False
+        had_execution = False
+        signature: str | None = None
+        for name, args in result.tool_calls:
+            text = authorize_and_execute(
+                name, args, ctx.gate,
+                ctx.authorization_text, ctx.on_tool,
+            )
+            if text.startswith("OPERACIÓN NO AUTORIZADA"):
+                had_block = True
+            else:
+                had_execution = True
+                try:
+                    signature = json.dumps(
+                        {"name": name, "args": args},
+                        sort_keys=True, ensure_ascii=False, default=str,
+                    )
+                except Exception:
+                    signature = f"{name}:{args!r}"
+            ctx.history.append(
+                ctx.strategy.format_tool_result(name, text)
+            )
+        return _RoundExecution(
+            round_signature=signature,
+            had_block=had_block,
+            had_execution=had_execution,
+        )
 
     @staticmethod
     def _fit_round_history(
