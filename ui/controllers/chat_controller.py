@@ -351,8 +351,12 @@ class ChatController(QObject):
         if not user_text:
             return
         self._last_model = model
-        if last_user_idx < len(self.messages) - 1:
-            self.messages = self.messages[:last_user_idx]
+        # Truncar SIEMPRE a last_user_idx. El guard anterior
+        # (last_user_idx < len - 1) fallaba cuando el ultimo mensaje
+        # era un user sin respuesta (turno cancelado). En ese caso,
+        # send() volvia a anadir el mismo user y el mensaje se
+        # duplicaba en el historial.
+        self.messages = self.messages[:last_user_idx]
         self.renderer.remove_from_last_user()
         self.send(user_text, model, self._last_options, self._last_system_prompt)
 
@@ -572,10 +576,19 @@ class ChatController(QObject):
         self.renderer.insert_tool_card(result)
 
     def _on_confirmation(self, name: str, arguments: dict[str, Any]) -> None:
-        if self._worker is None:
+        worker = self._worker
+        if worker is None:
             return
         approved = confirm_tool(self._parent_widget, name, arguments)
-        self._worker.resolve_confirmation(approved)
+        # Recheck: durante el event loop anidado del dialogo, _cleanup
+        # puede haber puesto self._worker a None (cancelacion, cierre
+        # de ventana). Sin este recheck, resolve_confirmation falla
+        # con AttributeError.
+        try:
+            if self._worker is worker:
+                worker.resolve_confirmation(approved)
+        except RuntimeError:
+            pass
 
     def _on_worker_metrics(self, metrics: dict) -> None:
         """Reenvía las métricas del worker al resto de la app."""
