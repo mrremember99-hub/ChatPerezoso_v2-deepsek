@@ -94,6 +94,10 @@ class HistoryStore:
             if m.get("role") in {"user", "assistant"}
             and isinstance(m.get("content"), str)
         ]
+        # Mismo limite que en load(). Sin esto, una sesion larga
+        # guardaba todos los mensajes en disco, y al recargar solo
+        # se veian los ultimos 200. El resto se perdia en silencio.
+        serializable = serializable[-_MAX_MESSAGES:]
         payload = {
             "messages": serializable,
             "model": model,

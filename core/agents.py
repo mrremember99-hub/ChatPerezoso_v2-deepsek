@@ -249,6 +249,11 @@ class AgentStore:
         if not raw_agents:
             return []
 
+        # El nombre de un agente es un identificador UNICO en toda la
+        # app: set_active() lo busca por nombre, el sidebar agrupa por
+        # categoria pero asume unicidad global. Si dos agentes del
+        # JSON comparten nombre (por ejemplo tras editar a mano el
+        # archivo), se descarta el segundo y se avisa por log.
         agents: list[Agent] = []
         seen_names: set[str] = set()
         for raw in raw_agents:
@@ -270,9 +275,15 @@ class AgentStore:
         }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(
+            # Escritura atomica: escribir a .tmp y renombrar. Si el
+            # proceso muere a mitad, agents.json queda intacto (el
+            # .tmp se ignora y el replace() es atomico en POSIX).
+            # Mismo patron que HistoryStore.save.
+            tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
+            tmp_path.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+            tmp_path.replace(self.path)
         except OSError:
             pass
