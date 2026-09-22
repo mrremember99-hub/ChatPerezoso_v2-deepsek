@@ -510,12 +510,17 @@ class OllamaClient:
         rules_method = getattr(tools, "intent_rules", None)
         if callable(rules_method):
             rules = rules_method()
-            # Defensa: un provider roto podría devolver algo que no es
-            # un dict. Caemos al registro global antes que romper.
+            # Defensa: un provider roto podria devolver algo que no
+            # es un dict. Fail-closed: gate vacio (bloquea todo) en
+            # vez de tirar del registro global, que solo existe para
+            # tests. Un provider roto debe fallar cerrado, no abierto.
             if not isinstance(rules, dict):
-                return ToolIntentGate(dict(ToolIntentGate._RULES_REGISTRY))
-            ToolIntentGate.register_rules(rules)
+                return ToolIntentGate({})
             return ToolIntentGate(rules)
+        # Path de compatibilidad con tests (listas sueltas, sin
+        # provider). El registro global existe SOLO como mecanismo de
+        # tests. El codigo productivo siempre pasa un ToolProvider con
+        # intent_rules(). No escribir al registro desde aqui.
         return ToolIntentGate(dict(ToolIntentGate._RULES_REGISTRY))
 
     # -- system prompt -------------------------------------------------------
