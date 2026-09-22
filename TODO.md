@@ -80,3 +80,32 @@
   por segundo), no múltiples mutaciones seguidas. Deshabilitar el
   layout en cada drain es overhead puro.
   Revertido. No reintentar sin cambiar el patrón de streaming.
+
+---
+
+## Auditoría 2026-09 — estado
+
+Auditoría completa en `docs/audit-2026-09.md`. Resumen:
+
+**Aplicado:**
+- Fase 1: race `AsyncRunner`, mutación system prompt, señal muerta,
+  bloqueo `_refresh_capabilities`.
+- Fase 2.2: trocear Markdown durante streaming (−99.6% en el pico de
+  render al cerrar respuesta).
+- Fase 3: `ToolIntentGate` sin registro global mutable.
+- Fase 4: `__del__` con close_callback, sidebar busy, guard en
+  `_render_markdown_block`.
+
+**Descartado con datos:**
+- Fase 2.1 (`setLayoutEnabled`): empeora el rendimiento en el patrón
+  real de la app. No reintentar sin cambiar el patrón de streaming.
+
+**Nuevos pendientes que aparecieron durante la auditoría:**
+- [ ] Comprobar si `granite4.1:3b` es un buen modelo por defecto para
+      usuarios con poca RAM. `gemma4:12b` da TTFT 85 s si el sistema
+      está cargado (presión de memoria).
+- [ ] Evaluar timeouts adaptativos: extender el `read` de httpx si el
+      stream sigue produciendo datos. Hoy es fijo a 300 s.
+- [ ] Benchmark de MikeVeerman si el repo existe: `tool-calling-benchmark`.
+      El benchmark propio del `ToolIntentGate` (`scripts/benchmark_intent_gate.py`)
+      cubre el 80% del valor.
