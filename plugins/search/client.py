@@ -11,8 +11,9 @@ número de matches, profundidad) es idéntico en ambos motores.
 """
 from __future__ import annotations
 
+import contextlib as _contextlib
 import os
-import threading
+import threading as _threading
 from pathlib import Path
 
 # Motor preferido: re2 (lineal, sin ReDoS).
@@ -58,6 +59,49 @@ _REGEX_LINE_TIMEOUT_SECONDS = 0.5
 
 
 
+# Lock global para serializar las redirecciones de fd 2. La
+# redireccion de file descriptors es a nivel de proceso: si dos
+# hilos la hacen a la vez, uno restaura mientras el otro todavia
+# cree que stderr esta silenciado.
+_STDERR_SILENCE_LOCK = _threading.Lock()
+
+
+@_contextlib.contextmanager
+def _silenced_c_stderr():
+    """Silencia fd 2 durante una llamada a una extensión C que escribe
+    a stderr directamente.
+
+    re2 usa absl logging, que escribe a fd 2 sin pasar por sys.stderr.
+    Sin esto, un patrón inválido del usuario imprime dos líneas rojas
+    de la librería C++ antes del mensaje limpio de la app.
+
+    No usa sys.stderr porque esa es una capa Python; re2 escribe al
+    descriptor de archivo subyacente. Hay que redirigir el fd real.
+    """
+    with _STDERR_SILENCE_LOCK:
+        try:
+            devnull = os.open(os.devnull, os.O_WRONLY)
+        except OSError:
+            # Si no podemos abrir /dev/null, seguimos sin silenciar.
+            yield
+            return
+        try:
+            old_stderr = os.dup(2)
+            os.dup2(devnull, 2)
+        except OSError:
+            os.close(devnull)
+            yield
+            return
+        try:
+            yield
+        finally:
+            try:
+                os.dup2(old_stderr, 2)
+            finally:
+                os.close(old_stderr)
+                os.close(devnull)
+
+
 def _compile_pattern(query: str, case_sensitive: bool):
     """Compila el patrón con el motor disponible.
 
@@ -69,7 +113,11 @@ def _compile_pattern(query: str, case_sensitive: bool):
         options = _re2.Options()
         options.case_sensitive = case_sensitive
         try:
-            return _re2.compile(query, options), True
+            # re2 (la parte C++) imprime a fd 2 los errores de parsing.
+            # Silenciamos el fd durante la compilación para que el
+            # usuario solo vea el mensaje limpio de la app.
+            with _silenced_c_stderr():
+                return _re2.compile(query, options), True
         except Exception as exc:
             # Cualquier fallo de compilación de re2 se traduce a
             # SearchError. El mensaje explica la limitación concreta.

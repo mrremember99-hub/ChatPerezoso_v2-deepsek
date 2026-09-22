@@ -227,3 +227,34 @@ def test_pathological_regex_does_not_hang_search(tmp_path):
     # El resultado debe ser un texto (vacío, sin coincidencias, o error
     # controlado), no un cuelgue.
     assert isinstance(resultado, str)
+
+
+# ── Silenciado de stderr de re2 ──────────────────────────────────────
+
+def test_compile_pattern_silences_re2_stderr(tmp_path):
+    """Un patrón rechazado por re2 no debe contaminar stderr.
+
+    re2 (C++) escribe a fd 2 directamente vía absl. Sin el
+    silenciador, un lookbehind del usuario imprime dos líneas de
+    la librería C++ antes del mensaje limpio de la app.
+    """
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-c", """
+import sys
+sys.path.insert(0, '.')
+from plugins.search.client import _compile_pattern, SearchError
+try:
+    _compile_pattern(r'(?<=a)b', case_sensitive=False)
+except SearchError:
+    pass
+"""],
+        capture_output=True,
+        text=True,
+        cwd=".",
+    )
+    assert result.stderr == "", (
+        f"re2 contaminó stderr: {result.stderr!r}"
+    )
