@@ -44,3 +44,4 @@ prompt-prueba.md
 --chunk-size
 baseline-*-renderer.txt
 after-*-renderer.txt
+tmp/
