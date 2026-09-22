@@ -80,6 +80,21 @@ class MCPController(QObject):
         self.bridge = bridge
         self.workspace = workspace
         self.entries = self.store.load(str(workspace.root))
+        for entry in self.entries:
+            if entry.enabled:
+                args = list(entry.args)
+                blob = " ".join([entry.command, *args]).lower()
+                markers = (
+                    "server-filesystem",
+                    "server_filesystem",
+                    "server_fs",
+                )
+                if args and any(m in blob for m in markers):
+                    args[-1] = str(workspace.root)
+                self._connect(
+                    entry.id, entry.command,
+                    args=tuple(args), env=entry.env,
+                )
         self._emit_changed()
 
     def toggle(self, server_id: str, enabled: bool) -> None:
