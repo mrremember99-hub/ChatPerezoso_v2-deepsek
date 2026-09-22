@@ -109,3 +109,14 @@ Auditoría completa en `docs/audit-2026-09.md`. Resumen:
 - [ ] Benchmark de MikeVeerman si el repo existe: `tool-calling-benchmark`.
       El benchmark propio del `ToolIntentGate` (`scripts/benchmark_intent_gate.py`)
       cubre el 80% del valor.
+
+### Pendientes descartados en la continuación
+
+- **Timeouts adaptativos.** Medido con `qwen3:14b` thinking ON:
+  peor TTFT = 42 s (carga en frío). `httpx.Timeout(read=300)` es
+  por lectura, no total. No hay caso donde se dispare. Si aparece
+  un TTFT > 300 s, subir `read` a 600 s en `core/ollama.py` es una
+  línea. No hace falta diseño adaptativo.
+
+- **Benchmark de MikeVeerman.** El repo no existe con ese nombre.
+  Usar `scripts/benchmark_intent_gate.py` como referencia.
