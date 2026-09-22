@@ -231,6 +231,7 @@ class AppController(QObject):
         self.chat_ctrl.queue_item_status_changed.connect(
             self.view.right_panel.update_queue_item
         )
+        self.chat_ctrl.queue_finished.connect(self._on_queue_finished)
         self.chat_ctrl.metrics_updated.connect(self.diagnostics_ctrl.set_metrics)
 
         s.clear_chat_requested.connect(self._clear_chat)
@@ -485,11 +486,15 @@ class AppController(QObject):
 
     @Slot()
     def _on_message_submitted(self) -> None:
-        text = self.view.chat_panel.take_input()
-        if not text:
-            return
+        # Verificar el modelo ANTES de consumir el input. Si Ollama
+        # no responde o el usuario no ha elegido modelo, el texto
+        # se perderia en el clear() de take_input().
         model = self.view.sidebar.current_model()
         if not model:
+            self.view.set_status("Selecciona un modelo antes de enviar")
+            return
+        text = self.view.chat_panel.take_input()
+        if not text:
             return
         agent = self.agent_ctrl.active_agent()
         self.chat_ctrl.send(
@@ -501,15 +506,22 @@ class AppController(QObject):
 
     @Slot()
     def _on_send_all_requested(self) -> None:
-        text = self.view.chat_panel.take_input()
-        if not text:
-            return
+        # Mismo orden que _on_message_submitted: verificar modelo
+        # antes de consumir el input.
         model = self.view.sidebar.current_model()
         if not model:
             self.view.set_status("Selecciona un modelo antes de enviar")
             return
+        text = self.view.chat_panel.take_input()
+        if not text:
+            return
         prompts = split_prompts(text)
         if not prompts:
+            # No hay nada que enviar. Restaurar el texto al input
+            # para que el usuario no lo pierda por escribir solo un
+            # separador (--- o ===).
+            self.view.chat_panel.input.setPlainText(text)
+            self.view.set_status("No hay prompts válidos en el texto")
             return
         if len(prompts) == 1:
             # Sin separadores: tratar como un mensaje normal, sin cola.
@@ -528,6 +540,13 @@ class AppController(QObject):
     @Slot(int, int)
     def _on_queue_progress(self, current: int, total: int) -> None:
         self.view.set_status(f"Cola: {current}/{total}")
+
+    @Slot()
+    def _on_queue_finished(self) -> None:
+        # Limpiar el todo list del panel derecho. Sin esta conexion,
+        # los items quedaban visibles tras terminar la cola hasta
+        # que el usuario enviara algo nuevo.
+        self.view.right_panel.set_queue_list([])
 
     @Slot()
     def _on_regenerate(self) -> None:
