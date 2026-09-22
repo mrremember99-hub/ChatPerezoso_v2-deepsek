@@ -310,7 +310,12 @@ def _confirm_file_write(parent: QWidget | None, name: str, arguments: dict) -> b
 
 
 def warn(parent: QWidget | None, title: str, message: str) -> None:
-    QMessageBox.warning(parent, title, message)
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setWindowTitle(title)
+    box.setText(message)
+    box.setTextFormat(Qt.TextFormat.PlainText)
+    box.exec()
 
 
 # -- agente ------------------------------------------------------------------
