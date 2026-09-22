@@ -209,25 +209,6 @@ class ChatController(QObject):
         self._advance_queue()
         return True
 
-    def cancel_queue(self) -> None:
-        """Vacía la cola sin tocar el turno en curso.
-
-        El prompt que se está generando en este momento sigue hasta
-        terminar (o hasta que el usuario pulse Detener). Lo que se
-        cancela es lo que queda por enviar.
-        """
-        if not self._queue_active:
-            return
-        # Marcar como cancelados todos los pendientes en el todo list.
-        current = self._queue_total - len(self._queue)
-        for offset in range(len(self._queue)):
-            idx = current + offset + 1
-            self.queue_item_status_changed.emit(idx, "cancelled")
-        self._queue.clear()
-        self._queue_total = 0
-        self._queue_active = False
-        self.queue_finished.emit()
-
     def has_queue(self) -> bool:
         return self._queue_active
 
@@ -620,8 +601,19 @@ class ChatController(QObject):
         summary = self._summarize_actions()
         if summary:
             self.renderer.insert_narration(summary, active=False)
-        self._append_message({"role": "assistant", "content": response_text})
-        self.assistant_message.emit(response_text)
+        # Solo añadir al historial si hay contenido real. Un assistant
+        # vacio no aporta nada y contamina el prompt del siguiente
+        # turno (el modelo puede confundirse con mensajes vacios).
+        if response_text.strip():
+            self._append_message(
+                {"role": "assistant", "content": response_text}
+            )
+            self.assistant_message.emit(response_text)
+        else:
+            self.renderer.insert_narration(
+                "El modelo no genero respuesta en este turno.",
+                active=False,
+            )
         self._finish("Listo")
 
     def _summarize_actions(self) -> str:

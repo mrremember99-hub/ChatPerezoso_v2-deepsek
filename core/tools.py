@@ -210,6 +210,13 @@ class ToolRegistry:
         allow_destructive: bool = False,
         cancel_event: threading.Event | None = None,
     ) -> str:
+        # `cancel_event` se acepta por compatibilidad con el Protocol
+        # ToolProvider, pero las operaciones locales son I/O sincrono
+        # sobre el workspace del usuario (lectura de archivos, listado)
+        # y terminan en milisegundos. Cancelarlas requeriria threading
+        # por operacion, que añade mas complejidad que beneficio. Los
+        # providers que si tienen operaciones largas (search, shell,
+        # git) implementan su propio cancel.
         del cancel_event
         spec = self._spec_by_name.get(name)
         if spec is None:
