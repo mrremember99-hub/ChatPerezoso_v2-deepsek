@@ -140,7 +140,7 @@ class MCPWorker(QObject):
     finished = Signal(str, object, list)
     error = Signal(str, str)
 
-    def __init__(self, server_id: str, client: MCPClient):
+    def __init__(self, server_id: str, client: Any):
         super().__init__()
         self.server_id = server_id
         self.client = client
