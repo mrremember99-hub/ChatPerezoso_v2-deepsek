@@ -13,6 +13,11 @@ Formato de models.json:
         },
         "llama3.1:latest": {
           "mode": "native"
+        },
+        "qwen3:14b": {
+          "mode": "native",
+          "thinking": false,
+          "note": "thinking off para TTFT bajo"
         }
       }
     }
@@ -22,7 +27,13 @@ Valores válidos de "mode":
   · "xml"    — fuerza prompt-guided XML (bloque <tool_call>)
   · "auto"   — delega en /api/show (comportamiento por defecto)
 
-Si un modelo no aparece en models.json, se usa "auto".
+Valores válidos de "thinking":
+  · true     — fuerza thinking (razonamiento interno)
+  · false    — desactiva thinking (TTFT bajo, respuestas directas)
+  · ausente  — Ollama decide según el modelo (comportamiento por defecto)
+
+Si un modelo no aparece en models.json, se usa "auto" sin override de
+thinking.
 """
 from __future__ import annotations
 
@@ -44,6 +55,14 @@ VALID_MODES = frozenset({"native", "xml", "auto"})
 class ModelOverride:
     mode: str  # "native" | "xml" | "auto"
     note: str = ""
+    # None = auto (Ollama decide). True/False fuerza el parámetro
+    # `think` en el payload de /api/chat. Solo aplica a modelos con
+    # capability "thinking" (qwen3, north-mini-code, muse-glimmer...).
+    thinking: bool | None = None
+    # Texto corto que se muestra en la sidebar debajo del badge de
+    # capabilities. Si está vacío, se genera uno automáticamente a
+    # partir de las capabilities del modelo.
+    recommendation: str = ""
 
     def is_forced(self) -> bool:
         return self.mode in ("native", "xml")
@@ -61,18 +80,35 @@ class ModelsConfig:
         self._ensure_loaded()
         return self._overrides.get(model, ModelOverride(mode="auto"))
 
-    def set(self, model: str, mode: str, note: str = "") -> None:
+    def set(
+        self,
+        model: str,
+        mode: str,
+        note: str = "",
+        thinking: bool | None = None,
+        recommendation: str = "",
+    ) -> None:
         if mode not in VALID_MODES:
             raise ValueError(
                 f"Modo inválido: {mode!r}. Debe ser uno de {sorted(VALID_MODES)}"
             )
         self._ensure_loaded()
-        if mode == "auto" and not note:
-            # "auto" sin nota es el default: no lo guardamos, así el
-            # archivo solo contiene lo que difiere de la detección.
+        # "auto" sin ningún extra es el default puro: no guardamos nada,
+        # así el archivo solo contiene lo que difiere de la detección.
+        if (
+            mode == "auto"
+            and not note
+            and thinking is None
+            and not recommendation
+        ):
             self._overrides.pop(model, None)
         else:
-            self._overrides[model] = ModelOverride(mode=mode, note=note)
+            self._overrides[model] = ModelOverride(
+                mode=mode,
+                note=note,
+                thinking=thinking,
+                recommendation=recommendation,
+            )
         self._save()
 
     def remove(self, model: str) -> None:
@@ -118,7 +154,22 @@ class ModelsConfig:
                 )
                 continue
             note = str(spec.get("note", ""))
-            result[name] = ModelOverride(mode=mode, note=note)
+            raw_thinking = spec.get("thinking")
+            thinking: bool | None
+            if isinstance(raw_thinking, bool):
+                thinking = raw_thinking
+            else:
+                thinking = None
+            raw_rec = spec.get("recommendation", "")
+            recommendation = (
+                str(raw_rec).strip() if isinstance(raw_rec, str) else ""
+            )
+            result[name] = ModelOverride(
+                mode=mode,
+                note=note,
+                thinking=thinking,
+                recommendation=recommendation,
+            )
         return result
 
     def _save(self) -> None:
@@ -127,6 +178,10 @@ class ModelsConfig:
             entry: dict = {"mode": override.mode}
             if override.note:
                 entry["note"] = override.note
+            if override.thinking is not None:
+                entry["thinking"] = override.thinking
+            if override.recommendation:
+                entry["recommendation"] = override.recommendation
             payload["overrides"][name] = entry
 
         try:

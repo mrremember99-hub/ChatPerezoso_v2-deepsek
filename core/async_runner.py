@@ -48,6 +48,66 @@ class AsyncRunner:
         # dentro del loop (httpx.AsyncClient está atado a su loop).
         self._close_callback: "Callable[[], Coroutine[Any, Any, None]] | None" = None
 
+    def __del__(self) -> None:
+        """Cierra el hilo del loop al recolectar el objeto.
+
+        Se ejecuta cuando el AsyncRunner pierde todas sus referencias
+        (por ejemplo, cuando un OllamaClient de un test se recoge).
+        Sin esto, el hilo del loop queda vivo hasta que muere el
+        intérprete, y acumular hilos vivos entre tests provoca SIGBUS
+        con pytest-qt + PySide6 en macOS.
+
+        Si hay un close_callback registrado (por ejemplo, para cerrar
+        el httpx.AsyncClient persistente), se programa su ejecución
+        antes de parar el loop. Se hace en un hilo daemon para no
+        bloquear al GC: un __del__ que espera I/O puede colgar el
+        recolector y provocar deadlocks sutiles.
+        """
+        try:
+            if getattr(self, "_closed", True):
+                return
+            self._closed = True
+            loop = getattr(self, "_loop", None)
+            close_cb = getattr(self, "_close_callback", None)
+            if loop is None or loop.is_closed():
+                return
+
+            if close_cb is None or not loop.is_running():
+                # Sin callback o loop ya parado: solo pedir stop.
+                try:
+                    loop.call_soon_threadsafe(loop.stop)
+                except RuntimeError:
+                    pass
+                return
+
+            def _cleanup() -> None:
+                try:
+                    future = asyncio.run_coroutine_threadsafe(
+                        close_cb(), loop
+                    )
+                    try:
+                        future.result(timeout=1.0)
+                    except Exception:
+                        pass
+                finally:
+                    try:
+                        loop.call_soon_threadsafe(loop.stop)
+                    except RuntimeError:
+                        pass
+
+            try:
+                threading.Thread(target=_cleanup, daemon=True).start()
+            except BaseException:
+                # Si no podemos arrancar el hilo (shutdown del
+                # intérprete), al menos paramos el loop.
+                try:
+                    loop.call_soon_threadsafe(loop.stop)
+                except RuntimeError:
+                    pass
+        except BaseException:
+            # Un __del__ que lanza es peor que un __del__ que falla.
+            pass
+
     def set_close_callback(
         self, callback: "Callable[[], Coroutine[Any, Any, None]]"
     ) -> None:
@@ -61,8 +121,14 @@ class AsyncRunner:
 
     # -- ciclo de vida -------------------------------------------------------
 
-    def _ensure_loop(self) -> None:
-        """Arranca el hilo del event loop si no está corriendo."""
+    def _ensure_loop(self) -> asyncio.AbstractEventLoop:
+        """Arranca el hilo del event loop si no está corriendo.
+
+        Devuelve la referencia al loop vivo. El llamante debe usar el
+        valor devuelto en lugar de leer `self._loop` después: `close()`
+        puede poner el atributo a None desde otro hilo, y leerlo fuera
+        del lock provoca una carrera.
+        """
         with self._lock:
             if self._closed:
                 raise RuntimeError(f"{self.name} ya está cerrado.")
@@ -71,7 +137,7 @@ class AsyncRunner:
                 and self._thread is not None
                 and self._thread.is_alive()
             ):
-                return
+                return self._loop
             self._loop = asyncio.new_event_loop()
             self._thread = threading.Thread(
                 target=self._run_loop,
@@ -79,6 +145,7 @@ class AsyncRunner:
                 daemon=True,
             )
             self._thread.start()
+            return self._loop
 
     def _run_loop(self) -> None:
         assert self._loop is not None
@@ -145,17 +212,19 @@ class AsyncRunner:
 
         Si `timeout` se agota, también cancela y lanza TimeoutError.
         """
-        self._ensure_loop()
-        assert self._loop is not None
+        # `_ensure_loop` devuelve el loop y lo captura dentro del lock.
+        # No leer `self._loop` después: `close()` puede ponerlo a None
+        # desde otro hilo y provocar una carrera.
+        loop = self._ensure_loop()
 
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
         done_signal = threading.Event()
 
         watcher: threading.Thread | None = None
         if cancel_event is not None:
             watcher = threading.Thread(
                 target=self._watch_for_cancel,
-                args=(future, done_signal, cancel_event),
+                args=(future, done_signal, cancel_event, loop),
                 name=f"{self.name}-watch",
                 daemon=True,
             )
@@ -182,18 +251,24 @@ class AsyncRunner:
         future: concurrent.futures.Future,
         done_signal: threading.Event,
         cancel_event: threading.Event,
+        loop: asyncio.AbstractEventLoop,
     ) -> None:
         """Hilo watcher: cancela el future si el cancel_event se activa.
 
-        Bloquea en cancel_event.wait() (coste CPU ≈ 0) en intervalos
-        de _WATCHER_CHECK_INTERVAL_SECONDS para poder salir cuando la
-        corrutina termina por su cuenta.
+        `loop` se captura al crear el watcher y se pasa como argumento
+        para evitar leer `self._loop`, que `close()` puede poner a None
+        mientras este hilo sigue vivo. Sin esto, existe una carrera
+        entre el cierre del runner y el watcher.
         """
-        assert self._loop is not None
         while not done_signal.is_set():
             if cancel_event.wait(timeout=_WATCHER_CHECK_INTERVAL_SECONDS):
                 if not future.done():
-                    self._loop.call_soon_threadsafe(future.cancel)
+                    try:
+                        loop.call_soon_threadsafe(future.cancel)
+                    except RuntimeError:
+                        # El loop se cerró entre el wait y el call.
+                        # No hay nada que cancelar.
+                        pass
                 return
 
 

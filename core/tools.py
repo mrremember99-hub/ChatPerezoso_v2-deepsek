@@ -95,6 +95,39 @@ _SPECS: tuple[dict[str, Any], ...] = (
 )
 
 
+# Verbos que autorizan operaciones de escritura en el workspace. Se
+# usa una tupla compartida para no repetir la lista en crear_archivo y
+# escribir_archivo. Incluye tanto verbos de "sistema de archivos"
+# (crea, escribe) como verbos de "programación" (implementa, añade):
+# un usuario que dice "implementa una función X" está pidiendo
+# implícitamente que se escriba código en algún archivo.
+_WRITE_VERBS: tuple[str, ...] = (
+    # Sistema de archivos
+    "crea", "crear", "cree", "generar", "genera",
+    "escribe", "escribir", "edita", "editar",
+    "actualiza", "actualizar", "reemplaza", "reemplazar",
+    "cambia", "cambiar", "modifica", "modificar",
+    # Programación
+    "implementa", "implementar", "programa", "programar",
+    "desarrolla", "desarrollar", "añade", "añadir",
+    "agrega", "agregar", "incluye", "incluir",
+    "refactoriza", "refactorizar", "corrige", "corregir",
+    "arregla", "arreglar", "completa", "completar",
+)
+
+# Palabras-objetivo que indican que la operación de escritura va sobre
+# código, no solo sobre un archivo literal. Permite que "implementa una
+# función que convierta X" autorice crear_archivo sin nombrar un
+# archivo concreto.
+_CODE_TARGETS: tuple[str, ...] = (
+    "archivo", "fichero", "workspace", "proyecto",
+    "script", "módulo", "modulo", "función", "funcion",
+    "clase", "método", "metodo", "código", "codigo",
+    "programa", "programita", "endpoint", "ruta",
+    "componente", "servicio", "utilidad", "helper",
+)
+
+
 _RULES: dict[str, IntentRule] = {
     "listar_carpeta": IntentRule(
         verbs=("lista", "listar", "muestra", "mostrar", "contenido", "árbol", "arbol"),
@@ -107,8 +140,8 @@ _RULES: dict[str, IntentRule] = {
         is_read_prerequisite=True,
     ),
     "crear_archivo": IntentRule(
-        verbs=("crea", "crear", "cree", "generar", "genera"),
-        target_words=("archivo", "fichero"),
+        verbs=_WRITE_VERBS,
+        target_words=_CODE_TARGETS,
         accepts_filename=True,
     ),
     "crear_carpeta": IntentRule(
@@ -116,11 +149,8 @@ _RULES: dict[str, IntentRule] = {
         target_words=("carpeta", "directorio"),
     ),
     "escribir_archivo": IntentRule(
-        verbs=(
-            "escribe", "escribir", "edita", "editar", "actualiza", "actualizar",
-            "reemplaza", "reemplazar", "cambia", "cambiar", "modifica", "modificar",
-        ),
-        target_words=("archivo", "fichero", "workspace"),
+        verbs=_WRITE_VERBS,
+        target_words=_CODE_TARGETS,
         accepts_filename=True,
     ),
     "borrar_archivo": IntentRule(

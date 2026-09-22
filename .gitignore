@@ -29,3 +29,18 @@ build/
 *.bak
 *.tmp
 *~
+
+# Auditoría y backups locales
+.patches/
+baseline-*.txt
+*.bak-*
+chatperezoso-*.zip
+out.zip
+prompt-prueba.md
+
+# Basura de heredocs rotos
+--deltas
+--repeats
+--chunk-size
+baseline-*-renderer.txt
+after-*-renderer.txt

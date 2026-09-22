@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QWidget
 
 import logging
 
+from core.context_window import ContextWindow
 from core.history import HistoryStore
 from core.ollama import OllamaClient
 from core.tool_provider import ToolProvider
@@ -34,6 +35,15 @@ _FALLBACK_CONTEXT_TOKENS = 4096
 # Umbral de compactacion: 70% del contexto efectivo.
 _COMPACT_THRESHOLD = 0.70
 
+# Intervalo de drain del buffer de streaming. ~30 fps. El worker
+# acumula deltas y el controller los vuelca al renderer a este ritmo.
+# Sustituye al flujo de un Signal por delta.
+_STREAM_DRAIN_INTERVAL_MS = 32
+
+# Tiempo máximo de espera al worker en shutdown. Si no termina en
+# este plazo, se fuerza la salida y se registra en el log.
+_SHUTDOWN_GRACE_MS = 3000
+
 
 _NARRATION_TEMPLATES = {
     "buscar_en_workspace": "Buscando en el workspace…",
@@ -60,17 +70,37 @@ class ChatController(QObject):
     conversation_changed = Signal()
     mcp_error = Signal(str)
     textual_tool_attempt = Signal()
+    # Cola de prompts: (actual, total), 1-based.
+    queue_progress = Signal(int, int)
+    queue_finished = Signal()
+    # Contenido completo de la cola (lista de prompts).
+    queue_list_set = Signal(list)
+    # Estado de un elemento: (índice 1-based, estado).
+    queue_item_status_changed = Signal(int, str)
+    # Métricas reales de la última ronda del worker.
+    metrics_updated = Signal(object)
+
+    # Atributos usados por tests. La app real no los asigna.
+    # Declararlos aquí permite que Pylance no marque los accesos
+    # como error en tests/*.py sin ensuciar el código con # type: ignore.
+    _owner: Any = None
+    _fake_worker: Any = None
+    _fake_thread: Any = None
 
     def __init__(
         self,
         parent: QObject,
-        parent_widget: QWidget,
-        client: OllamaClient,
-        tools: ToolProvider,
+        parent_widget: QWidget | None,
+        client: Any,
+        tools: Any,
         renderer: ChatRenderer,
         store: HistoryStore | None = None,
         initial_messages: list[dict] | None = None,
     ):
+        # `client` y `tools` se anotan como Any porque los tests pasan
+        # dobles que no cumplen los protocolos completos, y el worker
+        # real se sustituye en tests vía _spawn_worker. En producción
+        # siempre llega un OllamaClient y un ToolProvider reales.
         super().__init__(parent)
         self._parent_widget = parent_widget
         self.client = client
@@ -78,15 +108,27 @@ class ChatController(QObject):
         self.renderer = renderer
         self.store = store or HistoryStore()
         self.messages: list[dict] = list(initial_messages or [])
-        self._thread: QThread | None = None
-        self._worker: ChatWorker | None = None
+        # Any porque los tests sustituyen el worker y el thread
+        # reales por dobles que no heredan de ChatWorker/QThread.
+        self._thread: Any = None
+        self._worker: Any = None
         self._state: ChatState = ChatState.IDLE
         self._last_model = ""
         self._last_options: dict[str, Any] | None = None
         self._last_system_prompt = ""
+        # Modo piloto automático: si True, el worker salta el diálogo
+        # de confirmación para todas las tools excepto `ejecutar_comando`.
+        self._auto_approve = False
+        # Cola de prompts para envío secuencial. Vacía = no hay cola.
+        self._queue: list[str] = []
+        self._queue_total: int = 0
+        self._queue_active: bool = False
         self._current_actions: list[ToolResult] = []
         # Limite de contexto del modelo activo, en tokens. 0 = desconocido.
         self._context_limit: int = 0
+        # ContextWindow cacheado. Se recrea solo cuando cambia el
+        # limite efectivo (ver _get_context_window).
+        self._context_window: ContextWindow | None = None
         # Debounce de persistencia: en lugar de escribir todo el
         # historial a disco por cada mensaje, acumulamos cambios y
         # escribimos 500 ms despues del ultimo. Reduce el trabajo
@@ -95,6 +137,14 @@ class ChatController(QObject):
         self._persist_timer.setSingleShot(True)
         self._persist_timer.setInterval(500)
         self._persist_timer.timeout.connect(self._do_persist)
+        # Timer de drain del buffer de streaming. El worker solo emite
+        # `stream_ready` cuando pasa de vacío a no vacío; este timer
+        # hace el drain real cada 32 ms y llama al renderer. Así Qt no
+        # recibe una señal por delta.
+        self._stream_timer = QTimer(self)
+        self._stream_timer.setSingleShot(True)
+        self._stream_timer.setInterval(_STREAM_DRAIN_INTERVAL_MS)
+        self._stream_timer.timeout.connect(self._drain_stream)
 
     # -- API pública ---------------------------------------------------------
     @property
@@ -120,7 +170,128 @@ class ChatController(QObject):
     def rebind_tools(self, tools: ToolProvider) -> None:
         self.tools = tools
 
+    # -- cola de prompts ----------------------------------------------------
+
+    def enqueue(
+        self,
+        prompts: list[str],
+        model: str,
+        options: dict[str, Any] | None = None,
+        system_prompt: str | None = None,
+    ) -> bool:
+        """Encola una lista de prompts y envía el primero.
+
+        Devuelve False si ya hay un turno activo o una cola en curso,
+        o si la lista está vacía. La cola se ejecuta con el mismo
+        modelo, opciones y system prompt hasta que termina o se
+        cancela.
+        """
+        if self._state.is_active or self._queue_active:
+            return False
+        if not prompts or not model:
+            return False
+
+        self._queue = list(prompts)
+        self._queue_total = len(prompts)
+        self._queue_active = True
+
+        # Capturar el contexto para reutilizarlo en cada prompt.
+        self._last_model = model
+        if options is not None:
+            self._last_options = dict(options)
+        if system_prompt is not None:
+            self._last_system_prompt = system_prompt or ""
+
+        # Todo list visual: se emite la lista al panel derecho.
+        if len(prompts) > 1:
+            self.queue_list_set.emit(list(prompts))
+
+        self._advance_queue()
+        return True
+
+    def cancel_queue(self) -> None:
+        """Vacía la cola sin tocar el turno en curso.
+
+        El prompt que se está generando en este momento sigue hasta
+        terminar (o hasta que el usuario pulse Detener). Lo que se
+        cancela es lo que queda por enviar.
+        """
+        if not self._queue_active:
+            return
+        # Marcar como cancelados todos los pendientes en el todo list.
+        current = self._queue_total - len(self._queue)
+        for offset in range(len(self._queue)):
+            idx = current + offset + 1
+            self.queue_item_status_changed.emit(idx, "cancelled")
+        self._queue.clear()
+        self._queue_total = 0
+        self._queue_active = False
+        self.queue_finished.emit()
+
+    def has_queue(self) -> bool:
+        return self._queue_active
+
+    def _stop_queue_with_message(self, message: str) -> None:
+        """Detiene la cola y limpia el estado interno.
+
+        Marca los prompts pendientes como cancelados en el todo list
+        para que el usuario vea qué quedó sin hacer.
+        """
+        # Índice del actual en el todo list.
+        current = self._queue_total - len(self._queue)
+        # Marcar todos los pendientes a partir del siguiente como
+        # cancelados.
+        for offset in range(len(self._queue)):
+            idx = current + offset + 1
+            self.queue_item_status_changed.emit(idx, "cancelled")
+
+        remaining = len(self._queue)
+        self._queue.clear()
+        self._queue_total = 0
+        self._queue_active = False
+        self.queue_finished.emit()
+        if remaining > 0:
+            self.status.emit(f"{message}: {remaining} pendiente(s)")
+
+    def _advance_queue(self) -> None:
+        """Envía el siguiente prompt. Si no hay más, cierra la cola."""
+        if not self._queue:
+            self._queue_total = 0
+            self._queue_active = False
+            self.status.emit("Cola completada")
+            self.queue_finished.emit()
+            return
+
+        current = self._queue_total - len(self._queue) + 1
+        total = self._queue_total
+        next_prompt = self._queue.pop(0)
+        self.queue_progress.emit(current, total)
+        # Marcar el prompt que arranca como "running".
+        self.queue_item_status_changed.emit(current, "running")
+        self.send(
+            next_prompt,
+            self._last_model,
+            self._last_options,
+            self._last_system_prompt,
+        )
+
+    def set_auto_approve(self, enabled: bool) -> None:
+        """Activa o desactiva el piloto automático de confirmaciones.
+
+        Cuando está activo, el worker no muestra el diálogo de
+        confirmación para las herramientas, excepto para
+        `ejecutar_comando` (shell), que siempre confirma.
+        """
+        self._auto_approve = bool(enabled)
+        if self._worker is not None:
+            self._worker.auto_approve = self._auto_approve
+
     def set_current_model(self, model: str) -> None:
+        # Si el modelo cambia, el ContextWindow cacheado apunta al
+        # modelo antiguo (calibración distinta). Invalidarlo aquí
+        # fuerza a _get_context_window a recrearlo con el nuevo modelo.
+        if model != self._last_model:
+            self._context_window = None
         self._last_model = model
 
     def set_current_options(self, options: dict[str, Any] | None) -> None:
@@ -194,13 +365,17 @@ class ChatController(QObject):
             self.tools,
             options=options,
             system_prompt=system_prompt,
+            auto_approve=self._auto_approve,
+            context_window=self._get_context_window(),
         )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
-        self._worker.text.connect(self._on_text_chunk)
+        self._worker.stream_ready.connect(self._schedule_stream_drain)
         self._worker.tool.connect(self._on_tool)
         self._worker.tool_result.connect(self._on_tool_result)
         self._worker.confirmation_requested.connect(self._on_confirmation)
+        self._worker.tool_auto_approved.connect(self._on_tool_auto_approved)
+        self._worker.metrics_updated.connect(self._on_worker_metrics)
         self._worker.finished.connect(self._on_done)
         self._worker.error.connect(self._on_error)
         self._worker.cancelled.connect(self._on_cancelled)
@@ -225,13 +400,45 @@ class ChatController(QObject):
         self.conversation_changed.emit()
 
     def shutdown(self) -> None:
-        if self._worker is not None:
-            self._worker.cancel()
-        if self._thread is not None and self._thread.isRunning():
-            self._thread.quit()
-            self._thread.wait(2000)
-        # Forzar persistencia inmediata: no podemos esperar 500ms si
-        # estamos cerrando.
+        """Cierra el controller esperando a que el worker termine de verdad.
+
+        Antes este método llamaba a ``thread.quit()`` y esperaba 2s.
+        Pero ``quit()`` no termina ``ChatWorker.run()``: solo sale del
+        event loop del QThread, y el worker no ejecuta un event loop,
+        ejecuta una función larga. Si el worker no terminaba en 2s,
+        ``shutdown()`` seguía y cerraba ``OllamaClient`` mientras el
+        worker seguía usándolo. Ahora esperamos a que ``run()``
+        retorne de verdad con un timeout duro y, si se agota, forzamos
+        la salida registrándolo.
+        """
+        if self._stream_timer.isActive():
+            self._stream_timer.stop()
+
+        worker = self._worker
+        thread = self._thread
+
+        if worker is not None:
+            worker.cancel()
+
+        if thread is not None and thread.isRunning():
+            # wait() bloquea hasta que run() retorne. Es lo que
+            # queremos: no cerrar recursos compartidos antes de que el
+            # worker los haya soltado.
+            if not thread.wait(_SHUTDOWN_GRACE_MS):
+                # NO llamar a thread.terminate(): la documentación de
+                # Qt advierte que terminar un hilo Python a mitad de una
+                # operación (especialmente si sostiene un lock o está
+                # dentro de una extensión C) puede corromper estado o
+                # provocar deadlocks. El watchdog de main.py
+                # (_force_exit_after) es el último recurso de emergencia
+                # y hace os._exit(), que es seguro.
+                logger.error(
+                    "ChatWorker no terminó en %d ms durante shutdown; "
+                    "dejando que el watchdog global termine el proceso",
+                    _SHUTDOWN_GRACE_MS,
+                )
+
+        # Persistencia final: no podemos esperar al debounce.
         self._persist_now()
 
     # -- historial -----------------------------------------------------------
@@ -242,15 +449,49 @@ class ChatController(QObject):
         self.conversation_changed.emit()
 
     def _compact_if_needed(self) -> None:
-        """Compacta el historial cuando se acerca al limite del contexto.
+        """Poda el historial si no cabe en el presupuesto de contexto.
 
-        Estima los tokens del historial (ratio 4 chars/token) y, si
-        superan el 70% del contexto efectivo del modelo, corta por el
-        punto donde empieza un mensaje de usuario, dejando siempre al
-        menos MIN_TURNS_TO_KEEP turnos completos.
+        El cálculo incluye el system prompt y las definiciones de las
+        herramientas, no solo el historial visible. Los tool results
+        intermedios no forman parte de self.messages (viven solo en la
+        copia local de OllamaClient.chat), así que no cuentan aquí.
 
-        Si el agente fija num_ctx, se usa el menor entre ese valor y el
-        context_length del modelo.
+        El coste de compactar es despreciable (<0.1 ms según el
+        benchmark), así que se puede llamar tras cada append sin
+        miedo. Lo que importa es *cuándo* se dispara, no cuánto tarda.
+        """
+        window = self._get_context_window()
+
+        system_prompt = self._last_system_prompt or ""
+        try:
+            tool_definitions = self.tools.definitions()
+        except Exception:
+            # Un provider roto no debe romper la compactación.
+            tool_definitions = []
+
+        pruned, budget = window.fit(
+            system_prompt=system_prompt,
+            tool_definitions=tool_definitions,
+            messages=self.messages,
+        )
+
+        if budget.dropped_messages > 0:
+            logger.info(
+                "Historial podado: %d mensaje(s) eliminado(s) "
+                "(~%d tokens estimados, presupuesto %d, reserva %d)",
+                budget.dropped_messages,
+                budget.estimated_prompt,
+                budget.prompt_budget,
+                budget.output_reserve,
+            )
+            self.messages = pruned
+
+    def _get_context_window(self) -> ContextWindow:
+        """Devuelve el ContextWindow cacheado, recreándolo si cambia el límite.
+
+        El límite efectivo es el mínimo entre el límite del modelo y el
+        num_ctx del agente, si lo hay. 0 o negativo significa "desconocido":
+        se usa _FALLBACK_CONTEXT_TOKENS.
         """
         effective_ctx = self._context_limit
         if self._last_options and self._last_options.get("num_ctx"):
@@ -266,28 +507,15 @@ class ChatController(QObject):
         if effective_ctx <= 0:
             effective_ctx = _FALLBACK_CONTEXT_TOKENS
 
-        total_chars = sum(
-            len(m["content"]) for m in self.messages
-            if isinstance(m.get("content"), str)
-        )
-        estimated_tokens = total_chars // _CHARS_PER_TOKEN
-
-        threshold = int(effective_ctx * _COMPACT_THRESHOLD)
-        if estimated_tokens < threshold:
-            return
-
-        user_positions = [
-            i for i, m in enumerate(self.messages) if m.get("role") == "user"
-        ]
-        if len(user_positions) <= MIN_TURNS_TO_KEEP:
-            return
-
-        cut_at = user_positions[-MIN_TURNS_TO_KEEP]
-        self.messages = self.messages[cut_at:]
-        logger.info(
-            "Historial compactado a %d mensajes (~%d tokens, limite %d)",
-            len(self.messages), estimated_tokens, effective_ctx,
-        )
+        if (
+            self._context_window is None
+            or self._context_window.limit_tokens != effective_ctx
+        ):
+            self._context_window = ContextWindow(
+                limit_tokens=effective_ctx,
+                model=self._last_model,
+            )
+        return self._context_window
 
     def _persist(self) -> None:
         """Programa la persistencia con debounce.
@@ -310,9 +538,26 @@ class ChatController(QObject):
         self._do_persist()
 
     # -- slots internos ------------------------------------------------------
-    @Slot(str)
-    def _on_text_chunk(self, text: str) -> None:
-        self.renderer.on_text(text)
+    def _schedule_stream_drain(self) -> None:
+        """Arranca el timer de drain si no está corriendo ya."""
+        if not self._stream_timer.isActive():
+            self._stream_timer.start(_STREAM_DRAIN_INTERVAL_MS)
+
+    def _drain_stream(self) -> None:
+        """Vuelca el buffer del worker al renderer.
+
+        Defensivo: si el worker es un fake de tests sin `drain_text`,
+        no hace nada.
+        """
+        worker = self._worker
+        if worker is None:
+            return
+        drain = getattr(worker, "drain_text", None)
+        if drain is None:
+            return
+        text = drain()
+        if text:
+            self.renderer.on_text(text)
 
     def _on_tool(self, name: str) -> None:
         narration = _NARRATION_TEMPLATES.get(name, f"Ejecutando {name}…")
@@ -332,7 +577,25 @@ class ChatController(QObject):
         approved = confirm_tool(self._parent_widget, name, arguments)
         self._worker.resolve_confirmation(approved)
 
+    def _on_worker_metrics(self, metrics: dict) -> None:
+        """Reenvía las métricas del worker al resto de la app."""
+        self.metrics_updated.emit(metrics)
+
+    def _on_tool_auto_approved(self, name: str) -> None:
+        """El worker auto-aprobó una tool por el modo piloto automático.
+
+        Mostrar una narración para que el usuario sepa qué está pasando
+        sin el diálogo. Sin esto, las operaciones destructivas ocurren
+        sin ningún aviso visible.
+        """
+        self.renderer.insert_narration(
+            f"Auto-aprobado: {name}", active=False
+        )
+
     def _on_done(self, result: str) -> None:
+        # Flush final del buffer antes de aplicar Markdown. Sin esto,
+        # el texto de los últimos 32 ms se perdería.
+        self._drain_stream()
         response_text = self.renderer.final_text(result)
         # Detectar intento de tool calling textual en el texto final.
         # OllamaClient devuelve este mensaje cuando el modelo escribio
@@ -382,7 +645,38 @@ class ChatController(QObject):
         self.status.emit(status)
         self.renderer.reset()
 
+        # Cola de prompts: actualizar el todo list y avanzar o
+        # detener según el estado del turno.
+        if self._queue_active:
+            # El prompt que acaba de terminar es el número
+            # (total - pendientes). Si _advance_queue ya hizo pop, la
+            # cuenta es total - len(_queue). Si aún no ha hecho pop
+            # (porque estamos en el mismo turno en que se envió), el
+            # actual es total - len(_queue) + 1. Como send() hace pop
+            # antes de enviar, estamos siempre en el primer caso.
+            current_done = self._queue_total - len(self._queue)
+            if status == "Listo":
+                self.queue_item_status_changed.emit(current_done, "done")
+                self._advance_queue()
+            elif status == "Cancelado":
+                self.queue_item_status_changed.emit(current_done, "cancelled")
+                self._stop_queue_with_message("Cola cancelada")
+            else:
+                # status == "Error"
+                self.queue_item_status_changed.emit(current_done, "error")
+                self._stop_queue_with_message("Cola detenida por error")
+
     def _cleanup(self) -> None:
+        if self._stream_timer.isActive():
+            self._stream_timer.stop()
+        # `sender()` es el hilo que acaba de terminar. Puede no ser
+        # `self._thread` si la cola avanzó y ya hay otro turno en
+        # curso. En ese caso solo liberamos el hilo antiguo; las
+        # referencias actuales apuntan al nuevo.
+        thread = self.sender()
+        if thread is not None and thread is not self._thread:
+            thread.deleteLater()
+            return
         if self._thread is not None:
             self._thread.deleteLater()
         self._thread = None

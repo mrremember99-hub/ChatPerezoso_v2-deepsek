@@ -53,8 +53,12 @@ def test_agent_from_dict_tolerates_invalid_fields():
 
 
 def test_agent_from_dict_clamps_temperature():
-    assert Agent.from_dict({"name": "X", "temperature": 5.0}).temperature == 2.0
-    assert Agent.from_dict({"name": "X", "temperature": -1.0}).temperature == 0.0
+    high = Agent.from_dict({"name": "X", "temperature": 5.0})
+    low = Agent.from_dict({"name": "X", "temperature": -1.0})
+    assert high is not None
+    assert low is not None
+    assert high.temperature == 2.0
+    assert low.temperature == 0.0
 
 
 def test_agent_from_dict_dedupes_tool_list():

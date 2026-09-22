@@ -34,7 +34,7 @@ class MCPController(QObject):
     def __init__(
         self,
         parent: QObject,
-        parent_widget: QWidget,
+        parent_widget: QWidget | None,
         bridge: MCPToolBridge,
         workspace: Workspace,
         store: MCPServerStore | None = None,

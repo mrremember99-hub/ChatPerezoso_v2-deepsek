@@ -155,3 +155,20 @@ def test_build_prompt_truncates_long_descriptions():
     }]
     prompt = build_tools_prompt(tools)
     assert "..." in prompt
+
+# -- parche AC: dialecto XML <function=> integrado en tool_calls ------------
+
+def test_function_xml_stripped_from_content():
+    """strip_tool_call_blocks debe eliminar el bloque <function=> completo."""
+    from core.xml_tools import strip_tool_call_blocks
+    text = (
+        "Voy a listar la carpeta.\n"
+        "<function=mcp__fs__list_directory>\n"
+        "<parameter=path>\n.\n</parameter>\n"
+        "</function>\n</tool_call>"
+    )
+    cleaned = strip_tool_call_blocks(text)
+    assert "<function=" not in cleaned
+    assert "<parameter=" not in cleaned
+    assert "Voy a listar" in cleaned
+

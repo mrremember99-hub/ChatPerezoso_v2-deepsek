@@ -91,6 +91,14 @@ class FakeRenderer:
     def insert_error(self, message: str):
         self.errors.append(message)
 
+    def insert_queue_list(self, prompts):
+        self.queue_lists = getattr(self, "queue_lists", [])
+        self.queue_lists.append(list(prompts))
+
+    def update_queue_list(self, current: int, status: str):
+        self.queue_updates = getattr(self, "queue_updates", [])
+        self.queue_updates.append((current, status))
+
     def final_text(self, fallback: str) -> str:
         self.final_calls.append(fallback)
         return self.response_text or fallback
@@ -105,6 +113,11 @@ class FakeRenderer:
 class FakeTools:
     def definitions(self):
         return []
+
+    def intent_rules(self):
+        # Requerido por el Protocol ToolProvider. Vacío: los tests no
+        # ejercitan la heurística de intención a través del worker.
+        return {}
 
     def call(self, name, arguments, *, allow_destructive=False, cancel_event=None):
         return "ok"
@@ -192,19 +205,27 @@ def test_compact_uses_default_when_context_unknown(controller):
 
 
 def test_compact_triggers_near_context_limit(controller):
-    """Con context_limit bajo, se compacta cuando se supera el 70%."""
+    """Con context_limit bajo, se compacta hasta que el historial cabe.
+
+    El parche X cambió el contrato: ya no se garantiza min_turns si
+    eso viola el presupuesto. Se garantiza que el resultado cabe.
+    """
     ctrl, _ = controller
     ctrl.set_context_limit(1000)
-    # 12 turnos con 500 chars cada uno = 12000 chars = 3000 tokens
-    # 70% de 1000 = 700 tokens -> se compacta
+    # 12 turnos con 500 chars cada uno = 12000 chars ≈ 2857 tokens.
+    # Budget efectivo: 1000 - reserva (500) = 500 tokens.
+    # 2857 > 500 → se compacta hasta caber.
     ctrl.messages = []
     for i in range(12):
         ctrl.messages.append({"role": "user", "content": "x" * 500})
         ctrl.messages.append({"role": "assistant", "content": "y" * 500})
     ctrl._compact_if_needed()
     assert len(ctrl.messages) < 24
-    user_count = sum(1 for m in ctrl.messages if m.get("role") == "user")
-    assert user_count >= MIN_TURNS_TO_KEEP
+    # El historial podado debe ser significativamente menor.
+    assert len(ctrl.messages) <= 6
+    # Y no puede quedar vacío: al menos el último user se preserva.
+    assert len(ctrl.messages) >= 1
+    assert ctrl.messages[0]["role"] == "user"
 
 
 def test_compact_respects_agent_num_ctx(controller):
@@ -222,8 +243,13 @@ def test_compact_respects_agent_num_ctx(controller):
     assert len(ctrl.messages) < 40
 
 
-def test_compact_does_not_break_with_few_turns(controller):
-    """Con pocos turnos, no se compacta aunque el contexto sea pequeño."""
+def test_compact_preserves_last_user_when_nothing_fits(controller):
+    """Con contexto mínimo, el chat preserva al menos el último user.
+
+    Antes de los parches X+Y, se devolvía el historial completo aunque
+    excediera el presupuesto. Ahora se poda hasta que quepa, con un
+    suelo: nunca dejar el chat sin prompt.
+    """
     ctrl, _ = controller
     ctrl.set_context_limit(100)
     ctrl.messages = [
@@ -231,7 +257,9 @@ def test_compact_does_not_break_with_few_turns(controller):
         {"role": "assistant", "content": "y" * 1000},
     ]
     ctrl._compact_if_needed()
-    assert len(ctrl.messages) == 2
+    # El último user se preserva aunque exceda el budget.
+    assert len(ctrl.messages) == 1
+    assert ctrl.messages[0]["role"] == "user"
 
 
 def test_compact_preserves_recent_messages(controller):

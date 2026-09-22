@@ -1,15 +1,30 @@
 """Búsqueda de texto recursiva sobre el workspace.
 
-Usa ``regex`` en lugar de ``re`` para poder aplicar timeout por línea y
-evitar ReDoS. El resto de límites (tamaño de archivo, número de matches,
-profundidad) se mantienen.
+Motor preferido: ``google-re2`` (tiempo lineal garantizado, sin
+backtracking → sin ReDoS por diseño). Si no está instalado, se usa
+``regex`` con timeout por línea como mitigación parcial.
+
+RE2 no soporta lookahead/lookbehind, backreferences, ni ``\\Z`` / ``\\A``
+de Python. Si un patrón usa alguna de esas features, se devuelve un
+error claro al usuario. El resto del comportamiento (límites de tamaño,
+número de matches, profundidad) es idéntico en ambos motores.
 """
 from __future__ import annotations
 
+import contextlib as _contextlib
 import os
-import threading
+import threading as _threading
 from pathlib import Path
 
+# Motor preferido: re2 (lineal, sin ReDoS).
+try:
+    import re2 as _re2
+    _RE2_AVAILABLE = True
+except ImportError:
+    _re2 = None
+    _RE2_AVAILABLE = False
+
+# Fallback siempre disponible: regex con timeout por línea.
 import regex
 
 
@@ -41,6 +56,87 @@ _CANCEL_CHECK_INTERVAL = 200
 _REGEX_LINE_TIMEOUT_SECONDS = 0.5
 
 
+
+
+
+# Lock global para serializar las redirecciones de fd 2. La
+# redireccion de file descriptors es a nivel de proceso: si dos
+# hilos la hacen a la vez, uno restaura mientras el otro todavia
+# cree que stderr esta silenciado.
+_STDERR_SILENCE_LOCK = _threading.Lock()
+
+
+@_contextlib.contextmanager
+def _silenced_c_stderr():
+    """Silencia fd 2 durante una llamada a una extensión C que escribe
+    a stderr directamente.
+
+    re2 usa absl logging, que escribe a fd 2 sin pasar por sys.stderr.
+    Sin esto, un patrón inválido del usuario imprime dos líneas rojas
+    de la librería C++ antes del mensaje limpio de la app.
+
+    No usa sys.stderr porque esa es una capa Python; re2 escribe al
+    descriptor de archivo subyacente. Hay que redirigir el fd real.
+    """
+    with _STDERR_SILENCE_LOCK:
+        try:
+            devnull = os.open(os.devnull, os.O_WRONLY)
+        except OSError:
+            # Si no podemos abrir /dev/null, seguimos sin silenciar.
+            yield
+            return
+        try:
+            old_stderr = os.dup(2)
+            os.dup2(devnull, 2)
+        except OSError:
+            os.close(devnull)
+            yield
+            return
+        try:
+            yield
+        finally:
+            try:
+                os.dup2(old_stderr, 2)
+            finally:
+                os.close(old_stderr)
+                os.close(devnull)
+
+
+def _compile_pattern(query: str, case_sensitive: bool):
+    """Compila el patrón con el motor disponible.
+
+    Devuelve ``(pattern, is_re2)``. Si re2 está disponible y el patrón
+    es compatible, usa re2 (lineal, sin ReDoS). Si no, cae al motor
+    ``regex`` con timeout por línea.
+    """
+    if _re2 is not None:
+        options = _re2.Options()
+        options.case_sensitive = case_sensitive
+        try:
+            # re2 (la parte C++) imprime a fd 2 los errores de parsing.
+            # Silenciamos el fd durante la compilación para que el
+            # usuario solo vea el mensaje limpio de la app.
+            with _silenced_c_stderr():
+                return _re2.compile(query, options), True
+        except Exception as exc:
+            # Cualquier fallo de compilación de re2 se traduce a
+            # SearchError. El mensaje explica la limitación concreta.
+            raise SearchError(
+                f"Expresión regular no soportada por RE2: {exc}. "
+                "RE2 no admite lookahead, lookbehind, backreferences, "
+                "ni \\Z / \\A de Python. Reformula el patrón o "
+                "desinstala google-re2 para usar el motor con "
+                "backtracking (más lento, con timeout)."
+            ) from exc
+    try:
+        return regex.compile(
+            query,
+            regex.IGNORECASE if not case_sensitive else 0,
+        ), False
+    except regex.error as exc:
+        raise SearchError(f"Expresión regular inválida: {exc}") from exc
+
+
 class SearchClient:
     def __init__(self, workspace_root: str | Path):
         self.root = Path(workspace_root).expanduser().resolve()
@@ -67,13 +163,7 @@ class SearchClient:
         max_matches = max(1, min(int(max_matches), _MAX_MATCHES))
         normalized_exts = self._normalize_extensions(extensions)
 
-        try:
-            pattern = regex.compile(
-                query,
-                regex.IGNORECASE if not case_sensitive else 0,
-            )
-        except regex.error as exc:
-            raise SearchError(f"Expresión regular inválida: {exc}") from exc
+        pattern, is_re2 = _compile_pattern(query, case_sensitive)
 
         matches: list[str] = []
         scanned = 0
@@ -92,6 +182,7 @@ class SearchClient:
                     file,
                     pattern,
                     max_matches - len(matches),
+                    is_re2=is_re2,
                     cancel_event=cancel_event,
                 )
             except OSError:
@@ -173,6 +264,8 @@ class SearchClient:
         file: Path,
         pattern,
         limit: int,
+        *,
+        is_re2: bool,
         cancel_event: threading.Event | None = None,
     ) -> list[tuple[int, str]]:
         hits: list[tuple[int, str]] = []
@@ -188,19 +281,26 @@ class SearchClient:
                     line = raw.rstrip("\n")
                     if len(line) > _MAX_LINE_BYTES_FOR_REGEX:
                         continue
-                    try:
-                        if pattern.search(
-                            line, timeout=_REGEX_LINE_TIMEOUT_SECONDS
-                        ):
-                            display = line
-                            if len(display) > _MAX_LINE_LENGTH:
-                                display = display[:_MAX_LINE_LENGTH] + "…"
-                            hits.append((line_number, display))
-                            if len(hits) >= limit:
-                                break
-                    except TimeoutError:
-                        # Regex patológico: se salta la línea y se sigue.
-                        continue
+                    if is_re2:
+                        # re2 es lineal por diseño: no necesita timeout.
+                        if not pattern.search(line):
+                            continue
+                    else:
+                        # Fallback: regex con timeout por línea.
+                        try:
+                            if not pattern.search(
+                                line, timeout=_REGEX_LINE_TIMEOUT_SECONDS
+                            ):
+                                continue
+                        except TimeoutError:
+                            # Patrón patológico: se salta la línea.
+                            continue
+                    display = line
+                    if len(display) > _MAX_LINE_LENGTH:
+                        display = display[:_MAX_LINE_LENGTH] + "…"
+                    hits.append((line_number, display))
+                    if len(hits) >= limit:
+                        break
         except UnicodeDecodeError:
             return []
         return hits

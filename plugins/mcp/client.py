@@ -23,6 +23,12 @@ from ._base import MCPError, MCPServerConfig
 
 _POLL_INTERVAL_SECONDS = 0.2
 
+# Límite de texto devuelto por una herramienta MCP. Los servidores MCP
+# no tienen por qué acotar sus respuestas: un `read_file` o `search`
+# mal implementado puede devolver MBs. Sin este tope, el resultado
+# entra íntegro en el historial de tool calls y rompe el contexto.
+_MAX_RESULT_CHARS = 100_000
+
 
 class MCPClient:
     def __init__(self, server: MCPServerConfig):
@@ -210,7 +216,10 @@ class MCPClient:
         asyncio.set_event_loop(self._loop)
         future = asyncio.ensure_future(self._async_connect(), loop=self._loop)
 
-        def startup_done(done: Future[Any]) -> None:
+        # El callback recibe el Task que acaba de terminar. Se anota como
+        # asyncio.Future (base de Task) porque el tipo concreto Task[...]
+        # no es estable entre versiones de asyncio.
+        def startup_done(done: asyncio.Future) -> None:
             try:
                 done.result()
             except BaseException as exc:
@@ -320,17 +329,17 @@ class MCPClient:
         return StdioServerParameters(**kwargs)
 
     @staticmethod
-    def _accepted_fields(cls: Any) -> set[str]:
+    def _accepted_fields(target_cls: Any) -> set[str]:
         """Campos aceptados por un pydantic BaseModel o, si no, firma
         del constructor."""
-        fields = getattr(cls, "model_fields", None)
+        fields = getattr(target_cls, "model_fields", None)
         if isinstance(fields, dict):
             return set(fields.keys())
-        fields_v1 = getattr(cls, "__fields__", None)
+        fields_v1 = getattr(target_cls, "__fields__", None)
         if isinstance(fields_v1, dict):
             return set(fields_v1.keys())
         try:
-            sig = inspect.signature(cls.__init__)
+            sig = inspect.signature(target_cls.__init__)
             return set(sig.parameters.keys())
         except (TypeError, ValueError):
             return {"command", "args", "env", "cwd"}
@@ -404,4 +413,10 @@ class MCPClient:
                 parts.append(str(item["text"]))
             else:
                 parts.append(str(item))
-        return prefix + "\n".join(parts)
+        text = prefix + "\n".join(parts)
+        if len(text) > _MAX_RESULT_CHARS:
+            text = (
+                text[:_MAX_RESULT_CHARS]
+                + f"\n... (resultado MCP truncado a {_MAX_RESULT_CHARS} caracteres)"
+            )
+        return text

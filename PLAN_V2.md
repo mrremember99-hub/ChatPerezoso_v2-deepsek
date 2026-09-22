@@ -119,3 +119,28 @@ No se añade una nueva capa de arquitectura para resolver un problema que todav�
 - `server-filesystem` sustituye `leer_archivo`/`listar_carpeta` cuando ofrece `read_file`/`list_directory`.
 - La barrera de intención reconoce los alias MCP.
 - Al desactivar MCP se restauran las herramientas locales.
+
+---
+
+## Auditoría 2026-09
+
+Completada en la rama `audit-fixes`. Ver `docs/audit-2026-09.md` para
+detalles.
+
+**Tags de referencia:**
+- `baseline-antes-de-fixes` (c9982b6) — estado antes de la auditoría
+- `post-5` (8bf1bb7) — estado después de todos los fixes aplicados
+
+**Métricas:**
+
+| Métrica | Antes | Después |
+|---|---|---|
+| Tests | 506 passed | 523 passed (+17) |
+| Pico render (code final) | 26.6 ms | 0.1 ms |
+| Pico render (prose accum) | 146 ms | 146 ms (sin cambio) |
+| Streaming warm TTFT | no medido | 0.24 s (granite4.1:3b) |
+| ToolIntentGate | no medido | 10/10 casos correctos |
+
+**Fases 6 del plan original (arquitectura MVC) siguen completas.**
+Los plugins (git, search, shell) también. Lo que queda pendiente
+está en `TODO.md`.

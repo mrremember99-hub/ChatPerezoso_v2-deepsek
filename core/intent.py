@@ -144,15 +144,63 @@ class ToolIntentGate:
 
     @classmethod
     def _is_negated(cls, verbs: tuple[str, ...], text: str) -> bool:
+        """Detecta si la petición principal niega explícitamente la operación.
+
+        Regla: cuenta como negación solo si NINGÚN verbo del conjunto
+        aparece en forma afirmativa. Si hay al menos una aparición
+        afirmativa, las negaciones de otros verbos del mismo conjunto
+        se interpretan como restricciones secundarias, no como bloqueo.
+
+        Ejemplos:
+            "Crea un archivo. No añadas funciones."
+              → "crea" es afirmativo. NO se bloquea.
+            "No crees el archivo todavía."
+              → "crees" solo aparece negado. Se bloquea.
+            "no vas a borrar archivo.txt"
+              → "borrar" solo aparece negado (con "vas a" en medio).
+                Se bloquea.
+        """
         if not verbs:
             return False
         normalised = cls._normalise(text)
+
+        # Paso 1: ¿hay alguna forma afirmativa de algún verbo?
+        has_any_affirmative = False
         for verb in verbs:
             v = cls._normalise(verb)
             if not v:
                 continue
             for form in _cached_verb_forms(v):
-                pattern = rf"\bno\b(?:\s+\w+){{0,3}}\s+{re.escape(form)}\b"
+                for match in re.finditer(
+                    rf"\b{re.escape(form)}\b", normalised, re.IGNORECASE
+                ):
+                    start = match.start()
+                    # Miramos hacia atrás: si el "no" (posiblemente con
+                    # hasta 3 palabras en medio) llega justo hasta aquí,
+                    # este match es negado, no afirmativo.
+                    prefix = normalised[max(0, start - 40):start]
+                    if not re.search(
+                        r"\bno\b(?:\s+\w+){0,3}\s+$", prefix
+                    ):
+                        has_any_affirmative = True
+                        break
+                if has_any_affirmative:
+                    break
+            if has_any_affirmative:
+                break
+
+        if has_any_affirmative:
+            return False
+
+        # Paso 2: sin formas afirmativas, comprobar si hay negación.
+        for verb in verbs:
+            v = cls._normalise(verb)
+            if not v:
+                continue
+            for form in _cached_verb_forms(v):
+                pattern = (
+                    rf"\bno\b(?:\s+\w+){{0,3}}\s+{re.escape(form)}\b"
+                )
                 if re.search(pattern, normalised, re.IGNORECASE):
                     return True
         return False
@@ -202,17 +250,22 @@ class ToolIntentGate:
 
     # -- operaciones de workspace -------------------------------------------
 
-    @classmethod
-    def _mentions_workspace_operation(cls, text: str) -> bool:
-        normalised = cls._normalise(text)
-        for rule in list(cls._RULES_REGISTRY.values()):
+    def _mentions_workspace_operation(self, text: str) -> bool:
+        """True si el texto sugiere alguna operación sobre el workspace.
+
+        Usa las reglas de la instancia (las del provider que construyó
+        el gate), no un registro global. Así dos gates con reglas
+        distintas no se contaminan mutuamente.
+        """
+        normalised = self._normalise(text)
+        for rule in self.rules.values():
             if rule.mcp_explicit_name_required:
                 continue
-            if rule.requires_target and not cls._mentions_target(
+            if rule.requires_target and not self._mentions_target(
                 rule.target_words, text, normalised, rule.accepts_filename
             ):
                 continue
-            if cls._mentions_any_word(normalised, rule.verbs):
+            if self._mentions_any_word(normalised, rule.verbs):
                 return True
         return False
 
@@ -234,12 +287,17 @@ class ToolIntentGate:
 
     @classmethod
     def register_rules(cls, rules: dict[str, IntentRule]) -> None:
-        cls._RULES_REGISTRY.update(rules)
+        """Registra reglas de forma global.
 
-    @classmethod
-    def unregister_rules(cls, names: list[str]) -> None:
-        for name in names:
-            cls._RULES_REGISTRY.pop(name, None)
+        DEPRECADO. Existe solo como fallback para compatibilidad con
+        tests que pasan listas de definiciones (no providers) a
+        ``OllamaClient.chat()``. El registro es global al proceso y
+        crece monotónicamente: no hay forma de deshacerlo.
+
+        Un uso correcto pasa un ToolProvider con ``intent_rules()``.
+        Cada gate nuevo usa esas reglas vía ``self.rules``.
+        """
+        cls._RULES_REGISTRY.update(rules)
 
     @classmethod
     def _read_prerequisite_verbs(cls) -> tuple[str, ...]:

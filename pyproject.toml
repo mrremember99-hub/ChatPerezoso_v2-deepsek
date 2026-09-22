@@ -27,3 +27,19 @@ shell = "plugins.shell:ShellProvider"
 
 [tool.setuptools.packages.find]
 include = ["core*", "ui*", "plugins*", "scripts*"]
+
+[tool.pyright]
+include = ["core", "ui", "plugins", "scripts", "tests"]
+exclude = [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.venv",
+    "**/workspace",
+    "**/.patches",
+]
+typeCheckingMode = "standard"
+reportMissingImports = true
+reportMissingTypeStubs = false
+# Los tests usan fakes que no cumplen los Protocol al 100%. El código
+# de producción sí es estricto.
+reportPrivateUsage = false

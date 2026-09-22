@@ -42,6 +42,13 @@ class DiagnosticsPanel(QWidget):
         self.textual_label.setVisible(False)
         layout.addWidget(self.textual_label)
 
+        # Métricas reales de la última generación (tokens de prompt,
+        # tokens generados, tok/s). Se oculta si Ollama no las envía.
+        self.metrics_label = QLabel("")
+        self.metrics_label.setObjectName("DiagnosticLine")
+        self.metrics_label.setVisible(False)
+        layout.addWidget(self.metrics_label)
+
     # -- API pública ---------------------------------------------------------
 
     def set_model(self, name: str, temperature: float, num_ctx: int) -> None:
@@ -75,6 +82,12 @@ class DiagnosticsPanel(QWidget):
 
     def set_context_tokens(self, tokens: int) -> None:
         self.context_label.setText(f"Contexto: ~{_format_tokens(tokens)} tokens")
+
+    def set_last_metrics(self, text: str) -> None:
+        """Muestra u oculta la línea de métricas reales de la última
+        generación. Un string vacío la oculta."""
+        self.metrics_label.setText(text)
+        self.metrics_label.setVisible(bool(text))
 
 
 def _format_ctx(num_ctx: int) -> str:

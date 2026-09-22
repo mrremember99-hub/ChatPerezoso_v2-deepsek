@@ -12,6 +12,8 @@ coste y el usuario ve en el chat cuándo se han ejecutado.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from PySide6.QtCore import QElapsedTimer, QObject
 
 from ..chat_state import ChatState
@@ -28,10 +30,14 @@ MIN_RESPONSE_SECONDS = 0.3
 
 
 class DiagnosticsController(QObject):
+    # Atributo usado por tests para mantener viva la referencia al
+    # QObject padre. La app real no lo asigna.
+    _owner: Any = None
+
     def __init__(
         self,
-        parent: QObject,
-        chat: ChatController,
+        parent: QObject | None,
+        chat: ChatController | Any,
         panel: DiagnosticsPanel,
     ):
         super().__init__(parent)
@@ -57,6 +63,35 @@ class DiagnosticsController(QObject):
             textual_signal.connect(self._on_textual_tool_attempt)
 
     # -- config del modelo ---------------------------------------------------
+
+    def set_metrics(self, metrics: dict) -> None:
+        """Formatea y muestra las métricas reales de la última ronda.
+
+        Ollama envía `prompt_eval_count` (tokens de prompt), `eval_count`
+        (tokens generados) y `eval_duration` (nanosegundos) en el chunk
+        final. Si el modelo o la versión no los envía, se oculta la
+        línea.
+        """
+        if not metrics:
+            self.panel.set_last_metrics("")
+            return
+        prompt_tokens = int(metrics.get("prompt_eval_count", 0))
+        gen_tokens = int(metrics.get("eval_count", 0))
+        eval_ns = int(metrics.get("eval_duration", 0))
+        tok_s = (
+            gen_tokens / (eval_ns / 1e9) if eval_ns > 0 else 0.0
+        )
+        parts: list[str] = []
+        if prompt_tokens:
+            parts.append(f"{prompt_tokens} prompt")
+        if gen_tokens:
+            parts.append(f"{gen_tokens} gen")
+        if tok_s > 0:
+            parts.append(f"{tok_s:.1f} tok/s")
+        if not parts:
+            self.panel.set_last_metrics("")
+            return
+        self.panel.set_last_metrics("Real: " + " · ".join(parts))
 
     def set_model(self, name: str, temperature: float, num_ctx: int) -> None:
         self.stats.model = name

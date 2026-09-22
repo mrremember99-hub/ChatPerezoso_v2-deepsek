@@ -124,3 +124,67 @@ def test_negated_named_mcp_tool_is_rejected():
 def test_unknown_tool_is_never_authorized(tmp_path):
     gate = _gate(tmp_path)
     assert not gate.tool_is_requested("inventada", "usa inventada")
+
+# -- parche AA: gate ampliado para código -----------------------------------
+
+def test_gate_authorizes_implement_function_request(tmp_path):
+    """Un prompt de programación autoriza crear_archivo aunque no diga
+    literalmente 'archivo'."""
+    gate = _gate(tmp_path)
+    # Los prompts típicos de programación deben autorizar crear_archivo.
+    assert gate.tool_is_requested(
+        "crear_archivo",
+        "implementa una función que convierta texto a mayúsculas",
+    )
+    assert gate.tool_is_requested(
+        "crear_archivo",
+        "añade un método para cerrar la conexión",
+    )
+    # "necesito" NO es verbo de escritura: es ambiguo ("necesito saber X"
+    # vs "necesito una función X"). El gate exige un verbo de acción
+    # claro. Los verbos como "implementa", "crea", "escribe", "añade"
+    # sí están en la lista y son los que debe usar el usuario.
+    assert gate.tool_is_requested(
+        "crear_archivo",
+        "escribe una función auxiliar para previsualizaciones",
+    )
+    assert gate.tool_is_requested(
+        "crear_archivo",
+        "crea una función auxiliar para previsualizaciones",
+    )
+    # Y "necesito" por sí solo no autoriza (evita falsos positivos).
+    assert not gate.tool_is_requested(
+        "crear_archivo",
+        "necesito entender cómo funciona una función auxiliar",
+    )
+
+
+def test_gate_authorizes_escribir_archivo_with_code_verbs(tmp_path):
+    gate = _gate(tmp_path)
+    assert gate.tool_is_requested(
+        "escribir_archivo",
+        "desarrolla una clase que gestione la caché",
+    )
+    assert gate.tool_is_requested(
+        "escribir_archivo",
+        "refactoriza el módulo de utilidades",
+    )
+    assert gate.tool_is_requested(
+        "escribir_archivo",
+        "corrige el error en la función process_data",
+    )
+
+
+def test_gate_still_rejects_generic_questions(tmp_path):
+    """Las reglas ampliadas no deben autorizar preguntas generales."""
+    gate = _gate(tmp_path)
+    # Sin verbo de escritura, no autoriza aunque mencione "función".
+    assert not gate.tool_is_requested(
+        "crear_archivo",
+        "¿qué es una función en Python?",
+    )
+    assert not gate.tool_is_requested(
+        "crear_archivo",
+        "explica cómo funciona el módulo os",
+    )
+

@@ -76,7 +76,9 @@ def test_create_new_appends_and_activates(qapp, monkeypatch):
     assert [a.name for a in ctrl.agents] == ["A", "B", "Nuevo agente"]
     assert ctrl.active_name == "Nuevo agente"
     assert ctrl.active_agent().system_prompt == "hola"
-    assert ctrl.store.saved is not None
+    # getattr porque `saved` es un atributo test-only de _FakeStore, no
+    # parte de la interfaz pública de AgentStore.
+    assert getattr(ctrl.store, "saved", None) is not None
 
 
 def test_create_new_cancelled_dialog_does_nothing(qapp, monkeypatch):

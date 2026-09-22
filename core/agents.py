@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 AGENTS_FILE = BASE_DIR / "agents.json"
@@ -29,11 +29,31 @@ class Agent:
     # None → todas las herramientas disponibles.
     # Lista (posiblemente vacía) → solo esas.
     allowed_tools: list[str] | None = None
+    # Nombre del modelo asociado. Cadena vacía = usar el modelo
+    # seleccionado globalmente en la sidebar.
+    #
+    # No se valida contra la lista de modelos disponibles: si el modelo
+    # ya no está instalado, la app cae al modelo global sin error.
+    model: str = ""
+    # Categoría para agrupar en la sidebar. Cadena vacía agrupa bajo
+    # "General". Puramente informativa: no afecta al comportamiento.
+    category: str = ""
+    # Parámetros avanzados de sampling. None = no enviar a Ollama (usa
+    # los defaults del modelo).
+    top_p: float | None = None
+    top_k: int | None = None
+    repeat_penalty: float | None = None
 
     def options(self) -> dict[str, Any]:
         options: dict[str, Any] = {"temperature": self.temperature}
         if self.num_ctx > 0:
             options["num_ctx"] = self.num_ctx
+        if self.top_p is not None:
+            options["top_p"] = self.top_p
+        if self.top_k is not None:
+            options["top_k"] = self.top_k
+        if self.repeat_penalty is not None:
+            options["repeat_penalty"] = self.repeat_penalty
         return options
 
     def to_dict(self) -> dict[str, Any]:
@@ -45,6 +65,11 @@ class Agent:
             "allowed_tools": (
                 None if self.allowed_tools is None else list(self.allowed_tools)
             ),
+            "model": self.model,
+            "category": self.category,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+            "repeat_penalty": self.repeat_penalty,
         }
 
     @classmethod
@@ -77,12 +102,43 @@ class Agent:
         else:
             allowed = None
 
+        raw_model = data.get("model", "")
+        model = raw_model.strip() if isinstance(raw_model, str) else ""
+
+        raw_category = data.get("category", "")
+        category = (
+            raw_category.strip() if isinstance(raw_category, str) else ""
+        )
+
+        raw_top_p = data.get("top_p")
+        if isinstance(raw_top_p, bool) or not isinstance(raw_top_p, (int, float)):
+            top_p: float | None = None
+        else:
+            top_p = max(0.0, min(float(raw_top_p), 1.0))
+
+        raw_top_k = data.get("top_k")
+        if isinstance(raw_top_k, bool) or not isinstance(raw_top_k, int):
+            top_k: int | None = None
+        else:
+            top_k = max(0, min(raw_top_k, 1000)) or None
+
+        raw_rp = data.get("repeat_penalty")
+        if isinstance(raw_rp, bool) or not isinstance(raw_rp, (int, float)):
+            repeat_penalty: float | None = None
+        else:
+            repeat_penalty = max(0.0, float(raw_rp)) or None
+
         return cls(
             name=name.strip(),
             system_prompt=system_prompt,
             temperature=temperature,
             num_ctx=num_ctx,
             allowed_tools=allowed,
+            model=model,
+            category=category,
+            top_p=top_p,
+            top_k=top_k,
+            repeat_penalty=repeat_penalty,
         )
 
 
@@ -153,6 +209,18 @@ def default_agents() -> list[Agent]:
             allowed_tools=[],
         ),
     ]
+
+
+class AgentStoreProtocol(Protocol):
+    """Interfaz mínima que cualquier store de agentes debe cumplir.
+
+    Existe para que tests y variantes en memoria no tengan que heredar
+    de ``AgentStore`` (que persiste a disco). Es un Protocol estructural:
+    basta con implementar los métodos.
+    """
+
+    def load(self) -> list[Agent]: ...
+    def save(self, agents: list[Agent]) -> None: ...
 
 
 class AgentStore:

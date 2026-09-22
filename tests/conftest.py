@@ -9,6 +9,25 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+@pytest.fixture(autouse=True)
+def _cleanup_async_runners(request):
+    """Fuerza la recolección de objetos tras cada test.
+
+    Cada OllamaClient() crea un AsyncRunner con su propio hilo + loop.
+    Los tests no llaman shutdown() consistentemente, así que los hilos
+    se acumulan. Con pytest-qt llamando processEvents() entre tests,
+    esa acumulación provoca SIGBUS en macOS + PySide6.
+
+    Con el __del__ de AsyncRunner + gc.collect() aquí, los runners
+    residuales se cierran antes del siguiente test.
+    """
+    yield
+    nodeid = request.node.nodeid
+    if any(k in nodeid for k in ("ollama", "chat_controller", "regenerate")):
+        import gc
+        gc.collect()
+
+
 @pytest.fixture(scope="session")
 def qapp():
     """QApplication offscreen compartida por todos los tests de UI.
@@ -32,8 +51,6 @@ def qapp():
 #
 # Este helper construye un mock de AsyncClient que simula el stream
 # de NDJSON como Ollama lo envía.
-
-import pytest
 
 
 @pytest.fixture

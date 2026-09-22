@@ -410,7 +410,10 @@ def dim(t):   return _c("2", t)
 def bold(t):  return _c("1", t)
 
 
-def fmt_size(n: int) -> str:
+def fmt_size(n: float) -> str:
+    # `n` es float porque la iteración divide entre 1024 repetidamente.
+    # Aceptar int también es válido: se promociona a float en la
+    # primera división.
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024:
             return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"

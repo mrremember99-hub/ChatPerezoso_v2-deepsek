@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Any
 
@@ -8,6 +9,9 @@ from core.tools import ToolRegistry
 
 from ._base import MCPError
 from .client import MCPClient
+
+
+logger = logging.getLogger(__name__)
 
 
 class MCPToolBridge:
@@ -86,16 +90,20 @@ class MCPToolBridge:
     def activate(
         self,
         server_id: str,
-        client: MCPClient,
+        client: Any,
         tools: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
+        # `client` se anota como Any porque los tests pasan dobles que
+        # implementan solo la superficie consumida (list_tools,
+        # call_tool). En producción siempre es un MCPClient real.
         server_id = str(server_id).strip()
         if not server_id:
             raise ValueError("El identificador del servidor MCP no puede estar vacío.")
         if server_id in self._servers:
             raise ValueError(f"Ya existe un servidor MCP llamado «{server_id}».")
 
-        tools = client.list_tools() if tools is None else tools
+        if tools is None:
+            tools = client.list_tools()
         converted = client.to_ollama_tools(tools)
         self._servers[server_id] = client
 
@@ -136,9 +144,6 @@ class MCPToolBridge:
                     # confirmación), pero lo registramos para detectar
                     # servidores que mienten o que simplemente no
                     # conocemos todavía.
-                    from ._base import MCPError  # noqa: F401 (silencia linters)
-                    import logging
-                    logger = logging.getLogger(__name__)
                     trusted = self._TRUSTED_READONLY.get(server_id, frozenset())
                     if hint_readonly and name not in trusted:
                         logger.warning(
@@ -187,11 +192,15 @@ class MCPToolBridge:
                     self._mcp_readonly.pop(exposed, None)
                     self._mcp_defs_by_exposed.pop(exposed, None)
 
-        # Limpia las reglas huérfanas del registro global. Sin esto,
-        # `tools_for_request` seguiría considerando activas herramientas
-        # de un servidor ya desconectado.
-        if removed_names:
-            ToolIntentGate.unregister_rules(removed_names)
+        # No borramos reglas del registro global: son inertes porque
+        # los nombres de las herramientas ya no aparecen en
+        # `definitions()`. Y borrarlas rompería otra instancia de
+        # MCPToolBridge que pudiera estar usando los mismos nombres.
+        #
+        # Si en el futuro se quiere limpiar, hay que hacerlo desde el
+        # propio bridge (que conoce sus reglas) sin tocar un registro
+        # compartido.
+        del removed_names  # ya no lo usamos
         self._rebuild_definitions()
 
     # -- definiciones --------------------------------------------------------
@@ -201,7 +210,8 @@ class MCPToolBridge:
 
     def _rebuild_definitions(self) -> None:
         active_original_names = {
-            original_name for _, original_name in self._mcp_names.values()
+            original_name
+            for _, original_name in (self._mcp_names or {}).values()
         }
         hidden = {
             core_name

@@ -4,6 +4,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QLabel, QMainWindow, QSplitter
 
 from .chat_panel import ChatPanel
+from .right_panel import RightPanel
 from .sidebar import Sidebar
 
 
@@ -22,8 +23,12 @@ class MainWindow(QMainWindow):
         self.chat_panel = ChatPanel()
         splitter.addWidget(self.chat_panel)
 
+        self.right_panel = RightPanel()
+        splitter.addWidget(self.right_panel)
+
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(2, 0)
 
         self.status = QLabel("Listo")
         self.status.setObjectName("StatusText")
