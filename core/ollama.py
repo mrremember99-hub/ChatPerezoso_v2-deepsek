@@ -7,7 +7,7 @@ import logging
 import re
 import threading
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable
 
 import httpx
@@ -34,6 +34,29 @@ from .xml_tools import build_tools_prompt, parse_tool_calls, strip_tool_call_blo
 
 
 logger = logging.getLogger(__name__)
+
+
+_RETRY_EXHAUSTED_MSG = (
+    "No se pudo completar la operación: el modelo no logró "
+    "invocar la herramienta mediante la llamada nativa tras "
+    "reintentarlo. Reformula la petición."
+)
+
+_LOOP_REPEATED_MSG = (
+    "El modelo completó la tarea y estaba verificándola en bucle. "
+    "Se detiene aquí: revisa el resultado en el chat y, si falta "
+    "algo, reformula la petición."
+)
+
+_BLOCKED_ROUNDS_MSG = (
+    "El modelo intentó varias veces una operación que no está "
+    "autorizada por tu petición. Reformula el mensaje indicando "
+    "el archivo concreto donde quieres que se guarde el resultado."
+)
+
+_MAX_REPEATED_SIGNATURES = 2
+_MAX_CONSECUTIVE_BLOCKED_ROUNDS = 3
+
 
 @dataclass
 class _ChatContext:
@@ -68,6 +91,22 @@ class _RoundExecution:
     round_signature: str | None
     had_block: bool
     had_execution: bool
+
+
+@dataclass
+class _LoopState:
+    """Estado mutable del bucle de chat().
+
+    Persiste a lo largo de las rondas del mismo chat():
+      · textual_retry_used — retry de tool-call textual ya usado.
+      · consecutive_blocked_rounds — rondas seguidas bloqueadas.
+      · recent_tool_signatures — firmas de las ultimas tools.
+      · token_cache — cache de costes durante este chat().
+    """
+    textual_retry_used: bool = False
+    consecutive_blocked_rounds: int = 0
+    recent_tool_signatures: list[str] = field(default_factory=list)
+    token_cache: RequestTokenCache | None = None
 
 
 
@@ -237,20 +276,12 @@ class OllamaClient:
         tool_names = ctx.tool_names
 
         # 5. Bucle de rondas delegando en la estrategia.
-        textual_retry_used = False
-        consecutive_blocked_rounds = 0
-        # Firmas de las últimas operaciones de tool para detectar
-        # "sobre-trabajo": si el modelo repite la misma operación
-        # (mismo nombre + mismos argumentos) dos veces seguidas, es
-        # que ya terminó pero no lo reconoce. Se corta el bucle y se
-        # responde con el último contenido visible.
-        recent_tool_signatures: list[str] = []
-        MAX_REPEATED_SIGNATURES = 2
-        # Cache de costes de contexto: vive solo durante este chat().
-        # Evita que fit() reestime los mismos mensajes en cada ronda
-        # del bucle de tools.
-        token_cache = (
-            RequestTokenCache() if context_window is not None else None
+        # Estado mutable del bucle (retry, firmas, contador de
+        # bloqueos, cache de tokens). Ver _LoopState.
+        state = _LoopState(
+            token_cache=(
+                RequestTokenCache() if context_window is not None else None
+            ),
         )
 
         for _ in range(max_rounds):
@@ -266,7 +297,7 @@ class OllamaClient:
                     context_window,
                     history,
                     send_tools or [],
-                    cache=token_cache,
+                    cache=state.token_cache,
                 )
                 ctx.history = history
 
@@ -285,22 +316,16 @@ class OllamaClient:
 
             # Reintento por tool calling textual (solo nativo).
             if result.retry_requested:
-                if not textual_retry_used:
-                    textual_retry_used = True
+                if not state.textual_retry_used:
+                    state.textual_retry_used = True
                     history.append({
                         "role": "assistant",
                         "content": result.assistant_content,
                     })
                     history.append({"role": "user", "content": result.retry_message})
                     continue
-                # Ya se reintentó una vez: fallar con mensaje al usuario.
-                final_text = (
-                    "No se pudo completar la operación: el modelo no logró "
-                    "invocar la herramienta mediante la llamada nativa tras "
-                    "reintentarlo. Reformula la petición."
-                )
-                on_text(final_text)
-                return final_text
+                on_text(_RETRY_EXHAUSTED_MSG)
+                return _RETRY_EXHAUSTED_MSG
 
             # Mostrar al usuario el texto visible (sin bloques XML).
             if result.visible_text:
@@ -320,46 +345,10 @@ class OllamaClient:
                 round_had_block = execution.had_block
                 round_had_execution = execution.had_execution
 
-                # Detección de "sin progreso": si el modelo repite la
-                # misma operación con los mismos argumentos dos veces
-                # seguidas, ya terminó pero no lo reconoce. Cortar y
-                # devolver el último texto disponible.
-                if round_signature is not None:
-                    recent_tool_signatures.append(round_signature)
-                    # Contar cuántas veces seguidas aparece la firma.
-                    repeated = 0
-                    for sig in reversed(recent_tool_signatures):
-                        if sig == round_signature:
-                            repeated += 1
-                        else:
-                            break
-                    if repeated >= MAX_REPEATED_SIGNATURES:
-                        msg = (
-                            "El modelo completó la tarea y estaba "
-                            "verificándola en bucle. Se detiene aquí: "
-                            "revisa el resultado en el chat y, si falta "
-                            "algo, reformula la petición."
-                        )
-                        on_text(msg)
-                        return msg
-
-                # Si toda la ronda fue bloqueada, contar. Si hubo
-                # alguna ejecución, resetear el contador.
-                if round_had_block and not round_had_execution:
-                    consecutive_blocked_rounds += 1
-                    if consecutive_blocked_rounds >= 3:
-                        msg = (
-                            "El modelo intentó varias veces una operación "
-                            "que no está autorizada por tu petición. "
-                            "Reformula el mensaje indicando el archivo "
-                            "concreto donde quieres que se guarde el "
-                            "resultado (por ejemplo: «crea el archivo "
-                            "utils.py con la función generate_proxy»)."
-                        )
-                        on_text(msg)
-                        return msg
-                else:
-                    consecutive_blocked_rounds = 0
+                stop = self._evaluate_round(ctx, execution, state)
+                if stop is not None:
+                    on_text(stop)
+                    return stop
                 continue
 
             # Sin tool calls y sin ser final: caso raro (no debería
@@ -543,6 +532,38 @@ class OllamaClient:
             had_block=had_block,
             had_execution=had_execution,
         )
+
+    @staticmethod
+    def _evaluate_round(
+        ctx: _ChatContext,
+        execution: _RoundExecution,
+        state: _LoopState,
+    ) -> str | None:
+        """Evalua una ronda con tool calls. Devuelve mensaje de stop o None.
+
+        Detecta dos condiciones de corte:
+          · Firma de tool repetida consecutivamente (modelo en bucle).
+          · Todas las rondas bloqueadas consecutivamente (autorizacion).
+        """
+        sig = execution.round_signature
+        if sig is not None:
+            state.recent_tool_signatures.append(sig)
+            repeated = 0
+            for old in reversed(state.recent_tool_signatures):
+                if old == sig:
+                    repeated += 1
+                else:
+                    break
+            if repeated >= _MAX_REPEATED_SIGNATURES:
+                return _LOOP_REPEATED_MSG
+
+        if execution.had_block and not execution.had_execution:
+            state.consecutive_blocked_rounds += 1
+            if state.consecutive_blocked_rounds >= _MAX_CONSECUTIVE_BLOCKED_ROUNDS:
+                return _BLOCKED_ROUNDS_MSG
+        else:
+            state.consecutive_blocked_rounds = 0
+        return None
 
     @staticmethod
     def _fit_round_history(
