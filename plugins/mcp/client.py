@@ -247,13 +247,16 @@ class MCPClient:
         timeout: float,
         cancel_event: threading.Event | None = None,
     ) -> Any:
-        loop = self._loop
-        if loop is None or self._closed:
-            raise MCPError("El cliente MCP no está conectado.")
-        try:
-            future = asyncio.run_coroutine_threadsafe(coroutine, loop)
-        except Exception as exc:
-            raise MCPError(str(exc)) from exc
+        with self._lifecycle_lock:
+            if self._closed:
+                raise MCPError("El cliente MCP ya está cerrado.")
+            loop = self._loop
+            if loop is None:
+                raise MCPError("El cliente MCP no está conectado.")
+            try:
+                future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+            except Exception as exc:
+                raise MCPError(str(exc)) from exc
 
         deadline = time.monotonic() + timeout
         while True:

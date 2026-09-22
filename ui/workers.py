@@ -151,6 +151,16 @@ class MCPWorker(QObject):
             self.finished.emit(self.server_id, self.client, tools)
         except MCPError as exc:
             self.error.emit(self.server_id, str(exc))
+        except BaseException as exc:
+            # Cualquier otra excepcion tambien debe llegar al
+            # controller. Si no, el bridge queda con estado
+            # inconsistente: el worker nunca emite signal, el
+            # controller cree que sigue conectado, y la UI muestra
+            # el servidor como activo mientras las llamadas fallan.
+            self.error.emit(
+                self.server_id,
+                f"{type(exc).__name__}: {exc}",
+            )
 
 
 class ChatWorker(QObject):

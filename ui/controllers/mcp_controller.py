@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import shlex
 
 from PySide6.QtCore import QObject, QThread, Signal
@@ -16,6 +17,9 @@ from plugins.mcp import (
 
 from ..views.dialogs import warn
 from ..workers import MCPWorker
+
+
+logger = logging.getLogger(__name__)
 
 
 class MCPController(QObject):
@@ -147,10 +151,11 @@ class MCPController(QObject):
         self.bridge.deactivate()
         for worker in list(self._workers.values()):
             worker.client.close()
-        for thread in list(self._threads.values()):
+        for sid, thread in list(self._threads.items()):
             if thread.isRunning():
                 thread.quit()
-                thread.wait(2000)
+                if not thread.wait(2000):
+                    logger.warning("MCP thread %s no terminó en 2s durante shutdown", sid)
         self._workers.clear()
         self._threads.clear()
         self._configs.clear()
