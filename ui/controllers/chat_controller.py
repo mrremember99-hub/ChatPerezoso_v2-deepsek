@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QWidget
 import logging
 
 from core.context_window import ContextWindow
-from core.history import HistoryStore
+from core.history import AsyncHistoryWriter, HistoryStore
 from core.ollama import OllamaClient, is_textual_tool_failure
 from core.tool_provider import ToolProvider
 from core.tool_result import ToolResult
@@ -107,6 +107,7 @@ class ChatController(QObject):
         self.tools = tools
         self.renderer = renderer
         self.store = store or HistoryStore()
+        self._async_writer = AsyncHistoryWriter(self.store)
         self.messages: list[dict] = list(initial_messages or [])
         # Any porque los tests sustituyen el worker y el thread
         # reales por dobles que no heredan de ChatWorker/QThread.
@@ -425,6 +426,10 @@ class ChatController(QObject):
 
         # Persistencia final: no podemos esperar al debounce.
         self._persist_now()
+        # Esperar a que el writer termine las escrituras pendientes
+        # antes de liberar el resto de recursos. Sin esto, un cierre
+        # podria perder las ultimas escrituras.
+        self._async_writer.shutdown()
 
     # -- historial -----------------------------------------------------------
     def _append_message(self, message: dict) -> None:
@@ -513,14 +518,25 @@ class ChatController(QObject):
         self._persist_timer.start()
 
     def _do_persist(self) -> None:
-        """Escribe el historial a disco. Llamado por el timer o forzado."""
-        self.store.save(self.messages, model=self._last_model)
+        """Encola la escritura del historial. No bloquea el hilo UI."""
+        self._async_writer.submit(
+            self.messages, model=self._last_model
+        )
 
-    def _persist_now(self) -> None:
-        """Fuerza la escritura inmediata. Se usa al cerrar o limpiar."""
+    def _persist_now(self, *, wait: bool = True) -> None:
+        """Fuerza la escritura inmediata. Se usa al cerrar o limpiar.
+
+        wait=True (default): espera a que la escritura a disco
+          termine. Mantiene el contrato del nombre: tras esta
+          llamada, el archivo esta en disco.
+        wait=False: encola sin esperar. Para casos donde el
+          llamante no puede bloquearse.
+        """
         if self._persist_timer.isActive():
             self._persist_timer.stop()
         self._do_persist()
+        if wait:
+            self._async_writer.flush()
 
     # -- slots internos ------------------------------------------------------
     def _schedule_stream_drain(self) -> None:

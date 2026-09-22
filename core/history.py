@@ -125,3 +125,71 @@ class HistoryStore:
             self.path.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+# ── Escritura asíncrona ──────────────────────────────────────────────
+
+from concurrent.futures import ThreadPoolExecutor
+
+
+class AsyncHistoryWriter:
+    """Escribe el historial a disco fuera del hilo de UI.
+
+    `HistoryStore.save()` hace json.dumps + write_text + replace.
+    Para historiales de varios MB eso son decenas o cientos de ms
+    de trabajo síncrono en el hilo llamante. Aquí lo mandamos a un
+    ThreadPoolExecutor de 1 worker:
+
+      · Un solo worker → las escrituras se serializan en el orden
+        en que llegan. Nunca pueden quedar fuera de orden.
+      · Snapshot inmutable → el thread no ve self.messages mutando.
+      · shutdown() → drain del executor al cerrar la app.
+
+    No notifica errores al llamante: la persistencia es una
+    comodidad, no un requisito (ver HistoryStore.save).
+    """
+
+    def __init__(self, store: HistoryStore) -> None:
+        self._store = store
+        self._executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="HistoryWriter",
+        )
+
+    def submit(
+        self,
+        messages: list[dict],
+        *,
+        model: str = "",
+        workspace: str = "",
+    ) -> None:
+        """Encola la escritura. No bloquea el hilo que llama."""
+        # Snapshot inmutable, cap a _MAX_MESSAGES, solo roles válidos.
+        # El thread de persistencia nunca debe leer `messages`
+        # original, que puede estar mutando en el hilo UI.
+        snapshot = [
+            {"role": m["role"], "content": m["content"]}
+            for m in messages
+            if m.get("role") in {"user", "assistant"}
+            and isinstance(m.get("content"), str)
+        ][-_MAX_MESSAGES:]
+        self._executor.submit(
+            self._store.save,
+            snapshot,
+            model=model,
+            workspace=workspace,
+        )
+
+    def flush(self, timeout: float = 3.0) -> None:
+        """Espera a que las escrituras encoladas terminen.
+
+        No cierra el executor: se puede seguir usando después. Se
+        implementa encolando una tarea noop que, al ejecutarse,
+        garantiza que todo lo anterior se completó (FIFO, un solo
+        worker).
+        """
+        self._executor.submit(lambda: None).result(timeout=timeout)
+
+    def shutdown(self, timeout: float = 3.0) -> None:
+        """Espera a que terminen las escrituras pendientes y cierra."""
+        self._executor.shutdown(wait=True, cancel_futures=False)
