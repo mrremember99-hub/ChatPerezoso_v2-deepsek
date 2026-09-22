@@ -56,18 +56,55 @@ class AsyncRunner:
         Sin esto, el hilo del loop queda vivo hasta que muere el
         intérprete, y acumular hilos vivos entre tests provoca SIGBUS
         con pytest-qt + PySide6 en macOS.
+
+        Si hay un close_callback registrado (por ejemplo, para cerrar
+        el httpx.AsyncClient persistente), se programa su ejecución
+        antes de parar el loop. Se hace en un hilo daemon para no
+        bloquear al GC: un __del__ que espera I/O puede colgar el
+        recolector y provocar deadlocks sutiles.
         """
         try:
             if getattr(self, "_closed", True):
                 return
             self._closed = True
             loop = getattr(self, "_loop", None)
-            if loop is not None and not loop.is_closed():
+            close_cb = getattr(self, "_close_callback", None)
+            if loop is None or loop.is_closed():
+                return
+
+            if close_cb is None or not loop.is_running():
+                # Sin callback o loop ya parado: solo pedir stop.
                 try:
                     loop.call_soon_threadsafe(loop.stop)
                 except RuntimeError:
                     pass
-        except Exception:
+                return
+
+            def _cleanup() -> None:
+                try:
+                    future = asyncio.run_coroutine_threadsafe(
+                        close_cb(), loop
+                    )
+                    try:
+                        future.result(timeout=1.0)
+                    except Exception:
+                        pass
+                finally:
+                    try:
+                        loop.call_soon_threadsafe(loop.stop)
+                    except RuntimeError:
+                        pass
+
+            try:
+                threading.Thread(target=_cleanup, daemon=True).start()
+            except BaseException:
+                # Si no podemos arrancar el hilo (shutdown del
+                # intérprete), al menos paramos el loop.
+                try:
+                    loop.call_soon_threadsafe(loop.stop)
+                except RuntimeError:
+                    pass
+        except BaseException:
             # Un __del__ que lanza es peor que un __del__ que falla.
             pass
 

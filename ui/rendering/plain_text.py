@@ -280,7 +280,27 @@ class PlainTextRenderer:
         if not text.strip():
             return
 
-        cursor = QTextCursor(self.chat.document())
+        doc = self.chat.document()
+        # characterCount() incluye el carácter nulo final del documento.
+        # Cualquier posición igual o mayor es inválida: si se construye
+        # un QTextCursor con ella, no selecciona nada y el render se
+        # pierde silenciosamente.
+        max_pos = doc.characterCount() - 1
+        if (
+            self.response_start > max_pos
+            or self._segment_end > max_pos
+            or self.response_start > self._segment_end
+        ):
+            # Estado inconsistente: probablemente se ha borrado texto
+            # entre medias (regeneración, edición externa) sin limpiar
+            # las posiciones. Resetear y salir sin tocar el documento.
+            self._response_start = None
+            self._segment_end = None
+            self._segment_parts.clear()
+            self._segment_chars = 0
+            return
+
+        cursor = QTextCursor(doc)
         cursor.setPosition(self.response_start)
         cursor.setPosition(self._segment_end, QTextCursor.MoveMode.KeepAnchor)
         cursor.removeSelectedText()

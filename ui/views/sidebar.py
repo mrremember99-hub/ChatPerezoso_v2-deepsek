@@ -255,4 +255,16 @@ class Sidebar(QWidget):
 
     # -- helpers -------------------------------------------------------------
     def _apply_busy(self) -> None:
-        self.model_combo.setEnabled(not self._busy)
+        """Deshabilita los controles que no aplican durante streaming.
+
+        Cambiar de agente a mitad de un turno no afecta al turno en
+        curso (el worker ya tiene su snapshot), pero confunde al
+        usuario: cree que su cambio surtirá efecto inmediato. Igual
+        con "Nuevo agente", "Editar" y "Piloto automático".
+        """
+        enabled = not self._busy
+        self.model_combo.setEnabled(enabled)
+        self.agent_combo.setEnabled(enabled)
+        self.agent_new_button.setEnabled(enabled)
+        self.agent_edit_button.setEnabled(enabled)
+        self.auto_approve_check.setEnabled(enabled)
