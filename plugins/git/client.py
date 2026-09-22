@@ -107,6 +107,11 @@ class GitClient:
                 cwd=self.cwd,
                 capture_output=True,
                 text=True,
+                # errors=replace: repos con nombres no-UTF8 (comunes
+                # en commits de Windows o con codificaciones mixtas)
+                # lanzaban UnicodeDecodeError sin esto. Mejor un
+                # caracter de reemplazo que un crash.
+                errors="replace",
                 timeout=timeout,
                 check=False,
             )

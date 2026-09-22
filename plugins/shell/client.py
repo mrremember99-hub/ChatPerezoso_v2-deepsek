@@ -119,9 +119,14 @@ class ShellClient:
             raise ShellError(f"Comando mal formado: {exc}") from exc
         if not parts:
             raise ShellError("El comando no contiene ningún token válido.")
-        program = parts[0].rsplit("/", 1)[-1]
+        # Normalizar a minusculas antes de comparar. En macOS/APFS el
+        # kernel resuelve "SUDO" al mismo binario que "sudo". Sin
+        # esto, un modelo que emite "SUDO rm ..." se saltaba el filtro.
+        program = parts[0].rsplit("/", 1)[-1].lower()
         if program in _FORBIDDEN_PROGRAMS:
-            raise ShellError(f"El comando «{program}» está bloqueado por seguridad.")
+            raise ShellError(
+                f"El comando «{program}» está bloqueado por seguridad."
+            )
 
     def _resolve_cwd(self, relative: str) -> Path:
         if not isinstance(relative, str) or not relative:
