@@ -794,17 +794,27 @@ class OllamaClient:
         message: dict[str, Any] = {}
         metrics: dict[str, int] = {}
         buffering_textual = False
+        # Fragmentos guardados desde que se activó el buffering. Al
+        # final, si NO era tool-call, se emite SOLO este fragmento, no
+        # el content completo (eso duplicaba el texto ya emitido).
+        buffered_parts: list[str] = []
 
         async for event in self.iter_ollama_events(
             payload, cancel_event=cancel_event
         ):
             if isinstance(event, TextDelta):
-                if on_text is not None and not buffering_textual:
-                    prefix = event.text.lstrip()[:1]
-                    if prefix in ("{", "["):
-                        buffering_textual = True
+                if on_text is not None:
+                    if buffering_textual:
+                        buffered_parts.append(event.text)
                     else:
-                        on_text(event.text)
+                        prefix = event.text.lstrip()[:1]
+                        if prefix in ("{", "["):
+                            # Primer delta sospechoso: activar buffer
+                            # y guardar TAMBIEN este delta (no emitir).
+                            buffering_textual = True
+                            buffered_parts.append(event.text)
+                        else:
+                            on_text(event.text)
             elif isinstance(event, StreamFinished):
                 message = event.message
                 metrics = event.metrics
@@ -852,10 +862,24 @@ class OllamaClient:
                     if textual_name:
                         message["_textual_tool_name"] = textual_name
 
-        # Si activamos buffering pero NO resulto ser tool call, el
-        # usuario no ha visto nada: emitimos el texto completo.
-        if buffering_textual and on_text is not None and not textual_name:
-            on_text(content)
+        # Si activamos buffering pero NO resulto ser tool call
+        # textual NI hubo tool_calls nativos, el usuario no ha visto
+        # lo que se buffereo. Emitir SOLO ese fragmento, no `content`
+        # completo: emitir el content entero duplicaba el texto ya
+        # emitido antes de activar el buffer.
+        #
+        # Si hay tool_calls nativos, NO emitimos: el JSON escrito
+        # como texto corresponde a la tool call y no debe verse.
+        has_native_tool_calls = bool(message.get("tool_calls"))
+        if (
+            buffering_textual
+            and on_text is not None
+            and not textual_name
+            and not has_native_tool_calls
+        ):
+            pending = "".join(buffered_parts)
+            if pending:
+                on_text(pending)
 
         # Adjuntar las métricas reales al mensaje para que chat() las
         # pueda propagar (via callback on_metrics) y la UI las muestre.
