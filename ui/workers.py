@@ -17,9 +17,10 @@ from plugins.mcp import MCPClient, MCPError
 CONFIRMATION_TIMEOUT_SECONDS = 600  # 10 minutos
 
 
-# Umbral blando del buffer de streaming. Si el buffer lo supera, el
-# worker emite señales `stream_ready` adicionales para forzar un drain
-# cuanto antes. NO es un límite duro: push() nunca rechaza ni bloquea.
+# Cap real del buffer de streaming. push() bloquea al productor
+# hasta que el consumidor drene o el cancel_event se active. Los
+# deltas mayores que este cap se aceptan enteros (no se puede
+# descartar texto ya generado): eso es una excepción deliberada.
 #
 # En la práctica el buffer apenas acumula: el controller hace drain
 # cada 32 ms (ChatController._drain_stream). A 200 tok/s × ~5 chars/tok
@@ -52,7 +53,9 @@ class TextDeltaBuffer:
         self._cond = threading.Condition()
         self._parts: list[str] = []
         self._chars = 0
-        self._max_chars = max_chars
+        # Validar: max_chars <= 0 desactiva el cap y el push
+        # siempre entraria por el branch `len(text) >= max_chars`.
+        self._max_chars = max(1, int(max_chars))
 
     def push(
         self,

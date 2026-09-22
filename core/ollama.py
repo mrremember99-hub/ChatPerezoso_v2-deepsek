@@ -478,12 +478,15 @@ class OllamaClient:
                     actual_tokens=prompt_tokens,
                 )
         except Exception:
-            pass
+            # Un fallo de calibracion no debe romper la generacion,
+            # pero sí debe quedar trazado: era un punto ciego de
+            # diagnostico cuando el ratio se desviaba.
+            logger.exception("Error calibrando tokens para %s", ctx.model)
         if ctx.on_metrics is not None:
             try:
                 ctx.on_metrics(round_metrics)
             except Exception:
-                pass
+                logger.exception("Error emitiendo metricas al llamante")
 
     @staticmethod
     def _execute_round_tools(

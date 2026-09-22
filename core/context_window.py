@@ -76,16 +76,22 @@ class RequestTokenCache:
         key = id(message)
         content = message.get("content")
         tool_calls = message.get("tool_calls")
+        # Comprobar tambien la longitud de tool_calls. Si alguien
+        # hace `message["tool_calls"].append(...)`, la identidad del
+        # objeto no cambia pero el coste real si. Sin este check, la
+        # cache devolveria un coste obsoleto.
+        tc_len = len(tool_calls) if tool_calls else 0
         entry = self._entries.get(key)
         if entry is not None:
-            cached_content, cached_calls, tokens = entry
-            # Solo reutilizamos si los campos de los que depende el
-            # coste siguen apuntando a los mismos objetos. Si cambian,
-            # recomputamos.
-            if cached_content is content and cached_calls is tool_calls:
+            cached_content, cached_calls, cached_tc_len, tokens = entry
+            if (
+                cached_content is content
+                and cached_calls is tool_calls
+                and cached_tc_len == tc_len
+            ):
                 return tokens
         tokens = window.estimate_message_tokens(message)
-        self._entries[key] = (content, tool_calls, tokens)
+        self._entries[key] = (content, tool_calls, tc_len, tokens)
         return tokens
 
 
@@ -266,8 +272,15 @@ class ContextWindow:
         """Estima tokens del prompt completo (system + tools + historial)."""
         total = self.estimate_tokens(system_prompt)
         for definition in tool_definitions:
+            # Misma serializacion que fit() (separators compactos).
+            # Antes se usaba la default con espacios, lo que daba
+            # estimaciones ligeramente distintas.
             total += self.estimate_tokens(
-                json.dumps(definition, ensure_ascii=False)
+                json.dumps(
+                    definition,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
             )
         total += self._estimate_messages(messages)
         return total
