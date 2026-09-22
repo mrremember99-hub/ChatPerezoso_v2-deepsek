@@ -27,6 +27,7 @@ from __future__ import annotations
 import html as html_lib
 import logging
 import re
+import threading
 
 import markdown
 from pygments import highlight
@@ -42,6 +43,14 @@ _md = markdown.Markdown(
     extensions=["fenced_code", "tables", "sane_lists"],
     output_format="html",
 )
+
+# Lock que protege el estado interno de _md. `markdown.Markdown`
+# mantiene contadores de referencias y estado de extensiones entre
+# reset() y convert(). Llamar a to_html() desde dos hilos distintos
+# corrompe ese estado. Hoy solo se llama desde el hilo UI, pero el
+# contrato del modulo no lo garantiza y un futuro worker de
+# renderizado romperia sin avisar.
+_md_lock = threading.Lock()
 
 # Formatter de Pygments con estilos inline (noclasses=True), sin <pre>
 # (nowrap=True) y con saltos de línea como <br> para que QTextEdit los
@@ -67,8 +76,11 @@ def to_html(text: str) -> str:
     if not text or not text.strip():
         return ""
 
-    _md.reset()
-    raw = _md.convert(text)
+    # Seccion critica: reset + convert mutan el estado interno de
+    # _md. Sin el lock, dos hilos concurrentes corrompen ese estado.
+    with _md_lock:
+        _md.reset()
+        raw = _md.convert(text)
     return _sanitize(raw)
 
 

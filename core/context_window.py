@@ -42,6 +42,14 @@ _DEFAULT_OUTPUT_RESERVE: Final[int] = 1024
 # presupuesto esté agotado. Coincide con ChatController.MIN_TURNS_TO_KEEP.
 _DEFAULT_MIN_TURNS: Final[int] = 8
 
+# Margen de seguridad aplicado al prompt_budget. La estimacion de
+# tokens puede desviarse un 10-20% sobre la realidad (el propio
+# benchmark del proyecto da 42.9% de diferencia entre heuristicas
+# en codigo). Reservar un 15% evita que un prompt ligeramente
+# sobreestimado se pase del limite del modelo y Ollama lo trunque
+# en silencio. El coste es conservar un poco menos de historial.
+_PROMPT_BUDGET_MARGIN: Final[float] = 0.85
+
 
 class RequestTokenCache:
     """Cache efímera de costes de tokens durante un `chat()`.
@@ -133,7 +141,10 @@ class ContextWindow:
 
     @property
     def prompt_budget(self) -> int:
-        return max(0, self._limit - self.output_reserve)
+        raw = max(0, self._limit - self.output_reserve)
+        # Margen de seguridad contra la desviacion de la estimacion.
+        # Ver _PROMPT_BUDGET_MARGIN para la justificacion.
+        return int(raw * _PROMPT_BUDGET_MARGIN)
 
     # -- estimación ----------------------------------------------------------
 

@@ -28,17 +28,22 @@ def test_estimate_empty_text_is_zero():
 # -- presupuesto --------------------------------------------------------------
 
 def test_prompt_budget_respects_output_reserve():
+    from core.context_window import _PROMPT_BUDGET_MARGIN
     w = ContextWindow(limit_tokens=8192, output_reserve=1024)
-    assert w.prompt_budget == 8192 - 1024
+    raw = 8192 - 1024
+    expected = int(raw * _PROMPT_BUDGET_MARGIN)
+    assert w.prompt_budget == expected
     assert w.output_reserve == 1024
 
 
 def test_prompt_budget_proportional_for_small_limits():
     """Con límites pequeños, la reserva no debe comerse todo el prompt."""
+    from core.context_window import _PROMPT_BUDGET_MARGIN
     w = ContextWindow(limit_tokens=1000, output_reserve=1024)
     # Reserva efectiva = min(1024, 1000//2) = 500.
     assert w.output_reserve == 500
-    assert w.prompt_budget == 500
+    # Margen de seguridad aplicado al raw = 500.
+    assert w.prompt_budget == int(500 * _PROMPT_BUDGET_MARGIN)
 
 
 def test_prompt_budget_never_negative():
