@@ -18,12 +18,18 @@ from ui.controllers.chat_controller import ChatController
 
 class _FakeRenderer:
     def __init__(self):
-        self.response_text = ""
+        self._response_text = ""
+        self.response_start = None
         self.user_messages: list[str] = []
         self.remove_calls = 0
 
+    @property
+    def response_text(self):
+        return self._response_text
+
     def reset(self):
-        self.response_text = ""
+        self._response_text = ""
+        self.response_start = None
 
     def reset_response_segment(self):
         pass
@@ -32,7 +38,7 @@ class _FakeRenderer:
         self.user_messages.append(text)
 
     def on_text(self, text):
-        self.response_text += text
+        self._response_text += text
 
     def insert_narration(self, *a, **k): pass
     def insert_tool_card(self, *a, **k): pass

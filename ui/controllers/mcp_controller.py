@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import shlex
+from typing import Any
 
 from PySide6.QtCore import QObject, QThread, Signal
 from PySide6.QtWidgets import QWidget
@@ -29,6 +30,14 @@ class MCPController(QObject):
     toggle por cada uno. La señal ``servers_changed`` emite las entradas
     completas + el estado para que la sidebar los renderice.
     """
+
+    # Atributo usado por tests para mantener viva la referencia al
+    # QObject padre. La app real no lo asigna.
+    _owner: Any = None
+
+    # Atributo usado por tests para mantener viva la referencia al
+    # QObject padre. La app real no lo asigna.
+    _owner: Any = None
 
     # entries(as dicts), active_ids, pending_ids, dead_ids
     servers_changed = Signal(list, list, list, list)
