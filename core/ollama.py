@@ -270,53 +270,7 @@ class OllamaClient:
                 options=options,
             )
 
-            # Métricas reales de esta ronda. Se emiten como callback
-            # para que el consumidor (ChatWorker) pueda propagarlas a
-            # la UI. No afectan al flujo de tool calling ni al
-            # procesamiento del mensaje.
-            round_metrics = message.pop("_metrics", None)
-            if round_metrics:
-                try:
-                    prompt_tokens = int(
-                        round_metrics.get("prompt_eval_count", 0)
-                    )
-                    if prompt_tokens > 0:
-                        # Serializar los mensajes completos (incluye
-                        # tool_calls, roles, estructura) y las tool
-                        # definitions. `prompt_eval_count` cuenta todo
-                        # eso, así que medir solo el content daba un
-                        # ratio sesgado a la baja.
-                        messages_chars = sum(
-                            len(json.dumps(
-                                m,
-                                ensure_ascii=False,
-                                default=str,
-                            ))
-                            for m in history
-                        )
-                        tools_chars = 0
-                        if send_tools:
-                            try:
-                                tools_chars = len(json.dumps(
-                                    send_tools,
-                                    ensure_ascii=False,
-                                    default=str,
-                                ))
-                            except (TypeError, ValueError):
-                                tools_chars = 0
-                        total_chars = messages_chars + tools_chars
-                        token_calibration.observe(
-                            model,
-                            chars=total_chars,
-                            actual_tokens=prompt_tokens,
-                        )
-                except Exception:
-                    pass
-                if on_metrics is not None:
-                    try:
-                        on_metrics(round_metrics)
-                    except Exception:
-                        pass
+            self._emit_round_metrics(ctx, message)
 
             result = strategy.process_round(message, tool_names)
 
@@ -515,6 +469,61 @@ class OllamaClient:
             send_tools=send_tools,
             buffer_only=buffer_only,
         )
+
+    @staticmethod
+    def _emit_round_metrics(
+        ctx: _ChatContext,
+        message: dict[str, Any],
+    ) -> None:
+        """Extrae y emite las métricas de una ronda.
+
+        Pop del `_metrics` del mensaje. Si hay métricas reales de
+        Ollama, alimenta el calibrador EWMA (chars/token) y llama a
+        `on_metrics`. Todo envuelto en try/except porque un fallo de
+        métricas nunca debe romper la generación.
+        """
+        round_metrics = message.pop("_metrics", None)
+        if not round_metrics:
+            return
+        try:
+            prompt_tokens = int(
+                round_metrics.get("prompt_eval_count", 0)
+            )
+            if prompt_tokens > 0:
+                # Serializar los mensajes completos (incluye
+                # tool_calls, roles, estructura) y las tool
+                # definitions. `prompt_eval_count` cuenta todo eso,
+                # así que medir solo el content daba un ratio sesgado
+                # a la baja.
+                messages_chars = sum(
+                    len(json.dumps(
+                        m, ensure_ascii=False, default=str,
+                    ))
+                    for m in ctx.history
+                )
+                tools_chars = 0
+                if ctx.send_tools:
+                    try:
+                        tools_chars = len(json.dumps(
+                            ctx.send_tools,
+                            ensure_ascii=False,
+                            default=str,
+                        ))
+                    except (TypeError, ValueError):
+                        tools_chars = 0
+                total_chars = messages_chars + tools_chars
+                token_calibration.observe(
+                    ctx.model,
+                    chars=total_chars,
+                    actual_tokens=prompt_tokens,
+                )
+        except Exception:
+            pass
+        if ctx.on_metrics is not None:
+            try:
+                ctx.on_metrics(round_metrics)
+            except Exception:
+                pass
 
     @staticmethod
     def _fit_round_history(
