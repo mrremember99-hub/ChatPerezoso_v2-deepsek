@@ -52,7 +52,7 @@ def test_submit_atomic_against_close_stress():
         await asyncio.sleep(0)
         return 42
 
-    unexpected: list[BaseException] = []
+    unexpected: list[tuple[str, str]] = []
     iterations = 100
 
     for _ in range(iterations):

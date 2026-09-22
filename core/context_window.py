@@ -216,8 +216,19 @@ class ContextWindow:
             prefix_chars.append(prefix_chars[-1] + len(line))
 
         note = "\n\n[... truncado por limite de contexto]"
+        # Descontar los tokens de la nota ANTES del binary search.
+        # Sin esto, `candidate <= max_tokens` es cierto pero
+        # `candidate + note` excede el limite. El contrato de fit()
+        # promete que el resultado nunca excede el presupuesto.
+        note_tokens = self.estimate_tokens(note)
+        content_budget = max(0, max_tokens - note_tokens)
+        if content_budget == 0:
+            # Solo cabe la nota. Devolverla sola es mejor que devolver
+            # el texto original sin recortar.
+            return note.strip()
 
-        # Biseccion: mayor n tal que el prefijo de n lineas quepa.
+        # Biseccion: mayor n tal que el prefijo de n lineas quepa en
+        # el presupuesto del contenido (ya sin la nota).
         # estimate_tokens es monotona no decreciente con la longitud,
         # asi que la biseccion es valida.
         lo, hi = 0, len(lines)
@@ -225,7 +236,7 @@ class ContextWindow:
         while lo < hi:
             mid = (lo + hi + 1) // 2
             candidate = text[:prefix_chars[mid]]
-            if self.estimate_tokens(candidate) <= max_tokens:
+            if self.estimate_tokens(candidate) <= content_budget:
                 best = mid
                 lo = mid
             else:
@@ -235,8 +246,8 @@ class ContextWindow:
             return text[:prefix_chars[best]] + note
 
         # Ni una sola linea cabe: cortar por caracteres con ratio
-        # conservador de codigo.
-        estimated_chars = max(1, int(max_tokens * 2.8))
+        # conservador de codigo, tambien sobre content_budget.
+        estimated_chars = max(1, int(content_budget * 2.8))
         return text[:estimated_chars] + note
 
     def estimate_request(
@@ -289,7 +300,35 @@ class ContextWindow:
 
         budget = self.prompt_budget
         if fixed >= budget:
-            # El system prompt + tools ya consumen todo.
+            # El system prompt + tools ya consumen todo el
+            # presupuesto. Antes devolviamos [] y el modelo se
+            # quedaba sin la pregunta del usuario. Preferimos un
+            # ultimo user truncado a un chat mudo: la alternativa
+            # ([] silencioso) es peor para el usuario.
+            user_positions = [
+                i for i, m in enumerate(messages)
+                if m.get("role") == "user"
+            ]
+            if user_positions:
+                last_user = user_positions[-1]
+                raw = messages[last_user].get("content", "")
+                if isinstance(raw, str) and raw:
+                    # Presupuesto minimo: 64 tokens. Suficiente para
+                    # una pregunta corta. No mas, para no comerse el
+                    # margen del output.
+                    minimal = 64
+                    truncated = self._truncate_by_lines(raw, minimal)
+                    if truncated:
+                        new_msg = dict(messages[last_user])
+                        new_msg["content"] = truncated
+                        return [new_msg], ContextBudget(
+                            limit_tokens=self._limit,
+                            output_reserve=self.output_reserve,
+                            prompt_budget=budget,
+                            estimated_prompt=fixed
+                            + self.estimate_message_tokens(new_msg),
+                            dropped_messages=len(messages) - 1,
+                        )
             return [], ContextBudget(
                 limit_tokens=self._limit,
                 output_reserve=self.output_reserve,

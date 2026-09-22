@@ -125,14 +125,24 @@ def test_fit_includes_tool_definitions_in_estimation():
     assert budget.estimated_prompt > 500
 
 
-def test_fit_returns_empty_when_fixed_part_exceeds_budget():
+def test_fit_preserves_last_user_when_fixed_part_exceeds_budget():
+    """Con fixed >= budget, se preserva el ultimo user truncado.
+
+    Antes se devolvia [] y el modelo recibia un prompt sin la pregunta
+    del usuario. El nuevo contrato prefiere un user truncado a un
+    chat mudo.
+    """
     w = ContextWindow(limit_tokens=500, output_reserve=400, min_turns=1)
-    _, budget = w.fit(
+    pruned, budget = w.fit(
         system_prompt="x" * 10_000,
         tool_definitions=[],
         messages=[{"role": "user", "content": "hola"}],
     )
-    assert budget.dropped_messages >= 1
+    # El user se preserva (posiblemente truncado).
+    assert pruned
+    assert pruned[0]["role"] == "user"
+    # Y el historial descartado son todos los mensajes menos el user.
+    assert budget.dropped_messages == 0
 
 
 def test_fit_does_not_split_user_assistant_pair():
