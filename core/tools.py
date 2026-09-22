@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Any
 
 from .intent import IntentRule
-from .workspace import Workspace
+from .workspace import Workspace, WorkspaceError
+
+
+logger = logging.getLogger(__name__)
 
 
 _CONFIRMATION_REQUIRED = frozenset(
@@ -235,8 +239,18 @@ class ToolRegistry:
 
         try:
             return self._dispatch(name, arguments)
-        except Exception as exc:
+        except WorkspaceError as exc:
+            # Errores esperados del filesystem: mensaje limpio al
+            # modelo, sin traza. Son validaciones de Workspace.
             return f"ERROR: {exc}"
+        except Exception as exc:
+            # Excepcion inesperada: suele ser un bug del codigo.
+            # Loguear la traza completa y devolver un mensaje opaco
+            # al modelo (no deberia ver detalles de implementacion).
+            logger.exception(
+                "Error inesperado en tool %s (%r)", name, arguments,
+            )
+            return f"ERROR interno en {name}: {type(exc).__name__}"
 
     def _dispatch(self, name: str, arguments: dict[str, Any]) -> str:
         if name == "listar_carpeta":
@@ -291,4 +305,11 @@ def _matches_type(value: Any, declared: str) -> bool:
         return isinstance(value, int) and not isinstance(value, bool)
     if declared == "number":
         return isinstance(value, (int, float)) and not isinstance(value, bool)
-    return True
+    if declared == "array":
+        return isinstance(value, list)
+    if declared == "object":
+        return isinstance(value, dict)
+    # Tipo desconocido: rechazar antes que aceptar a ciegas. Un
+    # provider con un spec mal formado no debe colar argumentos de
+    # cualquier tipo a una tool.
+    return False
