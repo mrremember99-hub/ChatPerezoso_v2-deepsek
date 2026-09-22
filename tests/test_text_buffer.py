@@ -70,30 +70,36 @@ def test_buffer_push_does_not_block_when_under_limit():
     assert buf.pending_chars == 100
 
 
-def test_buffer_push_blocks_when_full():
-    """Si el buffer está lleno, push() espera (con timeout)."""
-    import time
-    buf = TextDeltaBuffer(max_chars=10, block_timeout=0.2)
-    # Llenar el buffer hasta el tope.
-    buf.push("x" * 20)
+def test_buffer_push_blocks_until_space_or_cancel():
+    """Con buffer lleno, push() bloquea hasta cancelacion."""
+    import threading
+    buf = TextDeltaBuffer(max_chars=10)
+    buf.push("x" * 20)  # desborda
     assert buf.pending_chars == 20
-    # El siguiente push debe bloquearse hasta el timeout.
-    t0 = time.monotonic()
-    buf.push("y")
-    elapsed = time.monotonic() - t0
-    # Debe haber esperado al menos parte del timeout.
-    assert elapsed >= 0.15, f"push() no bloqueó (elapsed={elapsed:.2f}s)"
+
+    cancel = threading.Event()
+
+    def pusher():
+        buf.push("y", cancel_event=cancel)
+
+    t = threading.Thread(target=pusher, daemon=True)
+    t.start()
+    t.join(timeout=0.3)
+    assert t.is_alive(), "push deberia haber bloqueado"
+
+    cancel.set()
+    t.join(timeout=1.0)
+    assert not t.is_alive(), "push no se desbloqueo al cancelar"
 
 
 def test_buffer_push_unblocks_after_drain():
-    """Si otro hilo drena, push() se desbloquea antes del timeout."""
+    """Si otro hilo drena, push() se desbloquea."""
     import threading
     import time
 
-    buf = TextDeltaBuffer(max_chars=10, block_timeout=5.0)
+    buf = TextDeltaBuffer(max_chars=10)
     buf.push("x" * 20)
 
-    # Hilo que drena tras 100ms.
     def delayed_drain():
         time.sleep(0.1)
         buf.drain()
@@ -103,8 +109,8 @@ def test_buffer_push_unblocks_after_drain():
     t0 = time.monotonic()
     buf.push("y")
     elapsed = time.monotonic() - t0
-    # Debe haberse desbloqueado por el drain, no por el timeout.
-    assert elapsed < 1.0, f"push() esperó al timeout en lugar del drain ({elapsed:.2f}s)"
+    # Se desbloquea por el drain, no por timeout.
+    assert elapsed < 1.0, f"push() espero demasiado ({elapsed:.2f}s)"
 
 
 def test_buffer_is_thread_safe():

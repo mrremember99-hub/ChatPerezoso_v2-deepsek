@@ -47,29 +47,48 @@ class TextDeltaBuffer:
     """
 
     def __init__(
-        self,
-        max_chars: int = _STREAM_BUFFER_SOFT_LIMIT_CHARS,
-        block_timeout: float = 2.0,
+        self, max_chars: int = _STREAM_BUFFER_SOFT_LIMIT_CHARS,
     ) -> None:
         self._cond = threading.Condition()
         self._parts: list[str] = []
         self._chars = 0
         self._max_chars = max_chars
-        self._block_timeout = block_timeout
 
-    def push(self, text: str) -> bool:
-        """Añade texto. Bloquea si el buffer está lleno (hasta timeout).
+    def push(
+        self,
+        text: str,
+        cancel_event: threading.Event | None = None,
+    ) -> bool:
+        """Añade texto. Bloquea hasta que haya hueco o se cancele.
 
-        Devuelve True si el buffer pasó de vacío a no vacío.
+        Backpressure real: si el buffer esta lleno, espera a que el
+        consumidor drene. Sin `cancel_event`, espera indefinidamente
+        (es lo correcto: si el productor no puede ceder, el buffer
+        se llenara sin control). Con `cancel_event`, sale con False
+        si se activa.
+
+        Un chunk individual mas grande que `max_chars` se acepta
+        igual: rechazar texto ya generado es peor que un pico de
+        RAM puntual.
+
+        Devuelve True si el buffer paso de vacio a no vacio.
         """
         if not text:
             return False
+
+        # Delta gigante: no cabe nunca. Aceptarlo sin esperar.
+        if len(text) >= self._max_chars:
+            with self._cond:
+                was_empty = not self._parts
+                self._parts.append(text)
+                self._chars += len(text)
+                return was_empty
+
         with self._cond:
-            if self._chars >= self._max_chars:
-                self._cond.wait_for(
-                    lambda: self._chars < self._max_chars,
-                    timeout=self._block_timeout,
-                )
+            while self._chars + len(text) > self._max_chars:
+                if cancel_event is not None and cancel_event.is_set():
+                    return False
+                self._cond.wait(timeout=0.1)
             was_empty = not self._parts
             self._parts.append(text)
             self._chars += len(text)
@@ -241,7 +260,10 @@ class ChatWorker(QObject):
         procesa el drain a su ritmo (típicamente 30 Hz) aunque Ollama
         genere a 200+ chunks/s.
         """
-        became_non_empty = self._text_buffer.push(text)
+        became_non_empty = self._text_buffer.push(
+            text,
+            cancel_event=self._cancel_event,
+        )
         if became_non_empty:
             self.stream_ready.emit()
 
