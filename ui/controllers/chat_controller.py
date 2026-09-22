@@ -510,6 +510,13 @@ class ChatController(QObject):
     def _persist(self) -> None:
         """Programa la persistencia con debounce.
 
+        Nota: durante una generacion larga, si _append_message se
+        llama repetidamente antes de que expire el timer, la
+        persistencia puede posponerse indefinidamente. El historial
+        queda entonces en estado "eventually consistent": no se
+        escribe hasta que la generacion termina o el usuario cierra
+        la app. shutdown() fuerza un _persist_now() con flush.
+
         No escribe a disco directamente. Rearranca un timer de 500 ms
         que ejecutara _do_persist cuando no haya mas cambios. Asi una
         rafaga de _append_message() (user + assistant + tool results)

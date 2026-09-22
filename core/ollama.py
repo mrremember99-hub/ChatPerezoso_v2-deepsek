@@ -807,14 +807,25 @@ class OllamaClient:
                     if buffering_textual:
                         buffered_parts.append(event.text)
                     else:
-                        prefix = event.text.lstrip()[:1]
-                        if prefix in ("{", "["):
-                            # Primer delta sospechoso: activar buffer
-                            # y guardar TAMBIEN este delta (no emitir).
+                        # Buscar un posible inicio de JSON en CUALQUIER
+                        # posicion del delta, no solo al principio. Con
+                        # deltas de 4-5 chars, el `{` puede caer en medio
+                        # ("...tienes: {"na"). Antes se emitia sin mas.
+                        start = -1
+                        for ch in ("{", "["):
+                            idx = event.text.find(ch)
+                            if idx != -1 and (start == -1 or idx < start):
+                                start = idx
+                        if start == -1:
+                            on_text(event.text)
+                        elif start == 0:
                             buffering_textual = True
                             buffered_parts.append(event.text)
                         else:
-                            on_text(event.text)
+                            # Emitir lo previo, bufferear desde el `{`.
+                            on_text(event.text[:start])
+                            buffering_textual = True
+                            buffered_parts.append(event.text[start:])
             elif isinstance(event, StreamFinished):
                 message = event.message
                 metrics = event.metrics

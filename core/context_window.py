@@ -97,6 +97,12 @@ class ContextBudget:
     prompt_budget: int         # limit - reserve (lo que queda para el prompt)
     estimated_prompt: int      # estimación del prompt real
     dropped_messages: int      # mensajes eliminados por poda
+    # True si fixed (system + tools) por sí solo ya excede el
+    # presupuesto. En ese caso se devuelve el último user truncado
+    # como excepción consciente: mejor un prompt con menos contexto
+    # que un chat mudo. El llamante puede decidir avisar, reducir
+    # tools, o ignorarlo.
+    overflow: bool = False
 
 
 class ContextWindow:
@@ -328,6 +334,7 @@ class ContextWindow:
                             estimated_prompt=fixed
                             + self.estimate_message_tokens(new_msg),
                             dropped_messages=len(messages) - 1,
+                            overflow=True,
                         )
             return [], ContextBudget(
                 limit_tokens=self._limit,
@@ -335,6 +342,7 @@ class ContextWindow:
                 prompt_budget=budget,
                 estimated_prompt=fixed,
                 dropped_messages=len(messages),
+                overflow=True,
             )
 
         # Tokens disponibles para el historial visible.

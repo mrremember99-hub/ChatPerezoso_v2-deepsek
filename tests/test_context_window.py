@@ -345,3 +345,47 @@ def test_fit_truncates_single_line_message():
     assert len(pruned[0]["content"]) < len(one_line)
     assert "truncado" in pruned[0]["content"].lower()
 
+
+
+# ── N6: flag overflow ──────────────────────────────────────────────────
+
+def test_fit_marks_overflow_when_fixed_exceeds_budget():
+    """Con fixed >= budget, el ContextBudget marca overflow=True."""
+    w = ContextWindow(limit_tokens=500, output_reserve=400, min_turns=1)
+    _, budget = w.fit(
+        system_prompt="x" * 10_000,
+        tool_definitions=[],
+        messages=[{"role": "user", "content": "hola"}],
+    )
+    assert budget.overflow is True
+
+
+def test_fit_overflow_false_in_normal_case():
+    """En el camino normal, overflow=False."""
+    w = ContextWindow(limit_tokens=8192)
+    _, budget = w.fit(
+        system_prompt="eres un asistente",
+        tool_definitions=[],
+        messages=[{"role": "user", "content": "hola"}],
+    )
+    assert budget.overflow is False
+
+
+def test_fit_overflow_false_when_only_pruned():
+    """Con fixed < budget pero historial grande, overflow=False.
+
+    El caso B (hay que podar) no es el mismo que C (fixed ya no
+    cabe). Solo C marca overflow=True.
+    """
+    w = ContextWindow(limit_tokens=1000, output_reserve=200, min_turns=1)
+    messages = [
+        {"role": "user", "content": "x" * 1000},
+        {"role": "assistant", "content": "y" * 1000},
+    ] * 10
+    _, budget = w.fit(
+        system_prompt="eres un asistente",
+        tool_definitions=[],
+        messages=messages,
+    )
+    assert budget.dropped_messages > 0  # se podo
+    assert budget.overflow is False      # pero no por overflow de fixed
