@@ -61,3 +61,22 @@
   alfanumérico, sin flags). Bloquea `--output=/tmp/x`.
 - Workspace rechaza symlinks que escapan del root. Ver
   `tests/test_workspace.py`.
+## Auditoría 2026-09 — fase de performance
+
+### Aplicado
+- **Fase 2.2 — Trocear Markdown durante streaming.**
+  `PlainTextRenderer.on_text` ahora renderiza a Markdown cuando el
+  segmento cruza una frontera de párrafo o cierra un bloque de
+  código, en lugar de acumular todo y convertirlo de golpe en
+  `final_text`.
+  Medición: `code final` 26.6 ms → 0.1 ms (−99.6 %). Pico de
+  congelación al cerrar la respuesta eliminado. Coste total +11 %
+  (repartido durante el streaming).
+
+### Evaluado y descartado
+- **Fase 2.1 — `setLayoutEnabled(False)` + `beginEditBlock`.**
+  Medición: prose accum 145 → 154 ms, code accum 12 → 21 ms.
+  El patrón real de ChatPerezoso es 1 mutación por drain (30 veces
+  por segundo), no múltiples mutaciones seguidas. Deshabilitar el
+  layout en cada drain es overhead puro.
+  Revertido. No reintentar sin cambiar el patrón de streaming.

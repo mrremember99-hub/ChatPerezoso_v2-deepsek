@@ -161,12 +161,23 @@ class PlainTextRenderer:
                 return stripped[len(prefix):].lstrip(" " + chr(10) + ":")
         return stripped
 
+    # Umbral mínimo de caracteres acumulados para trocear durante el
+    # streaming. Por debajo de este umbral, esperamos al siguiente
+    # boundary (párrafo o cierre de fence) para no fragmentar en
+    # exceso respuestas cortas.
+    _MIN_CHUNK_CHARS = 300
+
     def on_text(self, text: str) -> None:
         """Acumula el delta y programa un volcado al documento.
 
         Escribe directamente (el controller ya coalesce).
         El usuario ve streaming fluido, pero el QTextDocument solo
         recibe ~30 actualizaciones/segundo en lugar de una por chunk.
+
+        Si el delta cruza una frontera de párrafo o cierra un bloque
+        de código Y el segmento ya tiene suficiente contenido, se
+        renderiza a Markdown/Html ahora, en vez de acumular todo el
+        Markdown y convertirlo de una sola pasada en final_text.
         """
         text = self.display_response_text(text)
         if not text:
@@ -187,7 +198,21 @@ class PlainTextRenderer:
                 self._segment_parts = [cleaned]
                 self._segment_chars = len(cleaned)
 
+        # Recordar el estado del fence ANTES del append para saber
+        # si este delta lo acaba de cerrar.
+        was_in_fence = self._in_code_fence
         self._append_plain_text(text)
+
+        # Decidir si toca trocear ahora.
+        if self._in_code_fence:
+            return  # dentro de un bloque de código: no trocear
+        if self._segment_chars < self._MIN_CHUNK_CHARS:
+            return  # segmento aún pequeño: esperar al siguiente boundary
+
+        crossed_paragraph = "\n\n" in text
+        just_closed_fence = was_in_fence and not self._in_code_fence
+        if crossed_paragraph or just_closed_fence:
+            self.reset_response_segment()
 
 
     def _append_plain_text(self, text: str) -> None:
