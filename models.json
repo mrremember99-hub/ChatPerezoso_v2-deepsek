@@ -2,11 +2,78 @@
   "overrides": {
     "deepseek-r1:latest": {
       "mode": "xml",
-      "note": "Ollama declara tools pero el modelo no emite tool_calls nativos"
+      "recommendation": "Razonamiento puro · Sin tool calling nativo"
+    },
+    "devstral:latest": {
+      "mode": "auto",
+      "recommendation": "24B · Solo con num_ctx ≤ 4096 · Lento en M4 24GB"
+    },
+    "gemma4:12b": {
+      "mode": "auto",
+      "recommendation": "Google · Vision · 256K contexto"
+    },
+    "glm-4.7-flash:latest": {
+      "mode": "auto",
+      "recommendation": "19 GB · Requiere RAM libre"
+    },
+    "gpt-oss:20b": {
+      "mode": "auto",
+      "recommendation": "13 GB · ~24 tok/s · Agentes y tool calling"
+    },
+    "granite4.1:3b": {
+      "mode": "auto",
+      "recommendation": "Rapidísimo · Tareas simples"
     },
     "hdnh2006/salamandra-7b-instruct:latest": {
       "mode": "xml",
-      "note": "rechaza tools nativos con HTTP 400"
+      "recommendation": "Español · Rechaza tools nativos"
+    },
+    "hermes3:latest": {
+      "mode": "auto",
+      "recommendation": "Alternativa a Llama 3.1 · Instrucciones"
+    },
+    "lfm2.5:latest": {
+      "mode": "auto",
+      "recommendation": "Arquitectura híbrida · Experimental"
+    },
+    "llama3.1:latest": {
+      "mode": "auto",
+      "recommendation": "24 tok/s · Generalista · Programación diaria"
+    },
+    "ministral-3:latest": {
+      "mode": "auto",
+      "recommendation": "Conversación rápida · Poca memoria"
+    },
+    "muse-glimmer:latest": {
+      "mode": "auto",
+      "thinking": false,
+      "recommendation": "Vision + tools · 18 GB"
+    },
+    "north-mini-code-1.0:latest": {
+      "mode": "auto",
+      "thinking": false,
+      "recommendation": "Código · 18 GB, requiere RAM libre"
+    },
+    "ornith-1.5:9b": {
+      "mode": "auto",
+      "recommendation": "Alternativa mediana · 262K contexto"
+    },
+    "qwen3-coder:30b": {
+      "mode": "auto",
+      "recommendation": "18 GB MoE · ~30 tok/s · Código rápido"
+    },
+    "qwen3:14b": {
+      "mode": "auto",
+      "thinking": false,
+      "recommendation": "Razonamiento · desactivar thinking para TTFT"
+    },
+    "rnj-1:latest": {
+      "mode": "auto",
+      "recommendation": "Código + STEM · Tuning japonés"
+    },
+    "translategemma:12b": {
+      "mode": "auto",
+      "recommendation": "~8 GB · Traducción especializada · 55 idiomas"
     }
   }
 }

@@ -102,10 +102,15 @@ class HistoryStore:
         }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(
+            # Escritura atómica: escribir a .tmp y renombrar. Si el
+            # proceso muere a mitad, history.json queda intacto (el
+            # .tmp se ignora y el replace() es atómico en POSIX).
+            tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
+            tmp_path.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+            tmp_path.replace(self.path)
         except OSError:
             # La persistencia es una comodidad, no un requisito. Si el
             # disco falla, la app sigue funcionando sin recordar nada.

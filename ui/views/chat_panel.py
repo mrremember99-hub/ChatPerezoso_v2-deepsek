@@ -25,6 +25,7 @@ RendererFactory = Callable[[QTextEdit], ChatRenderer]
 
 class ChatPanel(QWidget):
     message_submitted = Signal()
+    send_all_requested = Signal()
     cancel_requested = Signal()
     regenerate_requested = Signal()
     copy_requested = Signal()
@@ -91,6 +92,15 @@ class ChatPanel(QWidget):
         self.input.submitted.connect(self._on_submit)
         input_row.addWidget(self.input, 1)
 
+        self.send_all = QPushButton("Enviar todo")
+        self.send_all.setFixedWidth(120)
+        self.send_all.setToolTip(
+            "Divide el texto por líneas con `---` o `===` y los envía "
+            "en secuencia, esperando a que cada turno termine."
+        )
+        self.send_all.clicked.connect(self._on_send_all_clicked)
+        input_row.addWidget(self.send_all)
+
         self.send = QPushButton("Enviar")
         self.send.setFixedWidth(84)
         self.send.clicked.connect(self._on_send_clicked)
@@ -129,6 +139,13 @@ class ChatPanel(QWidget):
             self.cancel_requested.emit()
         else:
             self._on_submit()
+
+    def _on_send_all_clicked(self) -> None:
+        if self._state.is_active:
+            return
+        if not self.input.toPlainText().strip():
+            return
+        self.send_all_requested.emit()
 
     def _on_clear_shortcut(self) -> None:
         if self._state.is_active:
@@ -171,6 +188,9 @@ class ChatPanel(QWidget):
             self.send.setEnabled(True)
             self.input.setEnabled(True)
             self._stop_indicators()
+
+        # "Enviar todo" solo tiene sentido cuando no hay turno activo.
+        self.send_all.setEnabled(not state.is_active)
 
     def clear_chat(self) -> None:
         self.chat.clear()

@@ -144,7 +144,15 @@ class Workspace:
     def create_file(self, path: str, content: str = "") -> str:
         file = self._path(path)
         if file.exists():
-            raise WorkspaceError(f"Ya existe: {path}")
+            # El error es instructivo a propósito: los modelos que
+            # reciben "Ya existe: X" sin más no saben que deben usar
+            # escribir_archivo. El mensaje les guía a la herramienta
+            # correcta para no terminar abandonando la tarea.
+            raise WorkspaceError(
+                f"Ya existe: {path}. No uses crear_archivo para "
+                f"sobrescribirlo. Usa escribir_archivo si quieres "
+                f"reemplazar su contenido, o elige otro nombre."
+            )
         data = content.encode("utf-8")
         if len(data) > MAX_WRITE_BYTES:
             raise WorkspaceError("Contenido demasiado grande.")

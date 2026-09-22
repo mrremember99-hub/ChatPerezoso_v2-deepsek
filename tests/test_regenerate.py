@@ -32,6 +32,8 @@ class _FakeRenderer:
 
     def insert_tool_event(self, *args, **kwargs): pass
     def insert_tool_result(self, *args, **kwargs): pass
+    def insert_narration(self, text, active=False): pass
+    def insert_tool_card(self, result): pass
     def insert_error(self, *args, **kwargs): pass
     def restore_assistant_message(self, text): pass
     def final_text(self, fallback): return self.response_text or fallback

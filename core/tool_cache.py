@@ -23,6 +23,11 @@ from typing import Any, Callable
 # modelo sin servir datos obsoletos al usuario.
 DEFAULT_TTL_SECONDS = 5.0
 
+# Cota dura de entradas. Una sesión normal no necesita más; evita
+# crecimiento no acotado en sesiones largas con argumentos muy
+# variados (por ejemplo, búsquedas con queries distintas).
+_MAX_ENTRIES = 256
+
 
 def _key(name: str, arguments: dict[str, Any]) -> tuple:
     """Clave estable: ordena las claves para que {a:1,b:2} y {b:2,a:1} coincidan."""
@@ -77,13 +82,44 @@ class ToolCache:
             self._hits += 1
             return value
 
+    # Umbral a partir del cual vale la pena purgar preventivamente.
+    # No queremos purgar en cada put (O(n) sobre el diccionario),
+    # pero tampoco esperar a llegar al tope. Con 80% del límite, la
+    # purga es puntual y el diccionario nunca se llena.
+    _PURGE_THRESHOLD = int(_MAX_ENTRIES * 0.8)
+
+    def _purge_expired(self, now: float) -> int:
+        """Elimina entradas expiradas. Devuelve cuántas eliminó.
+
+        Se llama desde put() cuando el diccionario se acerca al tope.
+        Coste O(n) sobre el diccionario, aceptable porque solo ocurre
+        cuando ya hay muchas entradas acumuladas.
+        """
+        before = len(self._entries)
+        self._entries = {
+            k: v for k, v in self._entries.items() if v[0] > now
+        }
+        return before - len(self._entries)
+
     def put(self, tool_name: str, arguments: dict[str, Any], result: str) -> None:
         ttl = self._ttls.get(tool_name, self._default_ttl)
         if ttl <= 0:
             return
-        expires_at = time.monotonic() + ttl
+        now = time.monotonic()
+        expires_at = now + ttl
         key = _key(tool_name, arguments)
         with self._lock:
+            # Purga proactiva: si el diccionario se acerca al tope,
+            # eliminar entradas expiradas antes de insertar. Esto
+            # evita acumular basura hasta que el diccionario esté
+            # lleno del todo.
+            if len(self._entries) >= self._PURGE_THRESHOLD:
+                self._purge_expired(now)
+            # Si tras purgar sigue lleno (muchas entradas vivas),
+            # descartar la más antigua por orden de inserción.
+            if len(self._entries) >= _MAX_ENTRIES:
+                oldest_key = next(iter(self._entries))
+                del self._entries[oldest_key]
             self._entries[key] = (expires_at, result)
 
     def invalidate_all(self) -> None:

@@ -39,7 +39,8 @@ async def _run_diagnostic() -> None:
 
     demo = Path(__file__).resolve().parent / "demo_server.py"
     _log(f"[3] construyendo params para {demo}...")
-    kwargs = {"command": sys.executable}
+    from typing import Any
+    kwargs: dict[str, Any] = {"command": sys.executable}
     if "args" in accepted:
         kwargs["args"] = [str(demo)]
     params = StdioServerParameters(**kwargs)
@@ -51,7 +52,7 @@ async def _run_diagnostic() -> None:
             _log("    OK · client obtenido")
             _log("[5] llamando client.list_tools()...")
             tools = await client.list_tools()
-            tool_list = getattr(tools, "tools", tools)
+            tool_list = list(getattr(tools, "tools", tools) or [])
             _log(f"    OK · {len(tool_list)} herramienta(s):")
             for t in tool_list:
                 _log(f"      · {getattr(t, 'name', '?')}")

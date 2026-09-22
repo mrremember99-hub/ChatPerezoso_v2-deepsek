@@ -47,8 +47,14 @@ class StreamFinished:
     `content`, opcionalmente `tool_calls` y `_textual_tool_name`).
     Es mutable porque se construye incrementalmente durante el stream
     y se entrega al final ya completo.
+
+    `metrics` contiene contadores reales de tokens reportados por
+    Ollama en el último chunk con `done=true` (por ejemplo
+    `prompt_eval_count`, `eval_count`, `prompt_eval_duration`). Si el
+    modelo o la versión de Ollama no los envía, queda como dict vacío.
     """
     message: dict[str, Any] = field(default_factory=dict)
+    metrics: dict[str, int] = field(default_factory=dict)
 
     @property
     def content(self) -> str:

@@ -580,3 +580,160 @@ def test_chat_native_mode_does_not_duplicate_text_in_on_text(monkeypatch):
 
     assert result == "Hola"
     assert chunks == ["Hola"], f"Texto duplicado: {chunks}"
+
+# -- parche AD: tool_calls en el historial ---------------------------------
+
+def test_chat_history_includes_tool_calls_in_assistant_message(monkeypatch):
+    """El mensaje assistant del historial debe llevar tool_calls.
+
+    Sin esto, el chat template del modelo ve un mensaje `tool`
+    huérfano en la ronda 2 y vuelve a llamar a la misma herramienta.
+    """
+    client = OllamaClient()
+    seen_histories = []
+    responses = iter([
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": "listar_carpeta", "arguments": {"path": "."}}}
+            ],
+        },
+        {"role": "assistant", "content": "Hecho."},
+    ])
+
+    def fake_stream(model, messages, tools, on_text, cancel_event=None, options=None):
+        # Guardar copia del historial tal como lo recibe el modelo.
+        seen_histories.append([dict(m) for m in messages])
+        return next(responses)
+
+    monkeypatch.setattr(client, "_stream", fake_stream)
+    client.chat(
+        "test-model",
+        [{"role": "user", "content": "lista la carpeta"}],
+        [{"type": "function", "function": {"name": "listar_carpeta"}}],
+        lambda _text: None,
+        lambda name, arguments: "archivo1.txt\narchivo2.txt",
+    )
+
+    # La segunda llamada al modelo debe llevar en el historial:
+    #   1. user
+    #   2. assistant con tool_calls no vacíos
+    #   3. tool con el resultado
+    assert len(seen_histories) >= 2
+    second_round = seen_histories[1]
+    assistant_messages = [
+        m for m in second_round if m.get("role") == "assistant"
+    ]
+    assert assistant_messages, "No hay mensaje assistant en la ronda 2"
+    # El mensaje assistant debe llevar tool_calls.
+    has_tool_calls = any(
+        m.get("tool_calls") for m in assistant_messages
+    )
+    assert has_tool_calls, (
+        "El mensaje assistant del historial no lleva tool_calls. "
+        "Esto provoca que el modelo reejecute la tool en bucle."
+    )
+
+
+def test_chat_history_assistant_tool_calls_match_executed(monkeypatch):
+    """Los tool_calls del historial deben coincidir con los ejecutados."""
+    client = OllamaClient()
+    seen_histories = []
+    responses = iter([
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": "listar_carpeta", "arguments": {"path": "sub"}}}
+            ],
+        },
+        {"role": "assistant", "content": "OK."},
+    ])
+
+    def fake_stream(model, messages, tools, on_text, cancel_event=None, options=None):
+        seen_histories.append([dict(m) for m in messages])
+        return next(responses)
+
+    monkeypatch.setattr(client, "_stream", fake_stream)
+    client.chat(
+        "test-model",
+        [{"role": "user", "content": "lista la sub"}],
+        [{"type": "function", "function": {"name": "listar_carpeta"}}],
+        lambda _text: None,
+        lambda name, arguments: "a.txt",
+    )
+
+    second_round = seen_histories[1]
+    assistant_msgs = [m for m in second_round if m.get("role") == "assistant"]
+    assert assistant_msgs
+    tool_calls = assistant_msgs[0].get("tool_calls") or []
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["name"] == "listar_carpeta"
+    assert tool_calls[0]["function"]["arguments"] == {"path": "sub"}
+
+
+
+
+def test_chat_does_not_mutate_caller_system_message(monkeypatch):
+    """Regresión: _inject_system_prompts mutaba el dict del llamante.
+
+    `chat()` documenta que los mensajes de entrada quedan intactos.
+    Con la implementación anterior, el system message se modificaba
+    in-place y el dict del llamante quedaba corrompido: en el
+    siguiente turno, el prompt acumulaba contenido del turno anterior.
+    """
+    client = OllamaClient()
+    system_msg = {"role": "system", "content": "base"}
+    user_msg = {"role": "user", "content": "hola"}
+    messages = [system_msg, user_msg]
+
+    sent_messages = []
+
+    def fake_stream(model, msgs, tools, on_text, cancel_event=None,
+                    options=None):
+        sent_messages.append([dict(m) for m in msgs])
+        return {"role": "assistant", "content": "ok"}
+
+    monkeypatch.setattr(client, "_stream", fake_stream)
+    client.chat(
+        "test-model",
+        messages,
+        None,
+        lambda _: None,
+        lambda *_: "",
+        system_prompt="extra",
+    )
+
+    assert system_msg == {"role": "system", "content": "base"}
+    assert messages[0] is system_msg
+    assert len(messages) == 2
+
+    assert sent_messages
+    sent_system = sent_messages[0][0]
+    assert sent_system["role"] == "system"
+    assert sent_system["content"] == "base\n\nextra"
+
+
+def test_chat_does_not_mutate_caller_messages_list(monkeypatch):
+    """Complementario: chat() no debe alterar la lista original."""
+    client = OllamaClient()
+    messages = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "u"},
+    ]
+    original_len = len(messages)
+    original_ids = [id(m) for m in messages]
+
+    def fake_stream(model, msgs, tools, on_text, cancel_event=None,
+                    options=None):
+        return {"role": "assistant", "content": "ok"}
+
+    monkeypatch.setattr(client, "_stream", fake_stream)
+    client.chat(
+        "test-model", messages, None, lambda _: None, lambda *_: "",
+        system_prompt="extra",
+    )
+
+    assert len(messages) == original_len
+    assert [id(m) for m in messages] == original_ids

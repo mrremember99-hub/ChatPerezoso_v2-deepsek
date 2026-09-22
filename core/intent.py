@@ -144,15 +144,63 @@ class ToolIntentGate:
 
     @classmethod
     def _is_negated(cls, verbs: tuple[str, ...], text: str) -> bool:
+        """Detecta si la petición principal niega explícitamente la operación.
+
+        Regla: cuenta como negación solo si NINGÚN verbo del conjunto
+        aparece en forma afirmativa. Si hay al menos una aparición
+        afirmativa, las negaciones de otros verbos del mismo conjunto
+        se interpretan como restricciones secundarias, no como bloqueo.
+
+        Ejemplos:
+            "Crea un archivo. No añadas funciones."
+              → "crea" es afirmativo. NO se bloquea.
+            "No crees el archivo todavía."
+              → "crees" solo aparece negado. Se bloquea.
+            "no vas a borrar archivo.txt"
+              → "borrar" solo aparece negado (con "vas a" en medio).
+                Se bloquea.
+        """
         if not verbs:
             return False
         normalised = cls._normalise(text)
+
+        # Paso 1: ¿hay alguna forma afirmativa de algún verbo?
+        has_any_affirmative = False
         for verb in verbs:
             v = cls._normalise(verb)
             if not v:
                 continue
             for form in _cached_verb_forms(v):
-                pattern = rf"\bno\b(?:\s+\w+){{0,3}}\s+{re.escape(form)}\b"
+                for match in re.finditer(
+                    rf"\b{re.escape(form)}\b", normalised, re.IGNORECASE
+                ):
+                    start = match.start()
+                    # Miramos hacia atrás: si el "no" (posiblemente con
+                    # hasta 3 palabras en medio) llega justo hasta aquí,
+                    # este match es negado, no afirmativo.
+                    prefix = normalised[max(0, start - 40):start]
+                    if not re.search(
+                        r"\bno\b(?:\s+\w+){0,3}\s+$", prefix
+                    ):
+                        has_any_affirmative = True
+                        break
+                if has_any_affirmative:
+                    break
+            if has_any_affirmative:
+                break
+
+        if has_any_affirmative:
+            return False
+
+        # Paso 2: sin formas afirmativas, comprobar si hay negación.
+        for verb in verbs:
+            v = cls._normalise(verb)
+            if not v:
+                continue
+            for form in _cached_verb_forms(v):
+                pattern = (
+                    rf"\bno\b(?:\s+\w+){{0,3}}\s+{re.escape(form)}\b"
+                )
                 if re.search(pattern, normalised, re.IGNORECASE):
                     return True
         return False

@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QWidget
 
-from core.agents import Agent, AgentStore, default_agents
+from core.agents import Agent, AgentStore, AgentStoreProtocol, default_agents
 
 from ..views.dialogs import edit_agent, warn
 
@@ -16,17 +17,26 @@ logger = logging.getLogger(__name__)
 class AgentController(QObject):
     agent_changed = Signal(object)   # Agent
 
+    # Atributo usado por tests para mantener viva la referencia al
+    # QObject padre. La app real no lo asigna.
+    _owner: Any = None
+
     def __init__(
         self,
-        parent: QObject,
-        parent_widget: QWidget,
-        available_tools: list[str],
-        store: AgentStore | None = None,
+        parent: QObject | None = None,
+        parent_widget: QWidget | None = None,
+        available_tools: list[str] | None = None,
+        store: AgentStoreProtocol | None = None,
         initial_name: str = "",
     ):
         super().__init__(parent)
         self._parent_widget = parent_widget
-        self._available_tools = list(available_tools)
+        self._available_tools = list(available_tools or [])
+        # Lista de modelos conocidos (los que Ollama ha reportado). Se
+        # pasa al diálogo de edición para que el usuario elija uno. No
+        # se usa para validar: si un agente apunta a un modelo que ya
+        # no existe, la app simplemente cae al modelo global.
+        self._available_models: list[str] = []
         self.store = store or AgentStore()
         self.agents: list[Agent] = self.store.load()
         # Si el usuario borró todos los agentes a mano, la app necesita al
@@ -46,6 +56,19 @@ class AgentController(QObject):
     def names(self) -> list[str]:
         return [agent.name for agent in self.agents]
 
+    def categories(self) -> dict[str, list[str]]:
+        """Agrupa los agentes por categoría.
+
+        Los agentes sin categoría van bajo "General". El orden de las
+        categorías es el orden de aparición del primer agente de cada
+        una en `self.agents`.
+        """
+        result: dict[str, list[str]] = {}
+        for agent in self.agents:
+            cat = (agent.category or "").strip() or "General"
+            result.setdefault(cat, []).append(agent.name)
+        return result
+
     def active_agent(self) -> Agent:
         for agent in self.agents:
             if agent.name == self._active_name:
@@ -54,6 +77,9 @@ class AgentController(QObject):
 
     def set_available_tools(self, names: list[str]) -> None:
         self._available_tools = list(names)
+
+    def set_available_models(self, names: list[str]) -> None:
+        self._available_models = list(names)
 
     def set_active(self, name: str) -> None:
         if not name:
@@ -82,6 +108,7 @@ class AgentController(QObject):
             self._parent_widget,
             agent=template,
             available_tools=self._available_tools,
+            available_models=self._available_models,
         )
         if created is None:
             return
@@ -104,6 +131,7 @@ class AgentController(QObject):
             self._parent_widget,
             agent=current,
             available_tools=self._available_tools,
+            available_models=self._available_models,
         )
         if edited is None:
             return

@@ -21,6 +21,11 @@ class AppConfig:
     # Nombre del agente activo. Cadena vacía significa "usa el primer
     # agente disponible".
     current_agent: str = ""
+    # Modo piloto automático: salta el diálogo de confirmación para
+    # todas las herramientas EXCEPTO `ejecutar_comando`. El shell
+    # siempre confirma: es la única garantía frente a comandos
+    # destructivos que el modelo pudiera decidir ejecutar.
+    auto_approve_tools: bool = False
 
     @classmethod
     def load(cls) -> "AppConfig":

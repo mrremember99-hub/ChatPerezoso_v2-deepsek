@@ -1,5 +1,8 @@
 mcp>=2,<3
 psutil>=5.9
 regex>=2024.5.15
+# Motor preferido para el plugin de búsqueda: lineal, sin ReDoS.
+# Si no está, se usa regex con timeout por línea.
+google-re2>=1.1
 markdown>=3.5
 pygments>=2.17

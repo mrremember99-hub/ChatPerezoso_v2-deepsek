@@ -5,6 +5,7 @@ El controlador los llama cuando toca; no sabe cómo se ven por dentro.
 from __future__ import annotations
 
 import html
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
@@ -21,8 +22,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+if TYPE_CHECKING:
+    # Solo para Pylance: las anotaciones string "Agent" en la firma de
+    # edit_agent necesitan ver el símbolo a nivel de módulo. En runtime
+    # se importa dentro de la función (import diferido intencional).
+    from core.agents import Agent
 
-def confirm_tool(parent: QWidget, name: str, arguments: dict) -> bool:
+
+def confirm_tool(parent: QWidget | None, name: str, arguments: dict) -> bool:
     """Decide si el usuario aprueba una operación."""
     if name == "ejecutar_comando":
         return _confirm_shell(parent, arguments)
@@ -31,7 +38,7 @@ def confirm_tool(parent: QWidget, name: str, arguments: dict) -> bool:
 
 # -- shell -------------------------------------------------------------------
 
-def _confirm_shell(parent: QWidget, arguments: dict) -> bool:
+def _confirm_shell(parent: QWidget | None, arguments: dict) -> bool:
     from plugins.shell import analyze_risk
 
     command = str(arguments.get("command", ""))
@@ -114,7 +121,7 @@ def _confirm_shell(parent: QWidget, arguments: dict) -> bool:
 
 # -- resto de operaciones ----------------------------------------------------
 
-def _confirm_generic(parent: QWidget, name: str, arguments: dict) -> bool:
+def _confirm_generic(parent: QWidget | None, name: str, arguments: dict) -> bool:
     # Casos con contenido largo: usamos diálogo con scroll.
     if _is_write_tool(name):
         return _confirm_file_write(parent, name, arguments)
@@ -144,7 +151,7 @@ def _confirm_generic(parent: QWidget, name: str, arguments: dict) -> bool:
 
 
 def _confirm_generic_with_scroll(
-    parent: QWidget, name: str, arguments: dict
+    parent: QWidget | None, name: str, arguments: dict
 ) -> bool:
     """Fallback para herramientas sin confirmación específica.
 
@@ -217,7 +224,7 @@ def _is_write_tool(name: str) -> bool:
     return any(hint in name for hint in _WRITE_TOOL_HINTS)
 
 
-def _confirm_file_write(parent: QWidget, name: str, arguments: dict) -> bool:
+def _confirm_file_write(parent: QWidget | None, name: str, arguments: dict) -> bool:
     """Diálogo de confirmación para crear/escribir archivos.
 
     Usa un QPlainTextEdit con altura fija y scroll en lugar de QMessageBox.
@@ -302,17 +309,18 @@ def _confirm_file_write(parent: QWidget, name: str, arguments: dict) -> bool:
     return dialog.exec() == QDialog.DialogCode.Accepted
 
 
-def warn(parent: QWidget, title: str, message: str) -> None:
+def warn(parent: QWidget | None, title: str, message: str) -> None:
     QMessageBox.warning(parent, title, message)
 
 
 # -- agente ------------------------------------------------------------------
 
 def edit_agent(
-    parent: QWidget,
+    parent: QWidget | None,
     *,
     agent: "Agent",
     available_tools: list[str],
+    available_models: list[str] | None = None,
 ) -> "Agent | None":
     """Devuelve un Agent editado o None si se cancela.
 
@@ -320,10 +328,15 @@ def edit_agent(
     disponibles en la app para que el usuario elija cuáles permite. Si el
     agente tenía ``allowed_tools=None``, el checkbox "todas" arranca
     marcado; si no, se marcan solo las que estaban permitidas.
+
+    ``available_models`` es la lista de modelos que Ollama ha reportado.
+    Si está vacía, el combo de modelo se muestra deshabilitado con la
+    opción "(usar el global)".
     """
     from core.agents import Agent
     from PySide6.QtWidgets import (
         QCheckBox,
+        QComboBox,
         QDoubleSpinBox,
         QListWidget,
         QListWidgetItem,
@@ -337,10 +350,15 @@ def edit_agent(
     layout = QVBoxLayout(dialog)
     layout.setSpacing(10)
 
-    # -- nombre
+    # -- nombre y categoría
     name_row = QFormLayout()
     name_edit = QLineEdit(agent.name)
     name_row.addRow("Nombre:", name_edit)
+    category_edit = QLineEdit(agent.category)
+    category_edit.setPlaceholderText(
+        "(opcional · agrupa el agente en la lista)"
+    )
+    name_row.addRow("Categoría:", category_edit)
     layout.addLayout(name_row)
 
     # -- system prompt
@@ -369,6 +387,26 @@ def edit_agent(
     ctx_spin.setSpecialValueText("(por defecto del modelo)")
     ctx_spin.setValue(agent.num_ctx)
     params_row.addRow("num_ctx:", ctx_spin)
+
+    # Combo de modelo. "(usar el global)" = sin modelo específico.
+    model_combo = QComboBox()
+    model_combo.addItem("(usar el global)", "")
+    models = list(available_models or [])
+    for m in models:
+        model_combo.addItem(m, m)
+    # Si el agente apunta a un modelo que ya no está disponible, lo
+    # añadimos al final con un sufijo para no perder la configuración.
+    if agent.model and agent.model not in models:
+        model_combo.addItem(f"{agent.model} (no disponible)", agent.model)
+    # Seleccionar el modelo actual del agente.
+    idx = model_combo.findData(agent.model)
+    if idx >= 0:
+        model_combo.setCurrentIndex(idx)
+    if not models:
+        # Sin modelos detectados, no tiene sentido dejar elegir uno
+        # específico. Se queda en "(usar el global)".
+        pass
+    params_row.addRow("Modelo:", model_combo)
     layout.addLayout(params_row)
 
     # -- herramientas permitidas
@@ -428,10 +466,16 @@ def edit_agent(
             if item.checkState() == Qt.CheckState.Checked:
                 allowed.append(item.text())
 
+    selected_model = model_combo.currentData()
+    if not isinstance(selected_model, str):
+        selected_model = ""
+
     return Agent(
         name=new_name,
         system_prompt=prompt_edit.toPlainText(),
         temperature=temp_spin.value(),
         num_ctx=ctx_spin.value(),
         allowed_tools=allowed,
+        model=selected_model,
+        category=category_edit.text().strip(),
     )

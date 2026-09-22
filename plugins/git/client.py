@@ -15,6 +15,14 @@ class GitError(RuntimeError):
     """Error controlado del plugin Git."""
 
 
+# Límite de salida de un comando git antes de truncar. Un `git diff`
+# o `git show` de un repo grande puede devolver MBs. Sin este tope, el
+# resultado entra íntegro en el historial de tool calls y rompe el
+# contexto del modelo en la siguiente ronda. Es coherente con el
+# límite de 200 KB del plugin shell.
+_MAX_OUTPUT_BYTES = 200_000
+
+
 # Caracteres válidos en una referencia de git (hash, rama, tag, HEAD~1,
 # origin/main...). Debe empezar por alfanumérico para rechazar flags como
 # "--output=/ruta", "--exec=...", etc.
@@ -114,4 +122,15 @@ class GitClient:
         if result.returncode != 0:
             message = (result.stderr or result.stdout).strip()
             raise GitError(message or f"git {' '.join(args)} falló.")
-        return result.stdout
+
+        output = result.stdout
+        encoded = output.encode("utf-8", errors="replace")
+        if len(encoded) > _MAX_OUTPUT_BYTES:
+            truncated = encoded[:_MAX_OUTPUT_BYTES].decode(
+                "utf-8", errors="replace"
+            )
+            return (
+                truncated
+                + f"\n... (salida truncada a {_MAX_OUTPUT_BYTES} bytes)"
+            )
+        return output

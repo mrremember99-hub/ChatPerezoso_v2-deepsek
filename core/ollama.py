@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import threading
+from collections.abc import Iterable
 from typing import Any, AsyncIterator, Callable
 
 import httpx
@@ -18,7 +19,10 @@ from .stream_events import (
     ToolCallsDelta,
 )
 from .intent import ToolIntentGate
+from .context_window import ContextWindow, RequestTokenCache
+from . import token_calibration
 from .model_capabilities import get_capabilities
+from .models_config import get_override
 from .tool_strategies import (
     NativeToolStrategy,
     XmlToolStrategy,
@@ -58,7 +62,10 @@ class OllamaClient:
 
     def __init__(self, host: str = "http://localhost:11434"):
         self.host = host.rstrip("/")
-        self.timeout = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
+        # read=300s: modelos con thinking mode (qwen3, north-mini-code,
+        # muse-glimmer) pueden tardar 60-120s en el primer token. Con
+        # 60s, httpx cortaba la conexión antes de que el modelo empezara.
+        self.timeout = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
         # Runner dedicado para corrutinas httpx. Ver core/async_runner.py.
         self._async_runner = AsyncRunner(name="OllamaAsync")
         # Cliente HTTP persistente, creado la primera vez y reutilizado
@@ -140,6 +147,8 @@ class OllamaClient:
         cancel_event: threading.Event | None = None,
         options: dict[str, Any] | None = None,
         system_prompt: str = "",
+        context_window: ContextWindow | None = None,
+        on_metrics: Callable[[dict[str, int]], None] | None = None,
     ) -> str:
         if not model:
             raise OllamaError("No hay un modelo seleccionado.")
@@ -155,7 +164,12 @@ class OllamaClient:
         strategy = self._choose_strategy(caps, tools)
 
         # 3. Preparar historial y reglas de intención.
-        history = [dict(message) for message in messages]
+        # Copia superficial de la lista (no de cada dict). El bucle
+        # nunca muta los dicts existentes: solo hace history.append
+        # para añadir mensajes nuevos. Los dicts originales del
+        # caller quedan intactos porque _fit_round_history devuelve
+        # listas nuevas antes de enviarse al modelo.
+        history = list(messages)
         definitions = self._extract_definitions(tools)
         authorization_text = self._last_user_text(history)
         gate = self._build_intent_gate(tools)
@@ -177,9 +191,36 @@ class OllamaClient:
 
         # 5. Bucle de rondas delegando en la estrategia.
         textual_retry_used = False
+        consecutive_blocked_rounds = 0
+        # Firmas de las últimas operaciones de tool para detectar
+        # "sobre-trabajo": si el modelo repite la misma operación
+        # (mismo nombre + mismos argumentos) dos veces seguidas, es
+        # que ya terminó pero no lo reconoce. Se corta el bucle y se
+        # responde con el último contenido visible.
+        recent_tool_signatures: list[str] = []
+        MAX_REPEATED_SIGNATURES = 2
+        # Cache de costes de contexto: vive solo durante este chat().
+        # Evita que fit() reestime los mismos mensajes en cada ronda
+        # del bucle de tools.
+        token_cache = (
+            RequestTokenCache() if context_window is not None else None
+        )
 
         for _ in range(max_rounds):
             self._check_cancel(cancel_event)
+
+            # Ajustar el historial al presupuesto antes de cada ronda.
+            # Los tool results intermedios pueden crecer mucho (diffs
+            # grandes, búsquedas amplias) y sin este control el request
+            # puede exceder num_ctx antes de que el bucle termine,
+            # provocando truncados silenciosos o errores en Ollama.
+            if context_window is not None:
+                history = self._fit_round_history(
+                    context_window,
+                    history,
+                    send_tools or [],
+                    cache=token_cache,
+                )
 
             message = self._stream(
                 model,
@@ -189,6 +230,54 @@ class OllamaClient:
                 cancel_event=cancel_event,
                 options=options,
             )
+
+            # Métricas reales de esta ronda. Se emiten como callback
+            # para que el consumidor (ChatWorker) pueda propagarlas a
+            # la UI. No afectan al flujo de tool calling ni al
+            # procesamiento del mensaje.
+            round_metrics = message.pop("_metrics", None)
+            if round_metrics:
+                try:
+                    prompt_tokens = int(
+                        round_metrics.get("prompt_eval_count", 0)
+                    )
+                    if prompt_tokens > 0:
+                        # Serializar los mensajes completos (incluye
+                        # tool_calls, roles, estructura) y las tool
+                        # definitions. `prompt_eval_count` cuenta todo
+                        # eso, así que medir solo el content daba un
+                        # ratio sesgado a la baja.
+                        messages_chars = sum(
+                            len(json.dumps(
+                                m,
+                                ensure_ascii=False,
+                                default=str,
+                            ))
+                            for m in history
+                        )
+                        tools_chars = 0
+                        if send_tools:
+                            try:
+                                tools_chars = len(json.dumps(
+                                    send_tools,
+                                    ensure_ascii=False,
+                                    default=str,
+                                ))
+                            except (TypeError, ValueError):
+                                tools_chars = 0
+                        total_chars = messages_chars + tools_chars
+                        token_calibration.observe(
+                            model,
+                            chars=total_chars,
+                            actual_tokens=prompt_tokens,
+                        )
+                except Exception:
+                    pass
+                if on_metrics is not None:
+                    try:
+                        on_metrics(round_metrics)
+                    except Exception:
+                        pass
 
             result = strategy.process_round(message, tool_names)
 
@@ -221,15 +310,92 @@ class OllamaClient:
 
             # Hay tool calls: ejecutar y volver a la siguiente ronda.
             if result.tool_calls:
+                # El mensaje assistant del historial DEBE incluir los
+                # tool_calls que emitió el modelo. Sin esto, el chat
+                # template del modelo en Ollama ve un mensaje `tool`
+                # huérfano en la siguiente ronda y el modelo vuelve a
+                # llamar a la misma herramienta en bucle.
                 history.append({
                     "role": "assistant",
                     "content": result.assistant_content,
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": name,
+                                "arguments": args,
+                            }
+                        }
+                        for name, args in result.tool_calls
+                    ],
                 })
+                round_had_block = False
+                round_had_execution = False
+                round_signature: str | None = None
                 for name, args in result.tool_calls:
                     result_text = authorize_and_execute(
                         name, args, gate, authorization_text, on_tool
                     )
+                    # authorize_and_execute devuelve el mensaje de
+                    # bloqueo cuando el gate rechaza, o el resultado
+                    # real cuando ejecuta. Distinguimos por prefijo.
+                    if result_text.startswith("OPERACIÓN NO AUTORIZADA"):
+                        round_had_block = True
+                    else:
+                        round_had_execution = True
+                        # Firma estable: nombre + args ordenados.
+                        try:
+                            import json as _json
+                            key = _json.dumps(
+                                {"name": name, "args": args},
+                                sort_keys=True,
+                                ensure_ascii=False,
+                                default=str,
+                            )
+                        except Exception:
+                            key = f"{name}:{args!r}"
+                        round_signature = key
                     history.append(strategy.format_tool_result(name, result_text))
+
+                # Detección de "sin progreso": si el modelo repite la
+                # misma operación con los mismos argumentos dos veces
+                # seguidas, ya terminó pero no lo reconoce. Cortar y
+                # devolver el último texto disponible.
+                if round_signature is not None:
+                    recent_tool_signatures.append(round_signature)
+                    # Contar cuántas veces seguidas aparece la firma.
+                    repeated = 0
+                    for sig in reversed(recent_tool_signatures):
+                        if sig == round_signature:
+                            repeated += 1
+                        else:
+                            break
+                    if repeated >= MAX_REPEATED_SIGNATURES:
+                        msg = (
+                            "El modelo completó la tarea y estaba "
+                            "verificándola en bucle. Se detiene aquí: "
+                            "revisa el resultado en el chat y, si falta "
+                            "algo, reformula la petición."
+                        )
+                        on_text(msg)
+                        return msg
+
+                # Si toda la ronda fue bloqueada, contar. Si hubo
+                # alguna ejecución, resetear el contador.
+                if round_had_block and not round_had_execution:
+                    consecutive_blocked_rounds += 1
+                    if consecutive_blocked_rounds >= 3:
+                        msg = (
+                            "El modelo intentó varias veces una operación "
+                            "que no está autorizada por tu petición. "
+                            "Reformula el mensaje indicando el archivo "
+                            "concreto donde quieres que se guarde el "
+                            "resultado (por ejemplo: «crea el archivo "
+                            "utils.py con la función generate_proxy»)."
+                        )
+                        on_text(msg)
+                        return msg
+                else:
+                    consecutive_blocked_rounds = 0
                 continue
 
             # Sin tool calls y sin ser final: caso raro (no debería
@@ -237,6 +403,43 @@ class OllamaClient:
             return result.final_text
 
         raise OllamaError("Se alcanzó el límite de rondas de herramientas.")
+
+    @staticmethod
+    def _fit_round_history(
+        context_window: ContextWindow,
+        history: list[dict[str, Any]],
+        tool_definitions: list[dict[str, Any]],
+        cache: RequestTokenCache | None = None,
+    ) -> list[dict[str, Any]]:
+        """Ajusta el historial al presupuesto antes de enviarlo al modelo.
+
+        Extrae el system message (si lo hay) y lo pasa como
+        ``system_prompt`` al ContextWindow, para que no sea podado
+        como si fuera un mensaje más. El resto del historial se poda
+        con normalidad, contando también los ``tool_calls``.
+        """
+        system_msg: dict[str, Any] | None = None
+        rest: list[dict[str, Any]] = []
+        for m in history:
+            if m.get("role") == "system" and system_msg is None:
+                system_msg = m
+            else:
+                rest.append(m)
+
+        system_content = (
+            str(system_msg.get("content", "")) if system_msg else ""
+        )
+
+        pruned, _budget = context_window.fit(
+            system_prompt=system_content,
+            tool_definitions=tool_definitions,
+            messages=rest,
+            cache=cache,
+        )
+
+        if system_msg is not None:
+            return [system_msg] + list(pruned)
+        return list(pruned)
 
     @staticmethod
     def _choose_strategy(caps, tools) -> Any:
@@ -261,7 +464,16 @@ class OllamaClient:
                 defs = definitions_method()
             except Exception:
                 return None
-            return list(defs) if defs else None
+            # `defs` viene de un método del provider, tipado como Any.
+            # Estrechamos con isinstance para que Pylance sepa que es
+            # iterable antes de llamar a list(). Los strings también
+            # son iterables, pero iterar sobre ellos daría caracteres
+            # sueltos, así que los excluimos explícitamente.
+            if not defs or isinstance(defs, (str, bytes)):
+                return None
+            if not isinstance(defs, Iterable):
+                return None
+            return list(defs)
         if isinstance(tools, list):
             return list(tools) if tools else None
         return None
@@ -273,6 +485,10 @@ class OllamaClient:
         rules_method = getattr(tools, "intent_rules", None)
         if callable(rules_method):
             rules = rules_method()
+            # Defensa: un provider roto podría devolver algo que no es
+            # un dict. Caemos al registro global antes que romper.
+            if not isinstance(rules, dict):
+                return ToolIntentGate(dict(ToolIntentGate._RULES_REGISTRY))
             ToolIntentGate.register_rules(rules)
             return ToolIntentGate(rules)
         return ToolIntentGate(dict(ToolIntentGate._RULES_REGISTRY))
@@ -286,13 +502,14 @@ class OllamaClient:
         tool_prompt: str,
     ) -> None:
         parts: list[str] = []
-        existing = ""
-        for message in history:
+        existing_idx: int | None = None
+        for i, message in enumerate(history):
             if message.get("role") == "system":
+                existing_idx = i
                 existing = str(message.get("content", ""))
+                if existing:
+                    parts.append(existing)
                 break
-        if existing:
-            parts.append(existing)
         if user_prompt.strip():
             parts.append(user_prompt.strip())
         if tool_prompt.strip():
@@ -302,11 +519,16 @@ class OllamaClient:
             return
 
         combined = "\n\n".join(parts)
-        for message in history:
-            if message.get("role") == "system":
-                message["content"] = combined
-                return
-        history.insert(0, {"role": "system", "content": combined})
+        # Reemplazamos el dict entero en lugar de mutarlo in-place.
+        # `history` es una copia superficial de `messages`, así que
+        # mutar el dict compartiría la mutación con el llamante. El
+        # contrato de chat() dice que los mensajes de entrada quedan
+        # intactos: esto lo garantiza.
+        new_system = {"role": "system", "content": combined}
+        if existing_idx is not None:
+            history[existing_idx] = new_system
+        else:
+            history.insert(0, new_system)
 
     @staticmethod
     def _tool_system_prompt(active_tools: list[dict[str, Any]]) -> str:
@@ -424,7 +646,16 @@ class OllamaClient:
                 raise OllamaCancelled(
                     "Operación cancelada por el usuario."
                 ) from exc
-            raise OllamaError(str(exc)) from exc
+            # httpx.ReadTimeout("") tiene str() vacío. Sin este fallback,
+            # el usuario vería un "Error:" sin más y no sabría qué pasó.
+            detail = str(exc) or type(exc).__name__
+            if isinstance(exc, httpx.ReadTimeout):
+                detail = (
+                    "Ollama no respondió en el tiempo de espera. "
+                    "El modelo puede necesitar más tiempo (thinking mode) "
+                    "o estar demasiado cargado. Detalle: ReadTimeout."
+                )
+            raise OllamaError(detail) from exc
         except asyncio.CancelledError:
             raise OllamaCancelled("Operación cancelada por el usuario.")
 
@@ -489,7 +720,13 @@ class OllamaClient:
 
         message.pop("_done", None)
         message["content"] = "".join(content_parts)
-        yield StreamFinished(message=message)
+        # Extraer métricas reales (guardadas por parse_ollama_line) y
+        # limpiar los campos temporales del mensaje.
+        metrics: dict[str, int] = {}
+        for key in list(message.keys()):
+            if key.startswith("_metric_"):
+                metrics[key[len("_metric_"):]] = message.pop(key)
+        yield StreamFinished(message=message, metrics=metrics)
 
     async def _stream_async(
         self,
@@ -517,8 +754,15 @@ class OllamaClient:
             payload["tools"] = tools
         if options:
             payload["options"] = options
+        # Override de thinking por modelo. Solo aplica si el usuario
+        # lo ha definido en models.json. Si está ausente, Ollama decide
+        # según la capability del modelo.
+        override = get_override(model)
+        if override.thinking is not None:
+            payload["think"] = override.thinking
 
         message: dict[str, Any] = {}
+        metrics: dict[str, int] = {}
         buffering_textual = False
 
         async for event in self.iter_ollama_events(
@@ -533,6 +777,7 @@ class OllamaClient:
                         on_text(event.text)
             elif isinstance(event, StreamFinished):
                 message = event.message
+                metrics = event.metrics
 
         content = message.get("content", "")
         textual_name: str | None = None
@@ -543,16 +788,49 @@ class OllamaClient:
                 if item.get("function", {}).get("name")
             }
             if tool_names:
-                textual_name = self._textual_tool_call_name(
-                    content, tool_names
+                # Dialecto XML <function=NAME>: se parsea como si fuera
+                # un tool_call nativo. Lo emiten modelos como
+                # qwen3-coder cuando ignoran el tool calling de Ollama.
+                #
+                # Importante: poblamos `tool_calls` en el propio mensaje
+                # (con el formato que espera Ollama) y limpiamos el XML
+                # del `content`. Sin esto, el chat template de Qwen3 no
+                # reconoce la tool call cuando reenviamos el historial,
+                # y el modelo vuelve a intentar la misma llamada en
+                # bucle hasta agotar max_rounds.
+                from .xml_tools import (
+                    parse_function_xml,
+                    strip_tool_call_blocks,
                 )
-                if textual_name:
-                    message["_textual_tool_name"] = textual_name
+                xml_calls = parse_function_xml(content, known_tools=tool_names)
+                if xml_calls:
+                    message["_textual_xml_calls"] = xml_calls
+                    message.setdefault("tool_calls", []).extend(
+                        {
+                            "function": {
+                                "name": name,
+                                "arguments": args,
+                            }
+                        }
+                        for name, args in xml_calls
+                    )
+                    message["content"] = strip_tool_call_blocks(content)
+                else:
+                    textual_name = self._textual_tool_call_name(
+                        content, tool_names
+                    )
+                    if textual_name:
+                        message["_textual_tool_name"] = textual_name
 
         # Si activamos buffering pero NO resulto ser tool call, el
         # usuario no ha visto nada: emitimos el texto completo.
         if buffering_textual and on_text is not None and not textual_name:
             on_text(content)
+
+        # Adjuntar las métricas reales al mensaje para que chat() las
+        # pueda propagar (via callback on_metrics) y la UI las muestre.
+        if metrics:
+            message["_metrics"] = metrics
 
         return message
 
@@ -580,6 +858,21 @@ class OllamaClient:
 
         if data.get("done"):
             message["_done"] = True
+            # Métricas reales que Ollama envía en el chunk final.
+            # Se guardan con prefijo `_metric_` para no colisionar con
+            # campos del mensaje; se extraen y limpian en
+            # iter_ollama_events al emitir StreamFinished.
+            for key in (
+                "prompt_eval_count",
+                "prompt_eval_duration",
+                "eval_count",
+                "eval_duration",
+                "total_duration",
+                "load_duration",
+            ):
+                value = data.get(key)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    message[f"_metric_{key}"] = int(value)
 
         if delta is not None:
             return TextDelta(delta)
@@ -587,28 +880,10 @@ class OllamaClient:
             return ToolCallsDelta(calls=tuple(calls_raw))
         return None
 
-    @staticmethod
-    @staticmethod
-    def _handle_line(
-        line: str,
-        message: dict[str, Any],
-        content_parts: list[str],
-    ) -> str | None:
-        """Procesa una línea NDJSON. Devuelve el delta si lo hay."""
-        try:
-            data = json.loads(line)
-        except ValueError:
-            return None
-        chunk = data.get("message") or {}
-        delta: str | None = None
-        if chunk.get("content"):
-            delta = str(chunk["content"])
-            content_parts.append(delta)
-        if chunk.get("tool_calls"):
-            message.setdefault("tool_calls", []).extend(chunk["tool_calls"])
-        if data.get("done"):
-            message["_done"] = True
-        return delta
+    # _handle_line fue eliminado: duplicaba parse_ollama_line sin emitir
+    # tool_calls, y no se invocaba desde ningún sitio. Si en el futuro se
+    # necesita otra ruta de parsing, extender parse_ollama_line, no crear
+    # un método paralelo.
 
     @staticmethod
     def _check_cancel(cancel_event: threading.Event | None) -> None:

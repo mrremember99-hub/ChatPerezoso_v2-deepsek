@@ -46,9 +46,17 @@ class RoundResult:
 
 # Mensaje único de bloqueo. Antes estaba duplicado literalmente en las
 # dos ramas del chat(). Ahora hay una sola copia.
+#
+# Es importante que el mensaje indique al modelo QUE NO REINTENTE la
+# misma herramienta: sin esa instrucción explícita, modelos pequeños
+# entran en bucle intentando la misma llamada una y otra vez, gastando
+# las rondas disponibles sin producir nada útil.
 _BLOCKED_MESSAGE = (
-    "ERROR: llamada de herramienta bloqueada: la última petición "
-    "del usuario no solicita esa operación sobre el workspace."
+    "OPERACIÓN NO AUTORIZADA: la última petición del usuario no "
+    "autoriza esta herramienta sobre el workspace. NO vuelvas a "
+    "intentar la misma herramienta. En su lugar, responde al usuario "
+    "explicando qué necesitas para proceder (por ejemplo, pídele que "
+    "confirme el nombre del archivo o reformule la petición)."
 )
 
 
@@ -142,6 +150,9 @@ class NativeToolStrategy:
             # ¿El modelo escribió el JSON como texto en vez de usar
             # tool_calls nativos? `_stream` marca `_textual_tool_name`
             # cuando lo detecta. Se pide un reintento al modelo.
+            #
+            # El dialecto XML <function=NAME> ya viene convertido a
+            # tool_calls por `_stream_async`, así que no se maneja aquí.
             textual_name = message.get("_textual_tool_name")
             if textual_name:
                 return RoundResult(

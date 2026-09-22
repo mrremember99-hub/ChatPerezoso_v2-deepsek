@@ -25,38 +25,67 @@ class PlainTextRenderer:
 
     def __init__(self, chat: QTextEdit):
         self.chat = chat
-        self.response_text = ""
-        self.response_start = None
-        self.response_segment = ""
-        self.last_user_start = None
-        self._segment_end = None
-        # Buffer de micro-batching: acumula deltas y los vuelca al
-        # documento cada _RENDER_INTERVAL_MS.
-        self._pending_text: list[str] = []
-        self._flush_timer = QTimer(self.chat)
-        self._flush_timer.setSingleShot(True)
-        self._flush_timer.timeout.connect(self._flush_pending)
+        # Los textos se acumulan como listas de fragmentos. La
+        # concatenación con += sobre str es O(n²) para respuestas
+        # largas; append sobre list y "".join() en el punto de consumo
+        # es O(n) en total.
+        self._response_parts: list[str] = []
+        self._segment_parts: list[str] = []
+        self._response_start: int | None = None
+        self._segment_end: int | None = None
+        self.last_user_start: int | None = None
+        # Caché del número de caracteres del segmento actual. Permite
+        # aplicar la limpieza de prefijo solo al principio (<= 100
+        # chars), como el código anterior hacía con len(response_segment).
+        self._segment_chars: int = 0
+        # Estado del fence ``` durante streaming. Permite aplicar
+        # formato monoespaciado al código mientras llega, sin
+        # esperar al cierre del bloque para Pygments.
+        self._in_code_fence: bool = False
+        self._code_fence_lang: str = ""
+        # Estado del bloque "cola de prompts". Se rellena al encolar
+        # y se actualiza in-place cada vez que un prompt avanza.
+
+    # -- compatibilidad con el protocolo ChatRenderer ---------------------
+    # El protocolo declara response_text y response_start como
+    # propiedades. Se exponen como @property que hacen join perezoso
+    # de las listas subyacentes.
+
+    @property
+    def response_text(self) -> str:
+        return "".join(self._response_parts)
+
+    @property
+    def response_segment(self) -> str:
+        return "".join(self._segment_parts)
+
+    @property
+    def response_start(self) -> int | None:
+        return self._response_start
 
     # -- ciclo de vida ------------------------------------
     def reset(self) -> None:
-        self.response_text = ""
-        self.response_start = None
-        self.response_segment = ""
+        self._response_parts.clear()
+        self._segment_parts.clear()
+        self._response_start = None
         self._segment_end = None
-        self._pending_text.clear()
-        if self._flush_timer.isActive():
-            self._flush_timer.stop()
+        self._segment_chars = 0
+        self._in_code_fence = False
+        self._code_fence_lang = ""
+        # No limpiamos el todo list aquí: queremos que sobreviva a
+        # resets entre turnos de la cola. Solo se limpia al iniciar
 
     def reset_response_segment(self) -> None:
         if (
-            self.response_start is not None
-            and self.response_segment
+            self._response_start is not None
+            and self._segment_parts
             and self._segment_end is not None
         ):
             self._render_markdown_block()
-        self.response_start = None
-        self.response_segment = ""
+        self._response_start = None
+        self._segment_parts.clear()
         self._segment_end = None
+        self._segment_chars = 0
 
     # -- helpers de formato -------------------------------
     @staticmethod
@@ -135,7 +164,7 @@ class PlainTextRenderer:
     def on_text(self, text: str) -> None:
         """Acumula el delta y programa un volcado al documento.
 
-        El volcado real lo hace _flush_pending cada _RENDER_INTERVAL_MS.
+        Escribe directamente (el controller ya coalesce).
         El usuario ve streaming fluido, pero el QTextDocument solo
         recibe ~30 actualizaciones/segundo en lugar de una por chunk.
         """
@@ -143,26 +172,23 @@ class PlainTextRenderer:
         if not text:
             return
 
-        self.response_text += text
-        self.response_segment += text
-        if len(self.response_segment) <= 80:
-            self.response_segment = self.clean_response_text(self.response_segment)
+        self._response_parts.append(text)
+        self._segment_parts.append(text)
+        self._segment_chars += len(text)
 
-        self._pending_text.append(text)
+        # Limpiar el prefijo del asistente (encabezados tipo
+        # "**PEREZOSO**") solo mientras el segmento es corto. Una vez
+        # supera ~100 chars, ya no puede empezar con esos prefijos, así
+        # que dejamos de comprobar.
+        if self._segment_chars <= 100:
+            joined = "".join(self._segment_parts)
+            cleaned = self.clean_response_text(joined)
+            if cleaned != joined:
+                self._segment_parts = [cleaned]
+                self._segment_chars = len(cleaned)
 
-        # Si el timer no esta corriendo, arrancarlo. Si ya lo esta,
-        # la nueva llamada se acumula y se volcara con el resto.
-        if not self._flush_timer.isActive():
-            self._flush_timer.start(_RENDER_INTERVAL_MS)
-
-    def _flush_pending(self) -> None:
-        """Vuelca al QTextDocument todo el texto pendiente."""
-        if not self._pending_text:
-            return
-
-        text = "".join(self._pending_text)
-        self._pending_text.clear()
         self._append_plain_text(text)
+
 
     def _append_plain_text(self, text: str) -> None:
         """Aplica el texto acumulado al documento. Antiguo on_text."""
@@ -176,7 +202,7 @@ class PlainTextRenderer:
             block.setLeftMargin(design.ASSISTANT_INDENT_PX)
             cursor.setBlockFormat(block)
             cursor.setCharFormat(self._fresh_char_format())
-            self.response_start = cursor.position()
+            self._response_start = cursor.position()
 
         chunks = text.split(chr(10) + chr(10))
         for i, chunk in enumerate(chunks):
@@ -191,8 +217,25 @@ class PlainTextRenderer:
             for line in chunk.split(chr(10)):
                 if not first_line:
                     cursor.insertText(chr(10))
+                # Detectar transiciones de fence ```.
+                is_fence = line.lstrip().startswith("```")
+                if is_fence:
+                    self._in_code_fence = not self._in_code_fence
+                    if self._in_code_fence:
+                        self._code_fence_lang = line.lstrip()[3:].strip()
+                    else:
+                        self._code_fence_lang = ""
                 if line:
-                    cursor.insertText(line)
+                    if self._in_code_fence or is_fence:
+                        # Aplicar formato monoespaciado para código.
+                        code_fmt = QTextCharFormat()
+                        code_fmt.setFontFamilies(
+                            ["Menlo", "Courier New", "monospace"]
+                        )
+                        code_fmt.setForeground(QColor(design.TOOL_CARD_TEXT))
+                        cursor.insertText(line, code_fmt)
+                    else:
+                        cursor.insertText(line)
                 first_line = False
 
         self._segment_end = cursor.position()
@@ -228,10 +271,12 @@ class PlainTextRenderer:
         cursor.insertBlock(self._fresh_block_format())
         cursor.setCharFormat(self._fresh_char_format())
 
-        self.response_start = None
+        self._response_start = None
         self._segment_end = None
 
-    # -- narración ----------------------------------------
+
+
+
     def insert_narration(self, text: str, active: bool = False) -> None:
         self.reset_response_segment()
         cursor = self.chat.textCursor()
@@ -324,19 +369,15 @@ class PlainTextRenderer:
 
     # -- cierre de respuesta -----------------------------
     def final_text(self, fallback: str) -> str:
-        # Forzar volcado del buffer pendiente antes del Markdown final.
-        if self._flush_timer.isActive():
-            self._flush_timer.stop()
-        self._flush_pending()
+        # Sin buffer interno que forzar: el llamante ya coalesce.
 
-        if not self.response_text and fallback:
+        if not self._response_parts and fallback:
             self.on_text(fallback)
-            self._flush_pending()
 
         raw = self.response_text or fallback
         cleaned = self.clean_response_text(self.display_response_text(raw))
 
-        if self.response_start is not None and self.response_segment:
+        if self._response_start is not None and self._segment_parts:
             self._render_markdown_block()
 
         return cleaned
@@ -384,7 +425,8 @@ class PlainTextRenderer:
         )
         cursor.removeSelectedText()
         self.last_user_start = None
-        self.response_start = None
-        self.response_segment = ""
+        self._response_start = None
+        self._segment_parts.clear()
         self._segment_end = None
+        self._segment_chars = 0
         self.chat.setTextCursor(cursor)

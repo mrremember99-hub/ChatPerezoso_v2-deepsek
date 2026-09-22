@@ -67,10 +67,10 @@ def controller(tmp_path):
             ctrl.shutdown()
         except Exception:
             pass
-        try:
-            ctrl.servers_changed.disconnect()
-        except (TypeError, RuntimeError):
-            pass
+        # No hace falta desconectar servers_changed: owner.deleteLater()
+        # destruye el QObject y PySide6 limpia las conexiones asociadas.
+        # Llamar a disconnect() cuando no hay nada conectado emite un
+        # RuntimeWarning ruidoso sin aportar nada.
         owner.deleteLater()
 
 

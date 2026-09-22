@@ -9,42 +9,88 @@ se refleja sin reiniciar.
 from __future__ import annotations
 
 import threading
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .intent import IntentRule, ToolIntentGate
 from .tool_provider import ToolProvider
+
+if TYPE_CHECKING:
+    # Solo para Pylance: la anotación string "ToolCache" en la firma de
+    # CachedToolProvider.__init__ necesita ver el símbolo a nivel de
+    # módulo. En runtime se importa dentro del __init__ para evitar
+    # dependencia circular con tool_cache.py.
+    from .tool_cache import ToolCache
 
 
 class CompositeToolProvider:
     def __init__(self, providers: list[ToolProvider]):
         self.providers = list(providers)
         self._owners: dict[str, ToolProvider] = {}
+        # Caché de definitions() e intent_rules(). Se invalida
+        # explícitamente desde AppController cuando un provider cambia
+        # su catálogo en caliente (por ejemplo, MCP al activar o
+        # desactivar un servidor). Sin esto, cada llamada a
+        # definitions() recorre los N providers completos.
+        self._cached_definitions: list[dict[str, Any]] | None = None
+        self._cached_intent_rules: dict[str, IntentRule] | None = None
+        self._cache_lock = threading.Lock()
+
+    def invalidate(self) -> None:
+        """Invalida las cachés de catálogo.
+
+        Llamar cuando un provider de los envueltos cambia su catálogo
+        en caliente. No hay invalidación automática: el llamante sabe
+        cuándo ha cambiado algo.
+        """
+        with self._cache_lock:
+            self._cached_definitions = None
+            self._cached_intent_rules = None
 
     # -- catálogo ------------------------------------------------------------
 
     def definitions(self) -> list[dict[str, Any]]:
-        self._owners = {}
-        result: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        for provider in self.providers:
-            for definition in provider.definitions():
-                name = str(definition.get("function", {}).get("name", "")).strip()
-                if not name or name in seen:
-                    continue
-                seen.add(name)
-                self._owners[name] = provider
-                result.append(definition)
-        return result
+        with self._cache_lock:
+            cached = self._cached_definitions
+            if cached is not None:
+                return cached
+
+            owners: dict[str, ToolProvider] = {}
+            result: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            for provider in self.providers:
+                for definition in provider.definitions():
+                    name = str(
+                        definition.get("function", {}).get("name", "")
+                    ).strip()
+                    if not name or name in seen:
+                        continue
+                    seen.add(name)
+                    owners[name] = provider
+                    result.append(definition)
+
+            self._owners = owners
+            self._cached_definitions = result
+            return result
 
     def intent_rules(self) -> dict[str, IntentRule]:
-        merged: dict[str, IntentRule] = {}
-        for provider in self.providers:
-            rules_method = getattr(provider, "intent_rules", None)
-            if rules_method is None:
-                continue
-            for name, rule in rules_method().items():
-                merged.setdefault(name, rule)
-        return merged
+        with self._cache_lock:
+            cached = self._cached_intent_rules
+            if cached is not None:
+                return cached
+
+            merged: dict[str, IntentRule] = {}
+            for provider in self.providers:
+                rules_method = getattr(provider, "intent_rules", None)
+                if not callable(rules_method):
+                    continue
+                rules = rules_method()
+                if not isinstance(rules, dict):
+                    continue
+                for name, rule in rules.items():
+                    merged.setdefault(name, rule)
+
+            self._cached_intent_rules = merged
+            return merged
 
     # -- ejecución -----------------------------------------------------------
 
@@ -129,8 +175,11 @@ class FilteredToolProvider:
         rules_method = getattr(self.source, "intent_rules", None)
         if not callable(rules_method):
             return {}
+        rules = rules_method()
+        if not isinstance(rules, dict):
+            return {}
         result: dict[str, IntentRule] = {}
-        for name, rule in rules_method().items():
+        for name, rule in rules.items():
             if name in self.allowed_names:
                 result[name] = rule
             elif self._allow_all_mcp and name.startswith("mcp__"):

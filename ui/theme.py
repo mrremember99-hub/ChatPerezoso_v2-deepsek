@@ -83,6 +83,20 @@ QWidget#Sidebar {
     background-color: #0F1614;
     border-right: 1px solid #1A2523;
 }
+QWidget#RightPanel {
+    background-color: #0F1614;
+    border-left: 1px solid #1A2523;
+}
+QLabel#QueueRow {
+    color: #5D6E68;
+    font-size: 10px;
+    padding: 1px 0;
+    background-color: transparent;
+}
+QLabel#QueueRow[status="running"] { color: #E0BC7A; font-weight: 600; }
+QLabel#QueueRow[status="done"] { color: #7EE0A8; }
+QLabel#QueueRow[status="error"] { color: #E0A0A0; font-weight: 600; }
+QLabel#QueueRow[status="cancelled"] { color: #E0BC7A; }
 QLabel#AppTitle {
     color: #F2F7F3;
     font-size: 18px;
@@ -196,7 +210,14 @@ QPushButton#McpToggle:disabled {
 
 QLabel#CapabilitiesBadge {
     font-size: 10px;
-    padding: 2px 0 8px;
+    padding: 2px 0 4px;
+    background-color: transparent;
+}
+QLabel#RecommendationLabel {
+    color: #7C8F87;
+    font-size: 10px;
+    font-style: italic;
+    padding: 0 0 8px;
     background-color: transparent;
 }
 QLabel#CapabilitiesBadge[mode="native"] {
@@ -234,6 +255,17 @@ QLabel#DiagnosticLine {
     font-size: 11px;
     padding: 1px 0;
     background-color: transparent;
+}
+
+QCheckBox#AutoApproveCheck {
+    color: #9BAFA7;
+    font-size: 11px;
+    padding: 4px 0;
+    background-color: transparent;
+}
+QCheckBox#AutoApproveCheck:checked {
+    color: #E0BC7A;
+    font-weight: 600;
 }
 """
 

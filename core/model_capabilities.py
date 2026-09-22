@@ -31,6 +31,10 @@ class ModelCapabilities:
     # expone model_info). En ese caso el llamante debe asumir un valor
     # conservador (4096, el default de Ollama).
     context_length: int = 0
+    # Texto corto que resume para qué sirve el modelo. Se muestra en
+    # la sidebar. Viene del override manual o de una heurística según
+    # las capabilities detectadas.
+    recommendation: str = ""
 
     @property
     def tool_mode(self) -> ToolMode:
@@ -43,6 +47,37 @@ _CACHE = {}
 _CACHE_LOCK = threading.Lock()
 
 
+def _auto_recommendation(caps: ModelCapabilities) -> str:
+    """Heurística simple para sugerir un uso al usuario.
+
+    No pretende ser precisa: solo evitar que el usuario use un modelo
+    con thinking para tool calling rápido, o al revés.
+    """
+    if not caps.probed:
+        return "Capacidades sin detectar"
+    if caps.thinking and caps.native_tools:
+        return "Thinking · razona lento, para análisis"
+    if caps.thinking and not caps.native_tools:
+        return "Thinking · sin tool calling nativo"
+    if caps.native_tools:
+        return "Rápido · tool calling fiable"
+    if caps.tool_mode == "xml":
+        return "Modo XML · tool calling limitado"
+    return ""
+
+
+def _with_recommendation(
+    caps: ModelCapabilities,
+    override,
+) -> ModelCapabilities:
+    """Aplica la recomendación del override, o una automática si no hay."""
+    rec = override.recommendation or _auto_recommendation(caps)
+    if not rec:
+        return caps
+    from dataclasses import replace
+    return replace(caps, recommendation=rec)
+
+
 def get_capabilities(host, model, *, timeout=5.0, force_refresh=False):
     if not model:
         return ModelCapabilities(name=model, native_tools=False, probed=False, source="fallback")
@@ -51,12 +86,13 @@ def get_capabilities(host, model, *, timeout=5.0, force_refresh=False):
     override = get_override(model)
     if override.is_forced():
         native = override.mode == "native"
-        return ModelCapabilities(
+        caps = ModelCapabilities(
             name=model,
             native_tools=native,
             probed=True,
             source="override",
         )
+        return _with_recommendation(caps, override)
 
     # 2. Sin override: consultamos /api/show (con caché).
     key = (host.rstrip("/"), model)
@@ -64,12 +100,12 @@ def get_capabilities(host, model, *, timeout=5.0, force_refresh=False):
         with _CACHE_LOCK:
             cached = _CACHE.get(key)
         if cached is not None:
-            return cached
+            return _with_recommendation(cached, override)
 
     caps = _probe(host, model, timeout=timeout)
     with _CACHE_LOCK:
         _CACHE[key] = caps
-    return caps
+    return _with_recommendation(caps, override)
 
 
 def _probe(host, model, *, timeout):
