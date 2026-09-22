@@ -30,7 +30,10 @@ def test_set_busy_disables_controls(sidebar):
     assert not sidebar.agent_combo.isEnabled()
     assert not sidebar.agent_new_button.isEnabled()
     assert not sidebar.agent_edit_button.isEnabled()
-    assert not sidebar.auto_approve_check.isEnabled()
+    # El checkbox de piloto automatico NO se deshabilita durante
+    # streaming: es config persistente que el usuario puede cambiar
+    # en cualquier momento.
+    assert sidebar.auto_approve_check.isEnabled()
 
 
 def test_set_busy_false_reenables_controls(sidebar):

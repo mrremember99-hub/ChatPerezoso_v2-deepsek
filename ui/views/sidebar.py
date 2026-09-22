@@ -267,4 +267,7 @@ class Sidebar(QWidget):
         self.agent_combo.setEnabled(enabled)
         self.agent_new_button.setEnabled(enabled)
         self.agent_edit_button.setEnabled(enabled)
-        self.auto_approve_check.setEnabled(enabled)
+        # El checkbox de piloto automatico NO se deshabilita: es
+        # config persistente que el usuario puede querer cambiar
+        # durante un turno. Su cambio no afecta al turno en curso
+        # (el worker ya tiene su flag capturado), solo al siguiente.

@@ -131,11 +131,13 @@ class ChatPanel(QWidget):
 
     def _on_send_clicked(self) -> None:
         if self._state.is_active:
-            # Feedback inmediato: aunque la cancelación real puede tardar
-            # unos ms (el evento se propaga al worker asincrono), el
-            # usuario ve que su pulsación se ha registrado.
-            self.send.setText("Cancelando…")
-            self.send.setEnabled(False)
+            # No mutamos el boton aqui. El controller emitira
+            # state_changed(CANCELLING) si la cancelacion surte
+            # efecto, y set_state() se encarga de reflejarlo. Si
+            # mutaramos el boton y la cancelacion no cambiara el
+            # estado (porque el worker ya habia terminado), el
+            # boton quedaria "Cancelando…" deshabilitado para
+            # siempre.
             self.cancel_requested.emit()
         else:
             self._on_submit()
