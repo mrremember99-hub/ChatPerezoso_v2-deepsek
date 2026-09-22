@@ -122,30 +122,36 @@ class AsyncRunner:
     # -- ciclo de vida -------------------------------------------------------
 
     def _ensure_loop(self) -> asyncio.AbstractEventLoop:
-        """Arranca el hilo del event loop si no está corriendo.
-
-        Devuelve la referencia al loop vivo. El llamante debe usar el
-        valor devuelto en lugar de leer `self._loop` después: `close()`
-        puede poner el atributo a None desde otro hilo, y leerlo fuera
-        del lock provoca una carrera.
-        """
+        """Version publica con lock. Para casos donde el llamante ya
+        tiene el lock tomado, usar `_ensure_loop_locked`."""
         with self._lock:
-            if self._closed:
-                raise RuntimeError(f"{self.name} ya está cerrado.")
-            if (
-                self._loop is not None
-                and self._thread is not None
-                and self._thread.is_alive()
-            ):
-                return self._loop
-            self._loop = asyncio.new_event_loop()
-            self._thread = threading.Thread(
-                target=self._run_loop,
-                name=self.name,
-                daemon=True,
-            )
-            self._thread.start()
+            return self._ensure_loop_locked()
+
+    def _ensure_loop_locked(self) -> asyncio.AbstractEventLoop:
+        """Igual que `_ensure_loop` pero SIN tomar el lock.
+
+        El llamante DEBE tener el lock tomado. Existe para que
+        `submit` pueda agrupar obtener-loop + programar-coroutine en
+        una sola seccion critica, sin dejar hueco a que `close()` se
+        cuele entre las dos y deje la coroutine programada sobre un
+        loop ya muerto.
+        """
+        if self._closed:
+            raise RuntimeError(f"{self.name} ya está cerrado.")
+        if (
+            self._loop is not None
+            and self._thread is not None
+            and self._thread.is_alive()
+        ):
             return self._loop
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(
+            target=self._run_loop,
+            name=self.name,
+            daemon=True,
+        )
+        self._thread.start()
+        return self._loop
 
     def _run_loop(self) -> None:
         assert self._loop is not None
@@ -212,12 +218,22 @@ class AsyncRunner:
 
         Si `timeout` se agota, también cancela y lanza TimeoutError.
         """
-        # `_ensure_loop` devuelve el loop y lo captura dentro del lock.
-        # No leer `self._loop` después: `close()` puede ponerlo a None
-        # desde otro hilo y provocar una carrera.
-        loop = self._ensure_loop()
-
-        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        # Agrupar obtener-loop + programar-coroutine bajo el mismo
+        # lock. Sin esto, entre `_ensure_loop()` y `run_coroutine_-
+        # threadsafe()` otro hilo podia llamar a `close()`, parar el
+        # loop, y dejar la coroutine programada sobre un loop muerto.
+        with self._lock:
+            loop = self._ensure_loop_locked()
+            try:
+                future = asyncio.run_coroutine_threadsafe(coro, loop)
+            except RuntimeError as exc:
+                # El loop se cerro entre el check y el schedule.
+                # Cerrar la coroutine para no dejar warnings de
+                # "coroutine was never awaited".
+                coro.close()
+                raise RuntimeError(
+                    f"{self.name} se cerró durante el envío."
+                ) from exc
         done_signal = threading.Event()
 
         watcher: threading.Thread | None = None
