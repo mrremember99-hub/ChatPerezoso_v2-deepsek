@@ -8,6 +8,17 @@ MAX_LIST_ITEMS = 200
 MAX_RECURSIVE_DEPTH = 6
 
 
+# Directorios que no aportan al usuario al listar. Coincide con el
+# conjunto del plugin search para que el listado y la busqueda
+# ignoren lo mismo.
+_SKIP_DIRS = frozenset({
+    ".git", ".hg", ".svn",
+    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    "node_modules", ".venv", "venv", "env", ".tox",
+    "dist", "build", ".idea", ".vscode",
+})
+
+
 class WorkspaceError(Exception):
     pass
 
@@ -18,7 +29,9 @@ class Workspace:
         if not self.root.exists():
             self.root.mkdir(parents=True, exist_ok=True)
         if not self.root.is_dir():
-            raise WorkspaceError("El workspace no es una carpeta.")
+            raise WorkspaceError(
+                f"El workspace no es una carpeta: {self.root}"
+            )
 
     def _path(self, relative: str) -> Path:
         candidate = (self.root / relative).resolve()
@@ -40,7 +53,8 @@ class Workspace:
 
     def _list_flat(self, folder: Path) -> str:
         entries = sorted(
-            folder.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())
+            (p for p in folder.iterdir() if p.name not in _SKIP_DIRS),
+            key=lambda p: (not p.is_dir(), p.name.lower()),
         )
         total = len(entries)
         truncated = total > MAX_LIST_ITEMS
@@ -71,7 +85,10 @@ class Workspace:
                 return
             try:
                 entries = sorted(
-                    current.iterdir(),
+                    (
+                        p for p in current.iterdir()
+                        if p.name not in _SKIP_DIRS
+                    ),
                     key=lambda p: (not p.is_dir(), p.name.lower()),
                 )
             except OSError:

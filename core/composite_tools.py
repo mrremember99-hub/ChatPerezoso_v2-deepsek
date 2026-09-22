@@ -121,9 +121,10 @@ class CompositeToolProvider:
     # -- integración con ToolIntentGate -------------------------------------
 
     def build_intent_gate(self) -> ToolIntentGate:
-        rules = self.intent_rules()
-        ToolIntentGate.register_rules(rules)
-        return ToolIntentGate(rules)
+        # El gate usa self.rules, no el registro global. Ya no hace
+        # falta llamar a register_rules (que queda solo como fallback
+        # para tests con listas de definiciones sueltas).
+        return ToolIntentGate(self.intent_rules())
 
     # -- interno -------------------------------------------------------------
 
