@@ -192,11 +192,15 @@ class MCPToolBridge:
                     self._mcp_readonly.pop(exposed, None)
                     self._mcp_defs_by_exposed.pop(exposed, None)
 
-        # Limpia las reglas huérfanas del registro global. Sin esto,
-        # `tools_for_request` seguiría considerando activas herramientas
-        # de un servidor ya desconectado.
-        if removed_names:
-            ToolIntentGate.unregister_rules(removed_names)
+        # No borramos reglas del registro global: son inertes porque
+        # los nombres de las herramientas ya no aparecen en
+        # `definitions()`. Y borrarlas rompería otra instancia de
+        # MCPToolBridge que pudiera estar usando los mismos nombres.
+        #
+        # Si en el futuro se quiere limpiar, hay que hacerlo desde el
+        # propio bridge (que conoce sus reglas) sin tocar un registro
+        # compartido.
+        del removed_names  # ya no lo usamos
         self._rebuild_definitions()
 
     # -- definiciones --------------------------------------------------------

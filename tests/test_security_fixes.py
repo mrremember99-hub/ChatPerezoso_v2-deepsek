@@ -126,7 +126,14 @@ def test_dialogs_import_html():
 
 # -- #5 MCP unregister -------------------------------------------------------
 
-def test_mcp_deactivate_unregisters_rules(tmp_path):
+def test_mcp_deactivate_makes_rules_inert(tmp_path):
+    """Al desactivar un MCP, sus reglas dejan de estar en el gate.
+
+    Antes se llamaba a ToolIntentGate.unregister_rules(), que borraba
+    del registro global. Eso rompía otras instancias de MCPToolBridge
+    con las que compartía nombres. Ahora las reglas simplemente
+    desaparecen del gate porque el tool ya no está en definitions().
+    """
     from core.intent import ToolIntentGate
     from core.tools import ToolRegistry
     from core.workspace import Workspace
@@ -141,18 +148,27 @@ def test_mcp_deactivate_unregisters_rules(tmp_path):
             }]
         @staticmethod
         def to_ollama_tools(tools):
-            return [{"type": "function", "function": {"name": t["name"]}} for t in tools]
+            return [{"type": "function", "function": {"name": t["name"]}}
+                    for t in tools]
         def call_tool(self, *a, **k):
             return "ok"
 
     bridge = MCPToolBridge(ToolRegistry(Workspace(tmp_path)))
     bridge.activate("demo", FakeClient())
-    rules = bridge.intent_rules()
-    ToolIntentGate.register_rules(rules)
-    assert "mcp__demo__buscar" in ToolIntentGate._RULES_REGISTRY
+
+    # Con el servidor activo, la regla está presente en el gate.
+    rules_before = bridge.intent_rules()
+    assert "mcp__demo__buscar" in rules_before
 
     bridge.deactivate("demo")
-    assert "mcp__demo__buscar" not in ToolIntentGate._RULES_REGISTRY
+
+    # Tras desactivar, la regla ya no aparece en las reglas que el
+    # bridge declara. El registro global puede conservar copias, pero
+    # son inertes porque el tool ya no está en definitions().
+    rules_after = bridge.intent_rules()
+    assert "mcp__demo__buscar" not in rules_after
+    names = {d["function"]["name"] for d in bridge.definitions()}
+    assert "mcp__demo__buscar" not in names
 
 
 # -- #6 config sin duplicado -------------------------------------------------

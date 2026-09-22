@@ -230,10 +230,22 @@ def test_chat_cancellation_before_stream(monkeypatch):
 
 
 def test_mentions_workspace_operation_accepts_cambiar_y_modificar():
-    from core.intent import ToolIntentGate
+    """_mentions_workspace_operation ahora es método de instancia.
 
-    assert ToolIntentGate._mentions_workspace_operation("cambia el archivo notas.txt")
-    assert ToolIntentGate._mentions_workspace_operation("modifica el archivo notas.txt")
+    Antes era classmethod y leía el registro global. Ahora usa
+    self.rules, así que hay que construir un gate con las reglas
+    del núcleo antes de llamarlo.
+    """
+    from core.intent import ToolIntentGate
+    from core.tools import ToolRegistry
+    from core.workspace import Workspace
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        rules = ToolRegistry(Workspace(td)).intent_rules()
+        gate = ToolIntentGate(rules)
+        assert gate._mentions_workspace_operation("cambia el archivo notas.txt")
+        assert gate._mentions_workspace_operation("modifica el archivo notas.txt")
 
 
 def test_textual_tool_call_detection():
