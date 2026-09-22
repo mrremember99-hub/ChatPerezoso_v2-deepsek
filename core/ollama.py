@@ -34,6 +34,31 @@ from .xml_tools import build_tools_prompt, parse_tool_calls, strip_tool_call_blo
 logger = logging.getLogger(__name__)
 
 
+# Marcadores de fallo de tool calling textual. Se usan para avisar
+# al usuario (DiagnosticsController) cuando el modelo intenta usar
+# herramientas escribiendo JSON en el texto en lugar de emitir
+# tool_calls nativos. Centralizados para que emisor y detector
+# compartan la misma fuente de verdad.
+_TEXTUAL_TOOL_FAILURE_MARKERS: tuple[str, ...] = (
+    "no logró invocar la herramienta",
+    "has escrito el json de la herramienta",
+)
+
+
+def is_textual_tool_failure(text: str | None) -> bool:
+    """True si `text` proviene de un fallo de tool calling textual.
+
+    Un fallo significa: el modelo intentó invocar una herramienta
+    escribiendo JSON en el texto en vez de emitir un tool_call nativo.
+    Se detecta por los mensajes que emite `chat()` en el camino de
+    retry agotado.
+    """
+    if not text:
+        return False
+    lower = text.lower()
+    return any(marker in lower for marker in _TEXTUAL_TOOL_FAILURE_MARKERS)
+
+
 class OllamaError(Exception):
     pass
 

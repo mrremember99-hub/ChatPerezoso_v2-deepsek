@@ -9,7 +9,7 @@ import logging
 
 from core.context_window import ContextWindow
 from core.history import HistoryStore
-from core.ollama import OllamaClient
+from core.ollama import OllamaClient, is_textual_tool_failure
 from core.tool_provider import ToolProvider
 from core.tool_result import ToolResult
 
@@ -594,9 +594,7 @@ class ChatController(QObject):
         # Detectar intento de tool calling textual en el texto final.
         # OllamaClient devuelve este mensaje cuando el modelo escribio
         # el JSON como texto dos veces seguidas.
-        if "escribiste el JSON de la herramienta" in response_text.lower() or \
-           "no logro invocar" in response_text.lower() or \
-           "no logró invocar" in response_text.lower():
+        if is_textual_tool_failure(response_text):
             self.textual_tool_attempt.emit()
         summary = self._summarize_actions()
         if summary:
