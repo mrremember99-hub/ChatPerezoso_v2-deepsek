@@ -64,6 +64,7 @@ def test_submit_does_not_read_self_loop_outside_lock(monkeypatch):
     """Regresión directa: submit() debe usar el loop devuelto por
     _ensure_loop(), no releer self._loop."""
     runner = AsyncRunner()
+    real_loop = None
     try:
         async def ping():
             return 1
@@ -86,7 +87,10 @@ def test_submit_does_not_read_self_loop_outside_lock(monkeypatch):
 
         assert runner.submit(co()) == 42
     finally:
-        runner._loop = real_loop
+        # Si real_loop nunca se asigno (fallo antes del submit),
+        # dejamos None; close() lo maneja sin problemas.
+        if real_loop is not None:
+            runner._loop = real_loop
         runner.close()
 
 
