@@ -149,7 +149,7 @@ def test_stall_detected_nudge_injected_then_success(monkeypatch):
     nudge = [
         m for m in histories[1]
         if m.get("role") == "user"
-        and "No has emitido" in str(m.get("content", ""))
+        and "REGLA DE HIERRO" in str(m.get("content", ""))
     ]
     assert nudge, "nudge no encontrado en la segunda ronda"
     assert "test-model" not in client._force_xml_models

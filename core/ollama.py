@@ -137,11 +137,11 @@ _VERIFICATION_VERBS: tuple[str, ...] = (
 )
 
 _STALL_NUDGE_MESSAGE = (
-    "No has emitido ninguna tool call en este turno. Tu respuesta "
-    "dice que verificaste algo, pero no hay ninguna llamada a "
-    "herramienta que respalde esa afirmacion. Ejecuta el comando "
-    "AHORA con la herramienta ejecutar_comando, o responde "
-    "exactamente 'NO VERIFICADO: no ejecute el comando'."
+    "REGLA DE HIERRO: has respondido sin emitir ninguna tool call. "
+    "El usuario pidio una verificacion explicita. NO puedes cerrar "
+    "la fase sin ejecutar el comando. Tu siguiente mensaje DEBE "
+    "contener una llamada a la herramienta ejecutar_comando. No "
+    "respondas con texto hasta haber recibido el output del comando."
 )
 
 # Maximo de reintentos tras detectar un stall. Con 1 basta: si el
