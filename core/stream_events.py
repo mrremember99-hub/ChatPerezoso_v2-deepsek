@@ -55,6 +55,15 @@ class StreamFinished:
     """
     message: dict[str, Any] = field(default_factory=dict)
     metrics: dict[str, int] = field(default_factory=dict)
+    # True si Ollama envió done=true antes de cerrar la conexión.
+    # False si el socket se cerró sin done (corte de red, kill de
+    # Ollama, EOF inesperado). Permite distinguir respuesta completa
+    # de respuesta interrumpida.
+    completed: bool = True
+    # Motivo de cierre reportado por Ollama en el chunk final: "stop"
+    # (fin normal), "length" (truncado por num_predict), "unload",
+    # etc. None si no vino en el chunk.
+    done_reason: str | None = None
 
     @property
     def content(self) -> str:

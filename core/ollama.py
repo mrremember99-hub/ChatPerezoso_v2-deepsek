@@ -345,6 +345,13 @@ class OllamaClient:
             self._emit_round_metrics(ctx, message, state.token_cache)
 
             result = strategy.process_round(message, tool_names)
+            # Preservar thinking del modelo para la siguiente ronda de
+            # tool calling. Las estrategias no lo leen; se propaga aquí
+            # para no duplicar el código en cada una.
+            if not result.assistant_thinking:
+                thinking = message.get("thinking")
+                if isinstance(thinking, str) and thinking:
+                    result.assistant_thinking = thinking
 
             # Reintento por tool calling textual (solo nativo).
             if result.retry_requested:
@@ -605,14 +612,20 @@ class OllamaClient:
         cadena tool_call -> tool_result), ejecuta cada tool via
         `authorize_and_execute`, y devuelve el resumen.
         """
-        ctx.history.append({
+        assistant_msg: dict[str, Any] = {
             "role": "assistant",
             "content": result.assistant_content,
             "tool_calls": [
                 {"function": {"name": name, "arguments": args}}
                 for name, args in result.tool_calls
             ],
-        })
+        }
+        # Reenviar el thinking del modelo en el assistant message. El
+        # chat template de modelos de razonamiento (gpt-oss, qwen3)
+        # lo espera; sin él, el tool loop puede degradar.
+        if result.assistant_thinking:
+            assistant_msg["thinking"] = result.assistant_thinking
+        ctx.history.append(assistant_msg)
         had_block = False
         had_execution = False
         signature: str | None = None
@@ -1018,6 +1031,7 @@ class OllamaClient:
         """
         message: dict[str, Any] = {"role": "assistant", "content": ""}
         content_parts: list[str] = []
+        thinking_parts: list[str] = []
         buffer = ""
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
@@ -1039,7 +1053,7 @@ class OllamaClient:
                     if not line:
                         continue
                     event = self.parse_ollama_line(
-                        line, message, content_parts
+                        line, message, content_parts, thinking_parts
                     )
                     if event is not None:
                         yield event
@@ -1053,20 +1067,31 @@ class OllamaClient:
                 buffer += tail
             if buffer.strip() and not message.get("_done"):
                 event = self.parse_ollama_line(
-                    buffer.strip(), message, content_parts
+                    buffer.strip(), message, content_parts, thinking_parts
                 )
                 if event is not None:
                     yield event
 
-        message.pop("_done", None)
+        # Distinguir respuesta completa de interrumpida. `completed`
+        # es True si Ollama emitió done=true antes de cerrar el socket.
+        # Si solo salimos por EOF, la respuesta quedó truncada.
+        completed = bool(message.pop("_done", None))
+        done_reason = message.pop("_done_reason", None)
         message["content"] = "".join(content_parts)
+        if thinking_parts:
+            message["thinking"] = "".join(thinking_parts)
         # Extraer métricas reales (guardadas por parse_ollama_line) y
         # limpiar los campos temporales del mensaje.
         metrics: dict[str, int] = {}
         for key in list(message.keys()):
             if key.startswith("_metric_"):
                 metrics[key[len("_metric_"):]] = message.pop(key)
-        yield StreamFinished(message=message, metrics=metrics)
+        yield StreamFinished(
+            message=message,
+            metrics=metrics,
+            completed=completed,
+            done_reason=done_reason,
+        )
 
     async def _stream_async(
         self,
@@ -1214,6 +1239,7 @@ class OllamaClient:
         line: str,
         message: dict[str, Any],
         content_parts: list[str],
+        thinking_parts: list[str] | None = None,
     ) -> StreamEvent | None:
         """Procesa una linea NDJSON. Devuelve un StreamEvent o None."""
         try:
@@ -1233,6 +1259,14 @@ class OllamaClient:
         if calls_raw:
             message.setdefault("tool_calls", []).extend(calls_raw)
 
+        # Los modelos de razonamiento (gpt-oss, qwen3, gemma4) emiten
+        # `thinking` junto a `content`. Se acumula para poder reenviarlo
+        # al modelo en la siguiente ronda de tool calling, ya que el
+        # chat template lo espera en el assistant message previo.
+        # No se emite a la UI.
+        if thinking_parts is not None and chunk.get("thinking"):
+            thinking_parts.append(str(chunk["thinking"]))
+
         delta: str | None = None
         if chunk.get("content"):
             delta = str(chunk["content"])
@@ -1240,6 +1274,12 @@ class OllamaClient:
 
         if data.get("done"):
             message["_done"] = True
+            # Motivo de cierre reportado por Ollama: "stop", "length",
+            # "unload", etc. Se guarda con prefijo para limpiarlo al
+            # emitir StreamFinished.
+            reason = data.get("done_reason")
+            if isinstance(reason, str) and reason:
+                message["_done_reason"] = reason
             # Métricas reales que Ollama envía en el chunk final.
             # Se guardan con prefijo `_metric_` para no colisionar con
             # campos del mensaje; se extraen y limpian en

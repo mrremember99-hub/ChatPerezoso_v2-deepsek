@@ -38,6 +38,11 @@ class RoundResult:
     tool_calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     visible_text: str = ""
     assistant_content: str = ""
+    # Thinking del modelo en esta ronda. Se reenvía al modelo en la
+    # siguiente ronda de tool calling (el chat template lo espera en
+    # el assistant message previo). Cadena vacía si el modelo no lo
+    # emite. No se muestra al usuario.
+    assistant_thinking: str = ""
     retry_requested: bool = False
     retry_message: str = ""
 
