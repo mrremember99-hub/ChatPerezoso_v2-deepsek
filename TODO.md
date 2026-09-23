@@ -127,3 +127,15 @@ Auditoría completa en `docs/audit-2026-09.md`. Resumen:
 - [ ] Verificación visual del plugin verificador en la app real (niveles 2 y 3 con ruff/mypy).
 - [ ] Candidatos para próximas sesiones: `snapshot_workspace` (red de seguridad), `ejecutar_pruebas` (test runner), `memoria_proyecto` (contexto persistente).
 - [ ] Migración QTextEdit -> QScrollArea + widgets: sin urgencia tras Fase 2.2.
+
+### P1 pendiente — intent gate
+
+`buscar_en_workspace` autoriza preguntas generales con "dónde"
+(por ejemplo "¿dónde está la capital de Asturias?"), porque
+`requires_target=False` para todos los verbos. Revertido el intento
+de fix porque `requires_target=True` rompe casos legítimos
+(`encuentra 'def test_'`, `encuentra los TODO`).
+
+Diseño pendiente: campo `IntentRule.verbs_strong` (verbos de acción
+que siempre autorizan: busca, encuentra) vs `verbs_weak` (verbos de
+pregunta que requieren target: dónde). Estimado: 1-2h.
