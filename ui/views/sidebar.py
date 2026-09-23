@@ -27,6 +27,7 @@ class Sidebar(QWidget):
     clear_chat_requested = Signal()
     auto_approve_changed = Signal(bool)
     auto_approve_shell_changed = Signal(bool)
+    verificador_changed = Signal(bool)
 
     def __init__(self) -> None:
         super().__init__()
@@ -146,6 +147,19 @@ class Sidebar(QWidget):
             self.auto_approve_shell_changed.emit
         )
         layout.addWidget(self.auto_approve_shell_check)
+
+        # Verificación de sintaxis post-escritura. Independiente del
+        # piloto automático: funciona con o sin él.
+        self.verificador_check = QCheckBox("Verificar sintaxis al escribir")
+        self.verificador_check.setObjectName("VerificadorCheck")
+        self.verificador_check.setToolTip(
+            "Tras crear o escribir un archivo, verifica su sintaxis y "
+            "avisa al modelo si hay errores. Solo Python."
+        )
+        self.verificador_check.toggled.connect(
+            self.verificador_changed.emit
+        )
+        layout.addWidget(self.verificador_check)
 
         # -- SESIÓN --
         layout.addSpacing(14)
@@ -297,6 +311,15 @@ class Sidebar(QWidget):
 
     def is_auto_approve_shell(self) -> bool:
         return self.auto_approve_shell_check.isChecked()
+
+    def set_verificador(self, enabled: bool) -> None:
+        """Inicializa el checkbox sin disparar la señal."""
+        blocked = self.verificador_check.blockSignals(True)
+        self.verificador_check.setChecked(bool(enabled))
+        self.verificador_check.blockSignals(blocked)
+
+    def is_verificador(self) -> bool:
+        return self.verificador_check.isChecked()
 
     def _on_auto_approve_toggled(self, enabled: bool) -> None:
         """Encadena la extensión de shell al piloto principal.

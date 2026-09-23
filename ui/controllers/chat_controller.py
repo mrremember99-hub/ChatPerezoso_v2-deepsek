@@ -125,6 +125,8 @@ class ChatController(QObject):
         # Extensión opt-in: si True, `ejecutar_comando` también se
         # auto-aprueba. Requiere `_auto_approve=True` para tener efecto.
         self._auto_approve_shell = False
+        # Hook de verificación post-escritura. Callable o None.
+        self._verificador_hook: Any = None
         # Cola de prompts para envío secuencial. Vacía = no hay cola.
         self._queue: list[str] = []
         self._queue_total: int = 0
@@ -290,6 +292,16 @@ class ChatController(QObject):
         if self._worker is not None:
             self._worker.auto_approve_shell = enabled
 
+    def set_verificador_hook(self, hook: Any) -> None:
+        """Registra el callable de verificación post-escritura.
+
+        Pasar None para desactivar. El hook recibe la ruta relativa
+        del archivo y devuelve texto (vacío si OK).
+        """
+        self._verificador_hook = hook
+        if self._worker is not None:
+            self._worker.verificador_hook = hook
+
     def set_current_model(self, model: str) -> None:
         # Si el modelo cambia, el ContextWindow cacheado apunta al
         # modelo antiguo (calibración distinta). Invalidarlo aquí
@@ -376,6 +388,7 @@ class ChatController(QObject):
             auto_approve=self._auto_approve,
             auto_approve_shell=self._auto_approve_shell,
             context_window=self._get_context_window(),
+            verificador_hook=self._verificador_hook,
         )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)

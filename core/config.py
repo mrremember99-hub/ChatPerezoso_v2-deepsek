@@ -31,6 +31,12 @@ class AppConfig:
     # Opt-in explícito: el shell ejecuta binarios arbitrarios del PATH
     # con los argumentos que el modelo decida.
     auto_approve_shell: bool = False
+    # Verificación de sintaxis post-escritura. Si está activo, tras
+    # cada `crear_archivo`/`escribir_archivo` exitoso se verifica la
+    # sintaxis del archivo y el resultado se anexa al ToolResult que
+    # ve el modelo. La tool `verificar_sintaxis` sigue disponible
+    # siempre, independientemente de este flag.
+    verificador_enabled: bool = False
 
     @classmethod
     def load(cls) -> "AppConfig":

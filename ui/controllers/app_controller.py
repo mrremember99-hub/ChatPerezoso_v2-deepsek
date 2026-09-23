@@ -174,6 +174,9 @@ class AppController(QObject):
         self.view.sidebar.set_auto_approve_shell(
             self.config.auto_approve_shell
         )
+        # Verificador: el checkbox y el hook se derivan del mismo flag.
+        self.view.sidebar.set_verificador(self.config.verificador_enabled)
+        self._apply_verificador(self.config.verificador_enabled)
 
         self._wire()
         self._apply_initial_state()
@@ -195,6 +198,7 @@ class AppController(QObject):
         seguidas. Las operaciones de escritura y shell invalidan el caché.
         """
         plugins = instantiate_plugins(self._plugin_factories, self.workspace)
+        self._plugins = plugins
         inner = CompositeToolProvider([*plugins, self.mcp])
         self.composite = CachedToolProvider(
             inner,
@@ -254,6 +258,7 @@ class AppController(QObject):
         s.auto_approve_shell_changed.connect(
             self._on_auto_approve_shell_changed
         )
+        s.verificador_changed.connect(self._on_verificador_changed)
 
         # Emitir el estado MCP inicial AHORA que las señales ya están
         # conectadas. Antes, MCPController._emit_changed() en __init__
@@ -625,8 +630,42 @@ class AppController(QObject):
             self.view.set_status(
                 "⚠ Piloto automático: shell también auto-aprobado"
             )
+
+    @Slot(bool)
+    def _on_verificador_changed(self, enabled: bool) -> None:
+        self.config.verificador_enabled = bool(enabled)
+        self.config.save()
+        self._apply_verificador(enabled)
+        if enabled:
+            self.view.set_status(
+                "Verificador ON · sintaxis comprobada tras cada escritura"
+            )
         else:
-            self.view.set_status("Piloto automático OFF")
+            self.view.set_status("Verificador OFF")
+
+    def _apply_verificador(self, enabled: bool) -> None:
+        """Construye o retira el hook de verificación.
+
+        El hook es un callable que recibe la ruta relativa del archivo
+        y devuelve texto de errores. Si el plugin no está disponible,
+        se registra un hook vacío y el usuario no nota nada.
+        """
+        if not enabled:
+            self.chat_ctrl.set_verificador_hook(None)
+            return
+        plugin = self._find_verificador()
+        if plugin is None:
+            # Config activa pero plugin no cargado: hook no-op.
+            self.chat_ctrl.set_verificador_hook(None)
+            return
+        self.chat_ctrl.set_verificador_hook(plugin.verificar_archivo)
+
+    def _find_verificador(self):
+        """Devuelve el VerificadorProvider si está cargado, o None."""
+        for plugin in getattr(self, "_plugins", []):
+            if hasattr(plugin, "verificar_archivo"):
+                return plugin
+        return None
 
     def _clear_chat(self) -> None:
         if self.chat_ctrl.is_streaming():

@@ -210,6 +210,7 @@ class ChatWorker(QObject):
         auto_approve: bool = False,
         auto_approve_shell: bool = False,
         context_window: Any = None,
+        verificador_hook: Any = None,
     ):
         super().__init__()
         self.client = client
@@ -220,6 +221,10 @@ class ChatWorker(QObject):
         self.system_prompt = system_prompt
         self.auto_approve = auto_approve
         self.auto_approve_shell = auto_approve_shell
+        # Hook opcional post-escritura. Recibe la ruta relativa del
+        # archivo y devuelve texto con errores de sintaxis, o cadena
+        # vacía si todo está bien. Si es None, no se verifica.
+        self.verificador_hook = verificador_hook
         # ContextWindow opcional. Si viene, OllamaClient.chat() ajusta
         # el historial al presupuesto en cada ronda del bucle de tools.
         self.context_window = context_window
@@ -347,8 +352,64 @@ class ChatWorker(QObject):
             duration_ms = int((time.monotonic() - start) * 1000)
 
         tool_result = self._build_result(name, result, duration_ms)
+        tool_result = self._maybe_verify(name, arguments, tool_result)
         self.tool_result.emit(tool_result)
         return tool_result.to_text()
+
+    # Nombres de tools que disparan verificación automática.
+    _VERIFY_AFTER: frozenset[str] = frozenset(
+        {"crear_archivo", "escribir_archivo"}
+    )
+    # Claves aceptadas para identificar el archivo escrito.
+    _PATH_KEYS: tuple[str, ...] = ("archivo", "nombre", "path", "ruta")
+
+    def _maybe_verify(
+        self, name: str, arguments: dict, tool_result: "ToolResult"
+    ) -> "ToolResult":
+        """Anexa verificación de sintaxis al resultado si aplica.
+
+        Solo actúa si:
+          - hay hook configurado (toggle activado),
+          - la tool fue una escritura de archivo,
+          - el resultado no fue error,
+          - se puede identificar la ruta del archivo.
+
+        El hook devuelve texto (vacío si OK, contenido si hay errores).
+        """
+        if self.verificador_hook is None:
+            return tool_result
+        if name not in self._VERIFY_AFTER:
+            return tool_result
+        if tool_result.status != "ok":
+            return tool_result
+
+        rel_path = None
+        for key in self._PATH_KEYS:
+            value = arguments.get(key)
+            if isinstance(value, str) and value.strip():
+                rel_path = value.strip()
+                break
+        if rel_path is None:
+            return tool_result
+
+        try:
+            extra = self.verificador_hook(rel_path)
+        except Exception as exc:  # noqa: BLE001
+            # Nunca romper el flujo por un fallo del verificador.
+            import logging
+            logging.getLogger(__name__).warning(
+                "Verificador falló sobre %s: %s", rel_path, exc
+            )
+            return tool_result
+
+        if not extra:
+            return tool_result
+
+        from dataclasses import replace
+        return replace(
+            tool_result,
+            detail=(tool_result.detail or "") + "\n\n[VERIFICACIÓN]\n" + extra,
+        )
 
     @staticmethod
     def _build_result(name: str, raw: str, duration_ms: int) -> ToolResult:

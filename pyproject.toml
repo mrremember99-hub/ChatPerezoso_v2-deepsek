@@ -24,6 +24,7 @@ mcp = ["mcp>=2,<3"]
 git = "plugins.git:GitProvider"
 search = "plugins.search:SearchProvider"
 shell = "plugins.shell:ShellProvider"
+verificador = "plugins.verificador:VerificadorProvider"
 
 [tool.setuptools.packages.find]
 include = ["core*", "ui*", "plugins*", "scripts*"]
