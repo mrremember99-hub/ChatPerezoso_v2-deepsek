@@ -79,14 +79,6 @@ def test_choose_strategy_native_by_default():
     assert isinstance(strategy, NativeToolStrategy)
 
 
-def test_choose_strategy_xml_when_forced():
-    client = OllamaClient()
-    client._force_xml_models.add("m")
-    caps = ModelCapabilities(name="m", native_tools=True, probed=True)
-    strategy = client._choose_strategy(caps, None, "m")
-    assert isinstance(strategy, XmlToolStrategy)
-
-
 def test_choose_strategy_xml_when_capabilities_say_xml():
     client = OllamaClient()
     caps = ModelCapabilities(name="m", native_tools=False, probed=True)
@@ -152,7 +144,6 @@ def test_stall_detected_nudge_injected_then_success(monkeypatch):
         and "REGLA DE HIERRO" in str(m.get("content", ""))
     ]
     assert nudge, "nudge no encontrado en la segunda ronda"
-    assert "test-model" not in client._force_xml_models
 
 
 def test_no_stall_without_verification_request(monkeypatch):
@@ -177,11 +168,15 @@ def test_no_stall_without_verification_request(monkeypatch):
 
     assert result == "La carpeta está vacía."
     assert len(histories) == 1
-    assert "test-model" not in client._force_xml_models
 
 
-def test_model_marked_for_xml_after_max_retries(monkeypatch):
-    """Si tras el nudge sigue sin ejecutar, marcar el modelo."""
+def test_stall_aborts_after_max_retries(monkeypatch):
+    """Si tras el nudge sigue sin ejecutar, abortar la fase.
+
+    El mensaje de aborto explica al usuario qué pasó. No forzamos
+    XmlToolStrategy porque en la práctica el modelo pierde el hábito
+    de llamar a escribir_archivo en modo XML.
+    """
     client = OllamaClient()
     histories: list[list[dict]] = []
 
@@ -202,28 +197,12 @@ def test_model_marked_for_xml_after_max_retries(monkeypatch):
         lambda *_: "",
     )
 
-    assert "FASE VERIFICADA" in result
+    assert "El modelo no ejecuto ninguna herramienta" in result
     assert len(histories) == 2
-    assert "test-model" in client._force_xml_models
 
 
 # ── reset_forced_xml ─────────────────────────────────────────────────
 
-def test_reset_forced_xml_specific_model():
-    client = OllamaClient()
-    client._force_xml_models.add("m1")
-    client._force_xml_models.add("m2")
-    client.reset_forced_xml("m1")
-    assert "m1" not in client._force_xml_models
-    assert "m2" in client._force_xml_models
-
-
-def test_reset_forced_xml_all():
-    client = OllamaClient()
-    client._force_xml_models.add("m1")
-    client._force_xml_models.add("m2")
-    client.reset_forced_xml()
-    assert not client._force_xml_models
     
 
 # ── _strip_native_tool_calls (fix del 500 en modo XML) ─────────────

@@ -202,11 +202,6 @@ class OllamaClient:
         # está atado al loop en el que se crea). Se cierra al shutdown.
         self._http_client: httpx.AsyncClient | None = None
         self._async_runner.set_close_callback(self._close_http_client)
-        # Modelos que han fallado en tool calling nativo y se fuerzan
-        # a XmlToolStrategy para las siguientes llamadas. Se llena
-        # cuando el stall guard detecta que el modelo no ejecuta
-        # herramientas ni tras el nudge.
-        self._force_xml_models: set[str] = set()
 
     # -- API pública ---------------------------------------------------------
 
@@ -253,17 +248,6 @@ class OllamaClient:
             except Exception as exc:
                 logger.warning("Error cerrando AsyncClient: %s", exc)
         self._http_client = None
-
-    def reset_forced_xml(self, model: str | None = None) -> None:
-        """Reset del flag de forzar XML.
-
-        Util para tests o para que el usuario pueda reintentar el
-        modo nativo tras una actualizacion del modelo.
-        """
-        if model is None:
-            self._force_xml_models.clear()
-        else:
-            self._force_xml_models.discard(model)
 
     def shutdown(self, timeout: float | None = None) -> bool:
         """Libera recursos del cliente. Llamar al cerrar la app.
@@ -406,23 +390,35 @@ class OllamaClient:
                         "content": _STALL_NUDGE_MESSAGE,
                     })
                     continue
-                # Si ya reintentamos y sigue sin ejecutar, marcamos
-                # el modelo para forzar XmlToolStrategy en la proxima
-                # llamada. En XML el prompt describe las tools y el
-                # parser busca bloques <tool_call> en el texto: no
-                # depende de que Ollama reconozca tool_calls nativos.
+                # Si ya reintentamos con el nudge y sigue sin
+                # ejecutar, abortamos la fase con un mensaje claro.
+                #
+                # Antes forzabamos XmlToolStrategy aqui, pero en la
+                # practica el modelo pierde el habito de llamar a
+                # escribir_archivo en modo XML: solo emite la tool mas
+                # obvia del prompt (el comando de verificacion) y
+                # responde texto con "FASE VERIFICADA" sin hacer el
+                # trabajo. Mejor avisar al usuario que enmascarar.
                 if (
                     state.stall_retries_used >= _MAX_STALL_RETRIES
                     and not state.any_tool_call_emitted
-                    and ctx.model not in self._force_xml_models
                 ):
                     logger.warning(
                         "Modelo %s no ejecuta tool calls ni tras "
-                        "nudge; forzando XmlToolStrategy para la "
-                        "proxima llamada.",
+                        "nudge. Abortando fase.",
                         ctx.model,
                     )
-                    self._force_xml_models.add(ctx.model)
+                    msg = (
+                        "El modelo no ejecuto ninguna herramienta "
+                        "aunque se le pidio explicitamente. No se ha "
+                        "aplicado ningun cambio. Prueba con otro "
+                        "modelo (qwen3-coder:30b tiene problemas "
+                        "conocidos en tareas de edicion largas) o "
+                        "reformula la peticion pidiendo una sola "
+                        "accion concreta."
+                    )
+                    ctx.on_text(msg)
+                    return msg
                 return result.final_text
 
             # Hay tool calls: ejecutar y volver a la siguiente ronda.
@@ -723,17 +719,8 @@ class OllamaClient:
         tercer modo sería añadir una rama aquí, sin tocar el bucle
         de chat().
 
-        Si el modelo está en `_force_xml_models` (falló en tool
-        calling nativo y el stall guard lo marcó), se devuelve XML
-        aunque las capabilities digan native.
+        Modo XML si las capabilities lo dicen, nativo en otro caso.
         """
-        if model and model in self._force_xml_models:
-            logger.info(
-                "Modelo %s: forzando XmlToolStrategy por fallos "
-                "previos en tool calling nativo",
-                model,
-            )
-            return XmlToolStrategy()
         if caps.tool_mode == "xml":
             return XmlToolStrategy()
         return NativeToolStrategy()
