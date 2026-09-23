@@ -372,7 +372,7 @@ class RightPanel(QWidget):
         button.setObjectName("McpToggle")
         button.setCheckable(True)
         button.setMinimumHeight(34)
-                # Aviso: con modelos pequenos (<8B) activar MCP suele
+        # Aviso: con modelos pequenos (<8B) activar MCP suele
         # empeorar el tool calling. Los nombres largos con prefijo
         # (mcp__fs__...) y la semantica distinta del
         # server-filesystem confunden al modelo. Analisis completo
