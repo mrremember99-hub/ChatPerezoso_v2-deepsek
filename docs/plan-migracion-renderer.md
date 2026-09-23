@@ -118,3 +118,43 @@ se descarta y se documenta.
 3. Benchmark (B-2b).
 4. Decidir con datos: sustituir (B-3) o descartar.
 5. Limpieza (B-4).
+
+## Contrato del renderer (B-Fase 1)
+
+Cualquier renderer debe implementar el Protocol `ChatRenderer` de
+`ui/rendering/protocol.py`. Esta es la lista completa de metodos y
+propiedades:
+
+| Miembro | Tipo | Uso |
+| --- | --- | --- |
+| `response_text` | property -> str | Texto completo acumulado del segmento |
+| `response_start` | property -> int\|None | Posicion de inicio del segmento |
+| `reset()` | metodo | Reset completo del renderer |
+| `reset_response_segment()` | metodo | Cierra el segmento actual |
+| `insert_user_message(text)` | metodo | Inserta el mensaje del usuario |
+| `on_text(text)` | metodo | Delta de streaming |
+| `insert_narration(text, active)` | metodo | Narracion del proceso |
+| `insert_tool_card(result)` | metodo | Tarjeta de resultado de tool |
+| `insert_error(message)` | metodo | Aviso de error |
+| `final_text(fallback)` | metodo -> str | Cierra la respuesta, devuelve texto |
+| `restore_assistant_message(text)` | metodo | Restaura mensaje historico |
+| `remove_from_last_user()` | metodo | Borra desde el ultimo user (regenerar) |
+
+El Protocol es `runtime_checkable`: `isinstance(x, ChatRenderer)`
+verifica que los nombres existen, no las firmas. La verificacion
+fuerte la hacen los tests funcionales de cada renderer.
+
+### Verificacion
+
+`tests/test_renderer_contract.py` verifica que `PlainTextRenderer`
+cumple el Protocol. El futuro `WidgetListRenderer` debe pasar el
+mismo test.
+
+### Invariantes que el contrato NO captura
+
+- Batching: el llamante (`ChatController`) es quien agrupa los
+  deltas cada 32 ms. El renderer recibe bloques, no tokens.
+- `on_text` es incremental: se llama varias veces durante el
+  streaming. `final_text` cierra el ciclo.
+- `insert_user_message` + `reset` + `on_text`... + `final_text` es
+  el ciclo minimo de un turno.
