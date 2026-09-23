@@ -65,8 +65,15 @@ class RequestTokenCache:
     """
 
     def __init__(self) -> None:
-        # key = id(message), value = (content_ref, tool_calls_ref, tokens)
+        # key = id(message), value = (content_ref, tool_calls_ref, tc_len, value)
         self._entries: dict[int, tuple[object, object, int, int]] = {}
+        # Segundo cache: mismo patron, pero guarda el tamaño en
+        # chars de json.dumps(message). Se usa desde
+        # OllamaClient._emit_round_metrics para no reserializar
+        # todo el historial en cada ronda de tool calling.
+        self._serialized_chars: dict[
+            int, tuple[object, object, int, int]
+        ] = {}
 
     def get_or_compute(
         self,
@@ -93,6 +100,36 @@ class RequestTokenCache:
         tokens = window.estimate_message_tokens(message)
         self._entries[key] = (content, tool_calls, tc_len, tokens)
         return tokens
+
+    def get_or_compute_serialized_chars(self, message: dict) -> int:
+        """Tamaño en chars de json.dumps(message). Cacheado.
+
+        Misma maquina de identidad que get_or_compute (content,
+        tool_calls, len(tool_calls)) para invalidar si el mensaje
+        muta. Se usa desde _emit_round_metrics para evitar
+        reserializar el historial completo en cada ronda.
+        """
+        key = id(message)
+        content = message.get("content")
+        tool_calls = message.get("tool_calls")
+        tc_len = len(tool_calls) if tool_calls else 0
+        entry = self._serialized_chars.get(key)
+        if entry is not None:
+            cached_content, cached_calls, cached_tc_len, chars = entry
+            if (
+                cached_content is content
+                and cached_calls is tool_calls
+                and cached_tc_len == tc_len
+            ):
+                return chars
+        import json as _json
+        chars = len(
+            _json.dumps(message, ensure_ascii=False, default=str)
+        )
+        self._serialized_chars[key] = (
+            content, tool_calls, tc_len, chars
+        )
+        return chars
 
 
 @dataclass(frozen=True)

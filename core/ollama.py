@@ -314,7 +314,7 @@ class OllamaClient:
                 options=options,
             )
 
-            self._emit_round_metrics(ctx, message)
+            self._emit_round_metrics(ctx, message, state.token_cache)
 
             result = strategy.process_round(message, tool_names)
 
@@ -438,6 +438,7 @@ class OllamaClient:
     def _emit_round_metrics(
         ctx: _ChatContext,
         message: dict[str, Any],
+        cache: RequestTokenCache | None = None,
     ) -> None:
         """Extrae y emite las métricas de una ronda.
 
@@ -459,12 +460,22 @@ class OllamaClient:
                 # definitions. `prompt_eval_count` cuenta todo eso,
                 # así que medir solo el content daba un ratio sesgado
                 # a la baja.
-                messages_chars = sum(
-                    len(json.dumps(
-                        m, ensure_ascii=False, default=str,
-                    ))
-                    for m in ctx.history
-                )
+                # Reutilizar el cache de caracteres serializados si
+                # esta disponible: sin esto, cada ronda reserializa
+                # TODO el historial, aunque la mayoria de mensajes
+                # no cambiaron desde la ronda anterior.
+                if cache is not None:
+                    messages_chars = sum(
+                        cache.get_or_compute_serialized_chars(m)
+                        for m in ctx.history
+                    )
+                else:
+                    messages_chars = sum(
+                        len(json.dumps(
+                            m, ensure_ascii=False, default=str,
+                        ))
+                        for m in ctx.history
+                    )
                 tools_chars = 0
                 if ctx.send_tools:
                     try:

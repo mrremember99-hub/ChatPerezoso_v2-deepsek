@@ -299,7 +299,10 @@ class ToolRegistry:
             actual = self.workspace.read_file(path)
         except Exception:
             return result
-        preview = actual if len(actual) <= 2000 else actual[:2000] + "\n…(truncado)"
+        # Limitar el preview: el contenido completo puede ser de 1 MB
+        # y no aporta al modelo. 500 chars bastan para detectar un
+        # contenido claramente equivocado sin inflar el historial.
+        preview = actual if len(actual) <= 500 else actual[:500] + "\n…(truncado)"
         return f"{result}\n\nContenido verificado en disco:\n---\n{preview}\n---"
 
 

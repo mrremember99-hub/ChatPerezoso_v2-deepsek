@@ -152,36 +152,6 @@ QPushButton#McpToggle {
     background-color: #111A18;
     color: #9BAFA7;
     border: 1px solid #26332F;
-    border-radius: 10px;
-    padding: 8px 14px;
-    text-align: left;
-    font-weight: 600;
-    font-size: 11px;
-    min-height: 20px;
-}
-QPushButton#McpToggle:hover {
-    border-color: #3A4A45;
-    color: #EAF1EE;
-}
-QPushButton#McpToggle:checked {
-    background-color: #17301F;
-    color: #7EE0A8;
-    border-color: #3A6B52;
-}
-QPushButton#McpToggle:checked:hover {
-    background-color: #1B3A26;
-    border-color: #4A7A5E;
-}
-QPushButton#McpToggle:disabled {
-    background-color: #0E1413;
-    color: #5D6E68;
-    border-color: #1A2523;
-}
-
-QPushButton#McpToggle {
-    background-color: #111A18;
-    color: #9BAFA7;
-    border: 1px solid #26332F;
     border-radius: 8px;
     padding: 8px 14px;
     text-align: left;
