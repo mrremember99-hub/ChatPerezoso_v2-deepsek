@@ -13,6 +13,7 @@ from pathlib import Path
 from PySide6.QtCore import (
     QDir,
     QModelIndex,
+    QPersistentModelIndex,
     QSortFilterProxyModel,
     Qt,
     Signal,
@@ -51,10 +52,16 @@ class _WorkspaceFilterProxy(QSortFilterProxyModel):
         self._skip = skip_names
 
     def filterAcceptsRow(
-        self, source_row: int, source_parent: QModelIndex
+        self,
+        source_row: int,
+        source_parent: QModelIndex | QPersistentModelIndex,
     ) -> bool:
         model = self.sourceModel()
-        if model is None:
+        # El contrato de QSortFilterProxyModel.sourceModel() devuelve
+        # QAbstractItemModel, pero aqui siempre envolvemos un
+        # QFileSystemModel. isinstance es la forma segura de acceder
+        # a isDir() / fileName() sin que Pylance se queje.
+        if not isinstance(model, QFileSystemModel):
             return True
         index = model.index(source_row, 0, source_parent)
         if not index.isValid():
@@ -365,6 +372,16 @@ class RightPanel(QWidget):
         button.setObjectName("McpToggle")
         button.setCheckable(True)
         button.setMinimumHeight(34)
+                # Aviso: con modelos pequenos (<8B) activar MCP suele
+        # empeorar el tool calling. Los nombres largos con prefijo
+        # (mcp__fs__...) y la semantica distinta del
+        # server-filesystem confunden al modelo. Analisis completo
+        # en docs/mcp-notas.md.
+        button.setToolTip(
+            "Con modelos pequeños (<8B), activar MCP puede\n"
+            "confundir al modelo y empeorar el tool calling.\n"
+            "Ver docs/mcp-notas.md para detalles."
+        )
         button.clicked.connect(
             lambda checked, sid=server_id: self.mcp_toggle_requested.emit(sid, checked)
         )
