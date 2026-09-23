@@ -172,3 +172,41 @@ def test_function_xml_stripped_from_content():
     assert "<parameter=" not in cleaned
     assert "Voy a listar" in cleaned
 
+# ── X-1: anidamiento en arguments (verificado correcto) ─────────────
+
+def test_parse_nested_object_arguments():
+    r"""`arguments` con objeto anidado: el regex no-greedy lo captura bien.
+
+    El auditor 7 reportó que `\{.*?\}` cortaría en el primer `}`
+    interno. Verificado empíricamente: no ocurre. El ancla
+    `</tool_call>` que sigue al `\}` fuerza la expansión correcta.
+    """
+    text = (
+        '<tool_call>{"name": "x", "arguments": '
+        '{"path": "a", "opts": {"force": true}}}</tool_call>'
+    )
+    assert parse_tool_calls(text, known_tools={"x"}) == [
+        ("x", {"path": "a", "opts": {"force": True}})
+    ]
+
+
+def test_parse_array_of_objects_arguments():
+    """`arguments` con array de objetos: también se captura completo."""
+    text = (
+        '<tool_call>{"name": "y", "arguments": '
+        '{"items": [{"a": 1}, {"b": 2}]}}</tool_call>'
+    )
+    assert parse_tool_calls(text, known_tools={"y"}) == [
+        ("y", {"items": [{"a": 1}, {"b": 2}]})
+    ]
+
+
+def test_parse_deeply_nested_arguments():
+    """Anidamiento a 3 niveles: sigue funcionando."""
+    text = (
+        '<tool_call>{"name": "z", "arguments": '
+        '{"a": {"b": {"c": {"d": 1}}}}}</tool_call>'
+    )
+    assert parse_tool_calls(text, known_tools={"z"}) == [
+        ("z", {"a": {"b": {"c": {"d": 1}}}})
+    ]
