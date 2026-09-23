@@ -24,21 +24,10 @@ import threading
 import time
 from typing import Any, Callable, Coroutine
 
+from .shutdown import remaining
+
 
 logger = logging.getLogger(__name__)
-
-
-def _remaining(deadline: float | None, *, default: float) -> float:
-    """Segundos restantes hasta `deadline`.
-
-    Si `deadline` es None, devuelve `default`. Si ya paso, devuelve 0.
-    Sirve para repartir un presupuesto total de shutdown entre fases
-    sin que cada una espere su timeout individual completo.
-    """
-    if deadline is None:
-        return default
-    return max(0.0, deadline - time.monotonic())
-
 
 
 # Intervalo de comprobación del hilo watcher. Solo importa cuando el
@@ -214,7 +203,7 @@ class AsyncRunner:
         # 1. Callback de cierre dentro del loop (antes de pararlo).
         #    Es donde se cierra el AsyncClient persistente.
         if loop is not None and close_cb is not None and not loop.is_closed():
-            cb_timeout = _remaining(deadline, default=3.0)
+            cb_timeout = remaining(deadline, default=3.0)
             if cb_timeout <= 0:
                 logger.warning(
                     "AsyncRunner.close: sin tiempo para close_callback"
@@ -248,7 +237,7 @@ class AsyncRunner:
             and thread.is_alive()
             and thread is not threading.current_thread()
         ):
-            join_timeout = _remaining(deadline, default=3.0)
+            join_timeout = remaining(deadline, default=3.0)
             if join_timeout <= 0:
                 logger.warning("AsyncRunner.close: sin tiempo para join")
                 ok = False

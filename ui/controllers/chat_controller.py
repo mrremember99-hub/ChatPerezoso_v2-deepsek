@@ -12,6 +12,7 @@ from core.history import AsyncHistoryWriter, HistoryStore
 from core.ollama import OllamaClient, is_textual_tool_failure
 from core.tool_provider import ToolProvider
 from core.tool_result import ToolResult
+from core.shutdown import remaining
 
 from ..chat_state import ChatState
 
@@ -385,17 +386,17 @@ class ChatController(QObject):
         self.store.clear()
         self.conversation_changed.emit()
 
-    def shutdown(self) -> None:
-        """Cierra el controller esperando a que el worker termine de verdad.
+    def shutdown(self, deadline: float | None = None) -> bool:
+        """Cierra el controller esperando a que el worker termine.
 
-        Antes este método llamaba a ``thread.quit()`` y esperaba 2s.
-        Pero ``quit()`` no termina ``ChatWorker.run()``: solo sale del
-        event loop del QThread, y el worker no ejecuta un event loop,
-        ejecuta una función larga. Si el worker no terminaba en 2s,
-        ``shutdown()`` seguía y cerraba ``OllamaClient`` mientras el
-        worker seguía usándolo. Ahora esperamos a que ``run()``
-        retorne de verdad con un timeout duro y, si se agota, forzamos
-        la salida registrándolo.
+        `deadline` es un timestamp absoluto (``time.monotonic()``) que
+        marca el presupuesto total del shutdown. El metodo reparte lo
+        que queda entre el worker y el AsyncHistoryWriter. Si es None,
+        cada fase usa su timeout individual (compatibilidad).
+
+        Devuelve True si todo termino dentro del presupuesto, False si
+        algo expiro. En el segundo caso el watchdog global de main.py
+        actua como ultimo recurso.
         """
         if self._stream_timer.isActive():
             self._stream_timer.stop()
@@ -406,30 +407,52 @@ class ChatController(QObject):
         if worker is not None:
             worker.cancel()
 
-        if thread is not None and thread.isRunning():
-            # wait() bloquea hasta que run() retorne. Es lo que
-            # queremos: no cerrar recursos compartidos antes de que el
-            # worker los haya soltado.
-            if not thread.wait(_SHUTDOWN_GRACE_MS):
-                # NO llamar a thread.terminate(): la documentación de
-                # Qt advierte que terminar un hilo Python a mitad de una
-                # operación (especialmente si sostiene un lock o está
-                # dentro de una extensión C) puede corromper estado o
-                # provocar deadlocks. El watchdog de main.py
-                # (_force_exit_after) es el último recurso de emergencia
-                # y hace os._exit(), que es seguro.
-                logger.error(
-                    "ChatWorker no terminó en %d ms durante shutdown; "
-                    "dejando que el watchdog global termine el proceso",
-                    _SHUTDOWN_GRACE_MS,
-                )
+        ok = True
 
-        # Persistencia final: no podemos esperar al debounce.
-        self._persist_now()
-        # Esperar a que el writer termine las escrituras pendientes
-        # antes de liberar el resto de recursos. Sin esto, un cierre
-        # podria perder las ultimas escrituras.
-        self._async_writer.shutdown()
+        # 1. Esperar al worker con el presupuesto restante.
+        if thread is not None and thread.isRunning():
+            wait_budget = remaining(
+                deadline, default=_SHUTDOWN_GRACE_MS / 1000.0
+            )
+            if wait_budget <= 0:
+                logger.error(
+                    "ChatController.shutdown: sin presupuesto para el "
+                    "worker; el watchdog global actua como ultimo recurso"
+                )
+                ok = False
+            else:
+                wait_ms = min(int(wait_budget * 1000), _SHUTDOWN_GRACE_MS)
+                if not thread.wait(wait_ms):
+                    # NO llamar a thread.terminate(): la documentacion
+                    # de Qt advierte que terminar un hilo Python a
+                    # mitad de una operacion puede corromper estado o
+                    # provocar deadlocks.
+                    logger.error(
+                        "ChatWorker no terminó en %d ms durante "
+                        "shutdown; dejando que el watchdog global actue",
+                        wait_ms,
+                    )
+                    ok = False
+
+        # 2. Persistencia final sin esperar aqui: el writer drena con
+        #    el presupuesto restante.
+        self._persist_now(wait=False)
+
+        writer_budget = remaining(deadline, default=3.0)
+        if writer_budget <= 0:
+            logger.error(
+                "ChatController.shutdown: sin presupuesto para el writer"
+            )
+            ok = False
+        else:
+            if not self._async_writer.shutdown(timeout=writer_budget):
+                logger.error(
+                    "ChatController.shutdown: writer no terminó en %.2fs",
+                    writer_budget,
+                )
+                ok = False
+
+        return ok
 
     # -- historial -----------------------------------------------------------
     def _append_message(self, message: dict) -> None:
