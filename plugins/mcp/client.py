@@ -186,6 +186,55 @@ class MCPClient:
                 await stack.aclose()
             except Exception:
                 pass
+        # El SDK hace SIGTERM al process group, pero `npm exec` no
+        # propaga la señal al hijo `node`, que queda huérfano. Le
+        # damos un breve margen al SDK y limpiamos lo que sobreviva.
+        import asyncio as _asyncio
+        await _asyncio.sleep(0.3)
+        self._kill_orphan_mcp_processes()
+
+    def _kill_orphan_mcp_processes(self) -> None:
+        """Mata `node .../mcp-server-*` huérfanos del workspace.
+
+        El SDK 2.2.0 usa start_new_session=True, pero `npm exec`
+        (invocado vía `npx`) no reenvía SIGTERM a su hijo `node`.
+        Filtrando por la ruta del workspace en la línea de comandos
+        evitamos matar servidores MCP de otros proyectos.
+        """
+        try:
+            import psutil
+        except ImportError:
+            return
+
+        # El workspace aparece como uno de los args del servidor.
+        workspace_hint: str | None = None
+        for arg in getattr(self.server, "args", []) or []:
+            if "/" in arg or "\\" in arg:
+                workspace_hint = arg
+                break
+
+        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+            try:
+                name = (proc.info.get("name") or "").lower()
+                if "node" not in name:
+                    continue
+                cmdline = proc.info.get("cmdline") or []
+                joined = " ".join(cmdline)
+                if "mcp-server-" not in joined:
+                    continue
+                if workspace_hint and workspace_hint not in joined:
+                    continue
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2.0)
+                except psutil.TimeoutExpired:
+                    proc.kill()
+            except (
+                psutil.NoSuchProcess,
+                psutil.AccessDenied,
+                psutil.ZombieProcess,
+            ):
+                continue
 
     # -- infraestructura síncrona ------------------------------------------
 
