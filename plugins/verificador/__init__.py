@@ -1,15 +1,36 @@
 """Plugin de verificación de código.
 
-Verifica la sintaxis de archivos del workspace. Soporta Python vía
-`ast.parse`. Otros lenguajes devuelven OK silenciosamente (filosofía
-pi-fence-check: solo se reportan errores, el código limpio no hace
-ruido).
+Cuatro niveles: sintaxis (ast), calidad (ruff+mypy), secretos
+hardcodeados y marcadores de conflicto git. El hook post-escritura
+ejecuta los cuatro tras cada `crear_archivo`/`escribir_archivo` y
+anexa el informe al ToolResult si hay hallazgos.
 
-El plugin expone `verificar_sintaxis(archivo)` como tool siempre
-visible al modelo. El toggle de la sidebar controla además un hook
-automático que verifica tras cada `crear_archivo`/`escribir_archivo`.
+El toggle de la sidebar controla el hook automático. La tool
+`verificar_codigo` está siempre disponible para que el modelo la
+invoque bajo demanda.
 """
-from .client import SyntaxIssue, check_syntax
+from .client import (
+    ConflictIssue,
+    QualityIssue,
+    SecretIssue,
+    SyntaxIssue,
+    check_conflicts,
+    check_quality,
+    check_syntax,
+    scan_secrets,
+    verify_all,
+)
 from .provider import VerificadorProvider
 
-__all__ = ["SyntaxIssue", "check_syntax", "VerificadorProvider"]
+__all__ = [
+    "ConflictIssue",
+    "QualityIssue",
+    "SecretIssue",
+    "SyntaxIssue",
+    "VerificadorProvider",
+    "check_conflicts",
+    "check_quality",
+    "check_syntax",
+    "scan_secrets",
+    "verify_all",
+]
