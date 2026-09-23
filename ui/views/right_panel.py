@@ -17,9 +17,13 @@ from PySide6.QtCore import (
     Qt,
     Signal,
 )
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
+    QApplication,
     QFileSystemModel,
     QLabel,
+    QMenu,
     QPushButton,
     QTreeView,
     QVBoxLayout,
@@ -174,6 +178,15 @@ class RightPanel(QWidget):
         # Los 3 ultimos (tamano, tipo, fecha) no caben en 260 px.
         for col in (1, 2, 3):
             self.workspace_tree.setColumnHidden(col, True)
+        self.workspace_tree.doubleClicked.connect(
+            self._on_tree_double_click
+        )
+        self.workspace_tree.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.workspace_tree.customContextMenuRequested.connect(
+            self._on_tree_context_menu
+        )
         layout.addWidget(self.workspace_tree, 1)
 
     # -- API pública ---------------------------------------------------------
@@ -242,6 +255,79 @@ class RightPanel(QWidget):
         # Si algo falla, dejar el arbol vacio en vez de mostrar
         # el sistema de archivos completo.
         self.workspace_tree.setRootIndex(QModelIndex())
+
+    # -- interaccion con el arbol -------------------------------------------
+
+    def _path_for_index(self, proxy_index: QModelIndex) -> Path | None:
+        """Convierte un indice del proxy a la ruta real del FS."""
+        if not proxy_index.isValid():
+            return None
+        source_index = self._workspace_proxy.mapToSource(proxy_index)
+        path_str = self._workspace_model.filePath(source_index)
+        if not path_str:
+            return None
+        return Path(path_str)
+
+    def _on_tree_double_click(self, proxy_index: QModelIndex) -> None:
+        """Abrir el archivo con la app externa del sistema.
+
+        Los directorios ya se expanden/colapsan con el doble clic
+        por defecto de Qt, asi que solo interceptamos archivos.
+        """
+        path = self._path_for_index(proxy_index)
+        if path is None or not path.is_file():
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _on_tree_context_menu(self, pos) -> None:
+        index = self.workspace_tree.indexAt(pos)
+        if not index.isValid():
+            return
+        path = self._path_for_index(index)
+        if path is None:
+            return
+
+        menu = QMenu(self.workspace_tree)
+        if path.is_file():
+            act_open = menu.addAction("Abrir con app externa")
+            act_open.triggered.connect(
+                lambda _=False, p=path: QDesktopServices.openUrl(
+                    QUrl.fromLocalFile(str(p))
+                )
+            )
+        act_reveal = menu.addAction("Mostrar en el Finder")
+        act_reveal.triggered.connect(
+            lambda _=False, p=path: self._reveal_in_finder(p)
+        )
+        act_copy = menu.addAction("Copiar ruta")
+        act_copy.triggered.connect(
+            lambda _=False, p=path: self._copy_path(p)
+        )
+
+        menu.exec(self.workspace_tree.viewport().mapToGlobal(pos))
+
+    @staticmethod
+    def _reveal_in_finder(path: Path) -> None:
+        """Abre la carpeta contenedora y selecciona el archivo.
+
+        Usa el esquema file:// con un fragmento, que en macOS
+        abre Finder con el elemento seleccionado. En otros SO
+        abre la carpeta contenedora.
+        """
+        if path.is_file():
+            QDesktopServices.openUrl(
+                QUrl.fromLocalFile(str(path.parent))
+            )
+        elif path.is_dir():
+            QDesktopServices.openUrl(
+                QUrl.fromLocalFile(str(path))
+            )
+
+    @staticmethod
+    def _copy_path(path: Path) -> None:
+        clipboard = QGuiApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(str(path))
 
     # -- cola de prompts -----------------------------------------------------
     def set_queue_list(self, prompts: list[str]) -> None:
