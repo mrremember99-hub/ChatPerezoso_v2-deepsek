@@ -194,7 +194,7 @@ class OllamaClient:
         # read=300s: modelos con thinking mode (qwen3, north-mini-code,
         # muse-glimmer) pueden tardar 60-120s en el primer token. Con
         # 60s, httpx cortaba la conexión antes de que el modelo empezara.
-        self.timeout = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
+        self.timeout = httpx.Timeout(connect=10.0, read=900.0, write=30.0, pool=10.0)
         # Runner dedicado para corrutinas httpx. Ver core/async_runner.py.
         self._async_runner = AsyncRunner(name="OllamaAsync")
         # Cliente HTTP persistente, creado la primera vez y reutilizado
@@ -988,9 +988,12 @@ class OllamaClient:
             detail = str(exc) or type(exc).__name__
             if isinstance(exc, httpx.ReadTimeout):
                 detail = (
-                    "Ollama no respondió en el tiempo de espera. "
-                    "El modelo puede necesitar más tiempo (thinking mode) "
-                    "o estar demasiado cargado. Detalle: ReadTimeout."
+                    "Ollama no respondió en el tiempo de espera (900 s). "
+                    "Si acabas de enviar un prompt largo, puede estar "
+                    "procesándolo (prefill). Es normal con modelos densos "
+                    "como gemma4 o llama3 en equipos con poca memoria. "
+                    "Si se repite, prueba un modelo MoE (gpt-oss, qwen3) "
+                    "o reduce el tamaño del prompt. Detalle: ReadTimeout."
                 )
             raise OllamaError(detail) from exc
         except asyncio.CancelledError:
