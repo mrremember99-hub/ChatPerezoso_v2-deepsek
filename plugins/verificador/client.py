@@ -158,7 +158,7 @@ def _run_mypy(path: Path) -> list[QualityIssue]:
     try:
         proc = subprocess.run(
             ["mypy", "--no-error-summary", "--no-color-output", str(path)],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=5,
         )
     except (subprocess.TimeoutExpired, OSError):
         return []

@@ -13,3 +13,11 @@ cd chatperezoso
 ./setup.sh --mcp
 source .venv/bin/activate
 python bootstrap.py
+
+## Instalación para desarrollo
+
+```bash
+pip install -e ".[dev]"
+```
+
+El extra `dev` instala `ruff`, `mypy`, `pytest`, `pytest-qt` y `pytest-timeout`. Sin `ruff` ni `mypy`, el plugin verificador degrada a los niveles 1, 3 y 4 (sintaxis, secretos, conflictos).

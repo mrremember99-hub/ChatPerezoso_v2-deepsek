@@ -17,6 +17,13 @@ dependencies = [
 
 [project.optional-dependencies]
 mcp = ["mcp>=2,<3"]
+dev = [
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "pytest>=8",
+    "pytest-qt>=4",
+    "pytest-timeout>=2.3",
+]
 
 # Plugins internos del proyecto. Un plugin externo (pip install
 # chatperezoso-plugin-github) aparecería automáticamente en el mismo grupo.

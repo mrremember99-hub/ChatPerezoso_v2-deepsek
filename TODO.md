@@ -120,3 +120,10 @@ Auditoría completa en `docs/audit-2026-09.md`. Resumen:
 
 - **Benchmark de MikeVeerman.** El repo no existe con ese nombre.
   Usar `scripts/benchmark_intent_gate.py` como referencia.
+
+
+## Cierre de sesión 2026-09 — pendientes anotados
+
+- [ ] Verificación visual del plugin verificador en la app real (niveles 2 y 3 con ruff/mypy).
+- [ ] Candidatos para próximas sesiones: `snapshot_workspace` (red de seguridad), `ejecutar_pruebas` (test runner), `memoria_proyecto` (contexto persistente).
+- [ ] Migración QTextEdit -> QScrollArea + widgets: sin urgencia tras Fase 2.2.
