@@ -241,9 +241,6 @@ QCheckBox#VerificadorCheck:checked {
     color: #E0BC7A;
     font-weight: 600;
 }
-QCheckBox#AutoApproveShellCheck {
-    margin-left: 22px;
-}
 
 QTreeView#WorkspaceTree {
     background-color: transparent;

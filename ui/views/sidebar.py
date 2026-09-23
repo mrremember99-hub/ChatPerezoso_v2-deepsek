@@ -145,7 +145,16 @@ class Sidebar(QWidget):
         self.auto_approve_shell_check.toggled.connect(
             self.auto_approve_shell_changed.emit
         )
-        layout.addWidget(self.auto_approve_shell_check)
+        # Contenedor con margen izquierdo para que el checkbox también
+        # se desplace y quede claro que es una sub-opción. El QSS de
+        # Qt a veces solo mueve el texto del QCheckBox, no el
+        # indicador (el cuadrado).
+        shell_container = QWidget()
+        shell_lay = QHBoxLayout(shell_container)
+        shell_lay.setContentsMargins(28, 0, 0, 0)
+        shell_lay.setSpacing(0)
+        shell_lay.addWidget(self.auto_approve_shell_check)
+        layout.addWidget(shell_container)
 
         # Verificación de sintaxis post-escritura. Independiente del
         # piloto automático: funciona con o sin él.
