@@ -254,6 +254,7 @@ class AppController(QObject):
     def _apply_initial_state(self) -> None:
         self.view.resize(self.config.width, self.config.height)
         self.view.sidebar.set_workspace_name(self._workspace_name())
+        self.view.right_panel.set_workspace(self.workspace.root)
         # No llamar a set_mcp_servers aquí: MCPController.emit_current_state()
         # (en _wire) ya emite el estado real. Llamarlo con listas vacías
         # borraba el botón MCP que se acababa de crear.
@@ -487,6 +488,7 @@ class AppController(QObject):
             self.config.workspace = str(Path(selected).resolve())
             self.config.save()
             self.view.sidebar.set_workspace_name(self._workspace_name())
+            self.view.right_panel.set_workspace(self.workspace.root)
             self.view.set_status("Workspace cambiado")
         except WorkspaceError as exc:
             warn(self.view, "Workspace", str(exc))

@@ -1,21 +1,66 @@
-"""Panel derecho: plugins (MCP y futuros).
+"""Panel derecho: plugins, cola de prompts, explorador de archivos.
 
 Estructura paralela a la sidebar izquierda: ancho fijo, secciones
-con título, widgets autocontenidos. Hoy solo tiene la lista de
-servidores MCP. Cuando haya más plugins con UI, cada uno añade su
-sección aquí.
+con titulo, widgets autocontenidos. Secciones actuales:
+  · MCP: toggle por servidor.
+  · COLA DE PROMPTS: todo list del envio en lote.
+  · ARCHIVOS: arbol del workspace (QFileSystemModel + filtro).
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from pathlib import Path
+
+from PySide6.QtCore import (
+    QDir,
+    QModelIndex,
+    QSortFilterProxyModel,
+    Qt,
+    Signal,
+)
 from PySide6.QtWidgets import (
+    QFileSystemModel,
     QLabel,
     QPushButton,
+    QTreeView,
     QVBoxLayout,
     QWidget,
 )
 
+from core.workspace import _SKIP_DIRS
+
 from .. import design
+
+
+class _WorkspaceFilterProxy(QSortFilterProxyModel):
+    """Filtra directorios de sistema del arbol del workspace.
+
+    Sin esto, el arbol mostraria node_modules/, __pycache__/,
+    venv/, dist/, etc. — el mismo ruido que el listado de
+    herramientas excluye via _SKIP_DIRS en core/workspace.py.
+    Los archivos nunca se filtran; solo los directorios.
+    """
+
+    def __init__(
+        self, skip_names: frozenset[str], parent=None
+    ) -> None:
+        super().__init__(parent)
+        self._skip = skip_names
+
+    def filterAcceptsRow(
+        self, source_row: int, source_parent: QModelIndex
+    ) -> bool:
+        model = self.sourceModel()
+        if model is None:
+            return True
+        index = model.index(source_row, 0, source_parent)
+        if not index.isValid():
+            return False
+        # Los archivos siempre pasan.
+        if not model.isDir(index):
+            return True
+        # Los directorios de sistema, fuera.
+        name = model.fileName(index)
+        return name not in self._skip
 
 
 class QueueRow(QLabel):
@@ -65,6 +110,19 @@ class RightPanel(QWidget):
         self._mcp_labels: dict[str, str] = {}
         # Filas del todo list de la cola de prompts.
         self._queue_rows: list[QueueRow] = []
+        # Modelo del sistema de archivos del workspace. Se crea
+        # aqui para que sobreviva mientras el panel viva (los
+        # modelos sin padre pueden ser recogidos por el GC).
+        self._workspace_model = QFileSystemModel(self)
+        self._workspace_model.setFilter(
+            QDir.Filter.AllDirs
+            | QDir.Filter.Files
+            | QDir.Filter.NoDotAndDotDot
+        )
+        self._workspace_proxy = _WorkspaceFilterProxy(
+            _SKIP_DIRS, self
+        )
+        self._workspace_proxy.setSourceModel(self._workspace_model)
         self._build()
 
     # -- construcción --------------------------------------------------------
@@ -97,11 +155,26 @@ class RightPanel(QWidget):
         self.queue_list.setSpacing(2)
         layout.addLayout(self.queue_list)
 
-        # -- extensiones futuras --
-        # Aquí irán las secciones de otros plugins (git, search, etc.)
-        # cuando tengan UI propia. Por ahora queda vacío para no meter
-        # ruido visual.
-        layout.addStretch(1)
+        # -- ARCHIVOS --
+        layout.addSpacing(14)
+        self.workspace_title = QLabel("ARCHIVOS")
+        self.workspace_title.setObjectName("SectionTitle")
+        layout.addWidget(self.workspace_title)
+
+        self.workspace_tree = QTreeView()
+        self.workspace_tree.setObjectName("WorkspaceTree")
+        self.workspace_tree.setHeaderHidden(True)
+        self.workspace_tree.setUniformRowHeights(True)
+        self.workspace_tree.setIndentation(12)
+        self.workspace_tree.setMinimumHeight(150)
+        self.workspace_tree.setEditTriggers(
+            QTreeView.EditTrigger.NoEditTriggers
+        )
+        self.workspace_tree.setModel(self._workspace_proxy)
+        # Los 3 ultimos (tamano, tipo, fecha) no caben en 260 px.
+        for col in (1, 2, 3):
+            self.workspace_tree.setColumnHidden(col, True)
+        layout.addWidget(self.workspace_tree, 1)
 
     # -- API pública ---------------------------------------------------------
     def set_mcp_servers(
@@ -144,6 +217,31 @@ class RightPanel(QWidget):
     def set_busy(self, busy: bool) -> None:
         self._busy = busy
         self._render_mcp_buttons()
+
+    def set_workspace(self, path: str | Path | None) -> None:
+        """Fija la raiz del arbol de archivos al workspace activo.
+
+        El QFileSystemModel usa su propio QFileSystemWatcher: el
+        arbol se refresca solo cuando el workspace cambia
+        (escritura del modelo, edicion externa, etc.). No hay
+        que hacer polling.
+        """
+        if not path:
+            self.workspace_tree.setRootIndex(QModelIndex())
+            return
+        root_str = str(path)
+        self._workspace_model.setRootPath(root_str)
+        source_root = self._workspace_model.index(root_str)
+        if source_root.isValid():
+            proxy_root = self._workspace_proxy.mapFromSource(
+                source_root
+            )
+            if proxy_root.isValid():
+                self.workspace_tree.setRootIndex(proxy_root)
+                return
+        # Si algo falla, dejar el arbol vacio en vez de mostrar
+        # el sistema de archivos completo.
+        self.workspace_tree.setRootIndex(QModelIndex())
 
     # -- cola de prompts -----------------------------------------------------
     def set_queue_list(self, prompts: list[str]) -> None:

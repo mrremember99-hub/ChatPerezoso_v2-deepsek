@@ -237,6 +237,27 @@ QCheckBox#AutoApproveCheck:checked {
     color: #E0BC7A;
     font-weight: 600;
 }
+
+QTreeView#WorkspaceTree {
+    background-color: transparent;
+    border: none;
+    color: #C7D6CF;
+    font-size: 11px;
+    outline: 0;
+}
+QTreeView#WorkspaceTree::item {
+    padding: 2px 0;
+}
+QTreeView#WorkspaceTree::item:hover {
+    background-color: #141E1C;
+}
+QTreeView#WorkspaceTree::item:selected {
+    background-color: #17301F;
+    color: #7EE0A8;
+}
+QTreeView#WorkspaceTree::branch {
+    background: transparent;
+}
 """
 
 DOCUMENT_STYLESHEET = """
