@@ -107,6 +107,10 @@ class _LoopState:
     consecutive_blocked_rounds: int = 0
     recent_tool_signatures: list[str] = field(default_factory=list)
     token_cache: RequestTokenCache | None = None
+    # Stall guard: contador de nudges ya inyectados y bandera de si
+    # el modelo emitio alguna tool call en este chat().
+    stall_retries_used: int = 0
+    any_tool_call_emitted: bool = False
 
 
 
@@ -119,6 +123,30 @@ _TEXTUAL_TOOL_FAILURE_MARKERS: tuple[str, ...] = (
     "no logró invocar la herramienta",
     "has escrito el json de la herramienta",
 )
+
+
+# Frases que indican que el usuario pidio una verificacion
+# explicita. Si el modelo responde sin tool calls y el usuario
+# pidio verificar, se activa el stall guard: inyectar un nudge
+# y repetir la ronda.
+_VERIFICATION_VERBS: tuple[str, ...] = (
+    "ejecuta", "ejecutar", "verifica", "verificar",
+    "comprueba", "comprobar", "cita", "citar",
+    "run", "execute", "verify", "check",
+    "py_compile",
+)
+
+_STALL_NUDGE_MESSAGE = (
+    "No has emitido ninguna tool call en este turno. Tu respuesta "
+    "dice que verificaste algo, pero no hay ninguna llamada a "
+    "herramienta que respalde esa afirmacion. Ejecuta el comando "
+    "AHORA con la herramienta ejecutar_comando, o responde "
+    "exactamente 'NO VERIFICADO: no ejecute el comando'."
+)
+
+# Maximo de reintentos tras detectar un stall. Con 1 basta: si el
+# modelo ignora el nudge una vez, no lo va a obedecer a la segunda.
+_MAX_STALL_RETRIES = 1
 
 
 def is_textual_tool_failure(text: str | None) -> bool:
@@ -174,6 +202,11 @@ class OllamaClient:
         # está atado al loop en el que se crea). Se cierra al shutdown.
         self._http_client: httpx.AsyncClient | None = None
         self._async_runner.set_close_callback(self._close_http_client)
+        # Modelos que han fallado en tool calling nativo y se fuerzan
+        # a XmlToolStrategy para las siguientes llamadas. Se llena
+        # cuando el stall guard detecta que el modelo no ejecuta
+        # herramientas ni tras el nudge.
+        self._force_xml_models: set[str] = set()
 
     # -- API pública ---------------------------------------------------------
 
@@ -220,6 +253,17 @@ class OllamaClient:
             except Exception as exc:
                 logger.warning("Error cerrando AsyncClient: %s", exc)
         self._http_client = None
+
+    def reset_forced_xml(self, model: str | None = None) -> None:
+        """Reset del flag de forzar XML.
+
+        Util para tests o para que el usuario pueda reintentar el
+        modo nativo tras una actualizacion del modelo.
+        """
+        if model is None:
+            self._force_xml_models.clear()
+        else:
+            self._force_xml_models.discard(model)
 
     def shutdown(self, timeout: float | None = None) -> bool:
         """Libera recursos del cliente. Llamar al cerrar la app.
@@ -337,6 +381,48 @@ class OllamaClient:
 
             # Respuesta final.
             if result.is_final:
+                # Stall guard: si el usuario pidio verificacion
+                # explicita y el modelo NO ha emitido ninguna tool
+                # call en todo el chat(), no aceptamos la respuesta
+                # como "verificada". Inyectamos un nudge y repetimos
+                # la ronda (una sola vez).
+                if (
+                    state.stall_retries_used < _MAX_STALL_RETRIES
+                    and not state.any_tool_call_emitted
+                    and ctx.tool_names
+                    and self._user_requested_verification(
+                        ctx.authorization_text
+                    )
+                ):
+                    state.stall_retries_used += 1
+                    logger.info(
+                        "Stall detectado (modelo %s): respuesta sin "
+                        "tool calls tras peticion de verificacion. "
+                        "Inyectando nudge y repitiendo ronda.",
+                        ctx.model,
+                    )
+                    ctx.history.append({
+                        "role": "user",
+                        "content": _STALL_NUDGE_MESSAGE,
+                    })
+                    continue
+                # Si ya reintentamos y sigue sin ejecutar, marcamos
+                # el modelo para forzar XmlToolStrategy en la proxima
+                # llamada. En XML el prompt describe las tools y el
+                # parser busca bloques <tool_call> en el texto: no
+                # depende de que Ollama reconozca tool_calls nativos.
+                if (
+                    state.stall_retries_used >= _MAX_STALL_RETRIES
+                    and not state.any_tool_call_emitted
+                    and ctx.model not in self._force_xml_models
+                ):
+                    logger.warning(
+                        "Modelo %s no ejecuta tool calls ni tras "
+                        "nudge; forzando XmlToolStrategy para la "
+                        "proxima llamada.",
+                        ctx.model,
+                    )
+                    self._force_xml_models.add(ctx.model)
                 return result.final_text
 
             # Hay tool calls: ejecutar y volver a la siguiente ronda.
@@ -345,6 +431,7 @@ class OllamaClient:
                 # tool_calls se appendea dentro del metodo para que el
                 # chat template del modelo entienda la cadena.
                 execution = self._execute_round_tools(ctx, result)
+                state.any_tool_call_emitted = True
                 round_signature = execution.round_signature
                 round_had_block = execution.had_block
                 round_had_execution = execution.had_execution
@@ -390,7 +477,7 @@ class OllamaClient:
             model, caps.tool_mode, caps.probed,
         )
 
-        strategy = self._choose_strategy(caps, tools)
+        strategy = self._choose_strategy(caps, tools, model)
 
         history = list(messages)
         definitions = self._extract_definitions(tools)
@@ -620,13 +707,26 @@ class OllamaClient:
             return [system_msg] + list(pruned)
         return list(pruned)
 
-    @staticmethod
-    def _choose_strategy(caps, tools) -> Any:
+    def _choose_strategy(
+        self, caps, tools, model: str = ""
+    ) -> Any:
         """Selecciona la estrategia según el modo de tool calling.
 
-        Devuelve NativeToolStrategy o XmlToolStrategy. Añadir un tercer
-        modo sería añadir una rama aquí, sin tocar el bucle de chat().
+        Devuelve NativeToolStrategy o XmlToolStrategy. Añadir un
+        tercer modo sería añadir una rama aquí, sin tocar el bucle
+        de chat().
+
+        Si el modelo está en `_force_xml_models` (falló en tool
+        calling nativo y el stall guard lo marcó), se devuelve XML
+        aunque las capabilities digan native.
         """
+        if model and model in self._force_xml_models:
+            logger.info(
+                "Modelo %s: forzando XmlToolStrategy por fallos "
+                "previos en tool calling nativo",
+                model,
+            )
+            return XmlToolStrategy()
         if caps.tool_mode == "xml":
             return XmlToolStrategy()
         return NativeToolStrategy()
@@ -758,6 +858,19 @@ class OllamaClient:
             "## LLAMADAS NATIVAS\n"
             "Usa exclusivamente las llamadas de herramienta nativas de Ollama."
         )
+
+    @staticmethod
+    def _user_requested_verification(text: str) -> bool:
+        """True si el mensaje del usuario pide verificacion explicita.
+
+        Se usa para activar el stall guard: si el modelo responde
+        sin emitir tool calls y el usuario pidio ejecutar/verificar/
+        citar, se inyecta un nudge y se repite la ronda.
+        """
+        if not text:
+            return False
+        lower = text.lower()
+        return any(v in lower for v in _VERIFICATION_VERBS)
 
     @staticmethod
     def _last_user_text(history: list[dict[str, Any]]) -> str:
