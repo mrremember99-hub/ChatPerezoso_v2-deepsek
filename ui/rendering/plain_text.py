@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import html
 
-from PySide6.QtCore import QTimer
 from PySide6.QtGui import QColor, QTextBlockFormat, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import QTextEdit
 
@@ -12,12 +11,6 @@ from core.tool_result import ToolResult
 from .. import design
 from .markdown_renderer import to_html
 
-
-# Frecuencia con la que volcamos el texto acumulado al QTextDocument.
-# 32 ms ~= 30 fps. Suficiente para percibir streaming fluido sin
-# saturar el layout de QTextDocument con cientos de operaciones por
-# segundo. Ajustable si se ve lento o a tirones.
-_RENDER_INTERVAL_MS = 32
 
 
 class PlainTextRenderer:

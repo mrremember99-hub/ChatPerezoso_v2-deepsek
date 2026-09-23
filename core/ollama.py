@@ -1048,6 +1048,13 @@ class OllamaClient:
         try:
             data = json.loads(line)
         except ValueError:
+            # Ollama puede enviar chunks cortados en fronteras raras
+            # durante desconexiones o cancelaciones. Descartar la
+            # linea es correcto; sin logging era un punto ciego de
+            # diagnostico.
+            logger.debug(
+                "Linea NDJSON invalida descartada: %r", line[:200]
+            )
             return None
         chunk = data.get("message") or {}
 

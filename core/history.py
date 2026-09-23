@@ -190,6 +190,23 @@ class AsyncHistoryWriter:
         """
         self._executor.submit(lambda: None).result(timeout=timeout)
 
-    def shutdown(self, timeout: float = 3.0) -> None:
-        """Espera a que terminen las escrituras pendientes y cierra."""
-        self._executor.shutdown(wait=True, cancel_futures=False)
+    def shutdown(self, timeout: float = 3.0) -> bool:
+        """Espera a que terminen las escrituras pendientes, con timeout.
+
+        Devuelve True si todo termino dentro del timeout, False si
+        quedo alguna escritura en vuelo. En el segundo caso no
+        matamos el hilo (Python no lo permite): el executor se
+        cierra con wait=False y el proceso lo terminara al salir.
+
+        Antes este metodo aceptaba `timeout` pero lo ignoraba:
+        `executor.shutdown(wait=True)` bloqueaba indefinidamente.
+        """
+        try:
+            self.flush(timeout=timeout)
+        except Exception:
+            # Timeout al drenar la cola. Cerrar sin esperar.
+            self._executor.shutdown(wait=False, cancel_futures=False)
+            return False
+        # Cola vacia: cerrar es inmediato.
+        self._executor.shutdown(wait=False, cancel_futures=False)
+        return True

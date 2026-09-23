@@ -66,7 +66,7 @@ class RequestTokenCache:
 
     def __init__(self) -> None:
         # key = id(message), value = (content_ref, tool_calls_ref, tokens)
-        self._entries: dict[int, tuple[object, object, int]] = {}
+        self._entries: dict[int, tuple[object, object, int, int]] = {}
 
     def get_or_compute(
         self,

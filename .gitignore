@@ -3,7 +3,6 @@ config.json
 agents.json
 mcp_servers.json
 history.json
-workspace/*
 
 # Python
 __pycache__/
@@ -45,3 +44,8 @@ prompt-prueba.md
 baseline-*-renderer.txt
 after-*-renderer.txt
 tmp/
+
+# Artefactos de tests y contenido del workspace
+test_output.png
+workspace/*
+!workspace/.gitkeep
