@@ -10,6 +10,12 @@ from __future__ import annotations
 import time
 
 
+# Presupuesto total de shutdown. Menor que el watchdog de
+# main.py (SHUTDOWN_GRACE_SECONDS), para que el watchdog solo
+# entre si algo se cuelga de verdad.
+SHUTDOWN_BUDGET_SECONDS: float = 12.0
+
+
 def remaining(deadline: float | None, *, default: float) -> float:
     """Segundos restantes hasta `deadline`.
 

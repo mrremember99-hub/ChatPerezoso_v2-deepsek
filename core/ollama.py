@@ -221,9 +221,13 @@ class OllamaClient:
                 logger.warning("Error cerrando AsyncClient: %s", exc)
         self._http_client = None
 
-    def shutdown(self) -> None:
-        """Libera recursos del cliente. Llamar al cerrar la app."""
-        self._async_runner.close()
+    def shutdown(self, timeout: float | None = None) -> bool:
+        """Libera recursos del cliente. Llamar al cerrar la app.
+
+        `timeout` es el presupuesto total para el cierre. Devuelve
+        True si cerro limpiamente.
+        """
+        return self._async_runner.close(timeout)
 
     def list_models(self) -> list[str]:
         try:

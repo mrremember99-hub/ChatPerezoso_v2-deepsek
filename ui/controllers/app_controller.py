@@ -1,13 +1,19 @@
 """Coordinador de la aplicación."""
 from __future__ import annotations
 
+import logging
 import re
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Slot
 from PySide6.QtWidgets import QApplication, QFileDialog
 
 from core.agents import Agent, AgentStore
+from core.shutdown import (
+    SHUTDOWN_BUDGET_SECONDS,
+    remaining,
+)
 
 from ..chat_state import ChatState
 from ..workers import CapabilitiesWorker
@@ -79,6 +85,9 @@ _INVALIDATING_TOOLS = {
     "mcp__fs__create_directory",
     "mcp__fs__move_file",
 }
+
+
+logger = logging.getLogger(__name__)
 
 
 def split_prompts(text: str) -> list[str]:
@@ -610,12 +619,30 @@ class AppController(QObject):
         self.view.set_status(f"Conversación restaurada ({len(messages)} mensajes)")
 
     def shutdown(self) -> None:
+        """Cierra el arbol de la app con un deadline global.
+
+        El presupuesto total lo marca `SHUTDOWN_BUDGET_SECONDS` (menor
+        que el watchdog de main.py). Cada sub-shutdown recibe el mismo
+        `deadline` y reparte lo que queda. Antes los timeouts se
+        sumaban y podian sobrepasar el watchdog, dejando cierres
+        truncados.
+        """
         self.config.width = self.view.width()
         self.config.height = self.view.height()
         self.config.save()
+
+        deadline = time.monotonic() + SHUTDOWN_BUDGET_SECONDS
+
         # Orden importante: primero los controllers que usan ollama
         # (para que su worker termine), despues el propio ollama.
-        self.chat_ctrl.shutdown()
-        self.mcp_ctrl.shutdown()
-        self.model_ctrl.shutdown()
-        self.ollama.shutdown()
+        results = {
+            "chat": self.chat_ctrl.shutdown(deadline),
+            "mcp": self.mcp_ctrl.shutdown(deadline),
+            "model": self.model_ctrl.shutdown(deadline),
+            "ollama": self.ollama.shutdown(
+                remaining(deadline, default=3.0)
+            ),
+        }
+
+        if not all(results.values()):
+            logger.warning("Shutdown con avisos: %r", results)

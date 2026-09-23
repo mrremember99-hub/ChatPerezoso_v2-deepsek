@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QWidget
 
 from core.mcp_servers import MCPServerEntry, MCPServerStore
 from core.workspace import Workspace
+from core.shutdown import remaining
 from plugins.mcp import (
     MCPClient,
     MCPError,
@@ -163,23 +164,42 @@ class MCPController(QObject):
         """
         self._emit_changed()
 
-    def shutdown(self) -> None:
-        self._shutdown_connections()
+    def shutdown(self, deadline: float | None = None) -> bool:
+        """Cierra los servidores MCP con deadline repartido."""
+        return self._shutdown_connections(deadline)
 
     # -- implementación ------------------------------------------------------
-    def _shutdown_connections(self) -> None:
+    def _shutdown_connections(
+        self, deadline: float | None = None
+    ) -> bool:
+        """Cierra los MCP activos con presupuesto compartido."""
         self.bridge.deactivate()
         for worker in list(self._workers.values()):
             worker.client.close()
+
+        ok = True
         for sid, thread in list(self._threads.items()):
-            if thread.isRunning():
-                thread.quit()
-                if not thread.wait(2000):
-                    logger.warning("MCP thread %s no terminó en 2s durante shutdown", sid)
+            if not thread.isRunning():
+                continue
+            thread.quit()
+            wait_budget = remaining(deadline, default=2.0)
+            if wait_budget <= 0:
+                logger.warning("MCP %s: sin presupuesto", sid)
+                ok = False
+                continue
+            wait_ms = int(wait_budget * 1000)
+            if not thread.wait(wait_ms):
+                logger.warning(
+                    "MCP thread %s no terminó en %d ms durante shutdown",
+                    sid, wait_ms,
+                )
+                ok = False
+
         self._workers.clear()
         self._threads.clear()
         self._configs.clear()
         self._dead.clear()
+        return ok
 
     def _connect(self, server_id, command, *, args=None, env=None):
         try:

@@ -15,7 +15,7 @@ from ui.views.main_window import MainWindow
 # de forzar la salida. Si un worker está bloqueado en httpx.read() y
 # el modelo no envía datos, no puede responder al cancel_event, y
 # esperar indefinidamente deja la app colgada.
-SHUTDOWN_GRACE_SECONDS = 3.0
+SHUTDOWN_GRACE_SECONDS = 15.0
 
 
 def _force_exit_after(exit_code: int, timeout: float) -> None:

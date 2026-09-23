@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import QObject, QThread, Signal
 
 from core.ollama import OllamaClient
+from core.shutdown import remaining
 from ..workers import ModelWorker
 
 
@@ -40,7 +41,12 @@ class ModelController(QObject):
         self._worker = None
         self._thread = None
 
-    def shutdown(self) -> None:
-        if self._thread is not None and self._thread.isRunning():
-            self._thread.quit()
-            self._thread.wait(2000)
+    def shutdown(self, deadline: float | None = None) -> bool:
+        """Cierra el hilo del ModelWorker con deadline repartido."""
+        if self._thread is None or not self._thread.isRunning():
+            return True
+        self._thread.quit()
+        wait_budget = remaining(deadline, default=2.0)
+        if wait_budget <= 0:
+            return False
+        return self._thread.wait(int(wait_budget * 1000))
