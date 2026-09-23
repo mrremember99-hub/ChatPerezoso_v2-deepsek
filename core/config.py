@@ -26,6 +26,11 @@ class AppConfig:
     # siempre confirma: es la única garantía frente a comandos
     # destructivos que el modelo pudiera decidir ejecutar.
     auto_approve_tools: bool = False
+    # Extensión del piloto automático: si está activo Y el principal
+    # también, `ejecutar_comando` (shell) se auto-aprueba sin diálogo.
+    # Opt-in explícito: el shell ejecuta binarios arbitrarios del PATH
+    # con los argumentos que el modelo decida.
+    auto_approve_shell: bool = False
 
     @classmethod
     def load(cls) -> "AppConfig":

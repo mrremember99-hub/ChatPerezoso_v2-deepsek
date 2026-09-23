@@ -165,9 +165,15 @@ class AppController(QObject):
         )
 
         # Propagar el modo piloto automático persistido al controller
-        # y al checkbox de la sidebar antes del wiring.
+        # y al checkbox de la sidebar antes del wiring. El orden
+        # importa: primero el principal, luego la extensión (que
+        # depende del principal para tener efecto).
         self.chat_ctrl.set_auto_approve(self.config.auto_approve_tools)
         self.view.sidebar.set_auto_approve(self.config.auto_approve_tools)
+        self.chat_ctrl.set_auto_approve_shell(self.config.auto_approve_shell)
+        self.view.sidebar.set_auto_approve_shell(
+            self.config.auto_approve_shell
+        )
 
         self._wire()
         self._apply_initial_state()
@@ -245,6 +251,9 @@ class AppController(QObject):
 
         s.clear_chat_requested.connect(self._clear_chat)
         s.auto_approve_changed.connect(self._on_auto_approve_changed)
+        s.auto_approve_shell_changed.connect(
+            self._on_auto_approve_shell_changed
+        )
 
         # Emitir el estado MCP inicial AHORA que las señales ya están
         # conectadas. Antes, MCPController._emit_changed() en __init__
@@ -591,12 +600,30 @@ class AppController(QObject):
     @Slot(bool)
     def _on_auto_approve_changed(self, enabled: bool) -> None:
         self.config.auto_approve_tools = bool(enabled)
+        # Si se apaga el piloto, la cascada del sidebar apagará también
+        # la extensión y emitirá `auto_approve_shell_changed(False)`,
+        # que persistirá el cambio. No lo hacemos aquí para evitar
+        # doble save.
         self.config.save()
         self.chat_ctrl.set_auto_approve(enabled)
         if enabled:
+            msg = (
+                "Piloto automático ON · las tools se ejecutan sin diálogo"
+            )
+            if self.config.auto_approve_shell:
+                msg += " · shell incluido"
+            else:
+                msg += " (excepto shell)"
+            self.view.set_status(msg)
+
+    @Slot(bool)
+    def _on_auto_approve_shell_changed(self, enabled: bool) -> None:
+        self.config.auto_approve_shell = bool(enabled)
+        self.config.save()
+        self.chat_ctrl.set_auto_approve_shell(enabled)
+        if enabled:
             self.view.set_status(
-                "Piloto automático ON · las tools se ejecutan sin diálogo "
-                "(excepto shell)"
+                "⚠ Piloto automático: shell también auto-aprobado"
             )
         else:
             self.view.set_status("Piloto automático OFF")

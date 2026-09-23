@@ -119,8 +119,12 @@ class ChatController(QObject):
         self._last_options: dict[str, Any] | None = None
         self._last_system_prompt = ""
         # Modo piloto automático: si True, el worker salta el diálogo
-        # de confirmación para todas las tools excepto `ejecutar_comando`.
+        # de confirmación para las tools. El shell se rige por
+        # `_auto_approve_shell`.
         self._auto_approve = False
+        # Extensión opt-in: si True, `ejecutar_comando` también se
+        # auto-aprueba. Requiere `_auto_approve=True` para tener efecto.
+        self._auto_approve_shell = False
         # Cola de prompts para envío secuencial. Vacía = no hay cola.
         self._queue: list[str] = []
         self._queue_total: int = 0
@@ -262,12 +266,29 @@ class ChatController(QObject):
         """Activa o desactiva el piloto automático de confirmaciones.
 
         Cuando está activo, el worker no muestra el diálogo de
-        confirmación para las herramientas, excepto para
-        `ejecutar_comando` (shell), que siempre confirma.
+        confirmación para las herramientas. `ejecutar_comando` (shell)
+        se rige por `set_auto_approve_shell`: si está desactivado,
+        siempre confirma.
         """
         self._auto_approve = bool(enabled)
         if self._worker is not None:
             self._worker.auto_approve = self._auto_approve
+        # Cascada: si el piloto principal se apaga, la extensión de
+        # shell también. Así nunca queda un estado inconsistente.
+        if not enabled:
+            self.set_auto_approve_shell(False)
+
+    def set_auto_approve_shell(self, enabled: bool) -> None:
+        """Activa o desactiva la auto-aprobación de `ejecutar_comando`.
+
+        Solo tiene efecto si `set_auto_approve(True)` está activo.
+        El worker aplica la doble puerta por su cuenta, pero aquí
+        normalizamos el estado para que la UI y el worker coincidan.
+        """
+        enabled = bool(enabled) and self._auto_approve
+        self._auto_approve_shell = enabled
+        if self._worker is not None:
+            self._worker.auto_approve_shell = enabled
 
     def set_current_model(self, model: str) -> None:
         # Si el modelo cambia, el ContextWindow cacheado apunta al
@@ -353,6 +374,7 @@ class ChatController(QObject):
             options=options,
             system_prompt=system_prompt,
             auto_approve=self._auto_approve,
+            auto_approve_shell=self._auto_approve_shell,
             context_window=self._get_context_window(),
         )
         self._worker.moveToThread(self._thread)

@@ -26,6 +26,7 @@ class Sidebar(QWidget):
     agent_create_requested = Signal()
     clear_chat_requested = Signal()
     auto_approve_changed = Signal(bool)
+    auto_approve_shell_changed = Signal(bool)
 
     def __init__(self) -> None:
         super().__init__()
@@ -115,18 +116,36 @@ class Sidebar(QWidget):
         choose.clicked.connect(lambda: self.workspace_change_requested.emit())
         layout.addWidget(choose)
 
-        # Piloto automático. Desactivado por defecto. Activa un modo en
-        # el que las tools se auto-aprueban excepto `ejecutar_comando`.
+        # Piloto automático. Desactivado por defecto. Auto-aprueba
+        # archivos y MCP. El shell se controla con la casilla inferior.
         self.auto_approve_check = QCheckBox("Piloto automático")
         self.auto_approve_check.setObjectName("AutoApproveCheck")
         self.auto_approve_check.setToolTip(
             "Auto-aprueba las operaciones de archivos y MCP sin diálogo. "
-            "El shell SIEMPRE pide confirmación aunque esté activado."
+            "Para el shell, usa la casilla inferior."
         )
         self.auto_approve_check.toggled.connect(
-            self.auto_approve_changed.emit
+            self._on_auto_approve_toggled
         )
         layout.addWidget(self.auto_approve_check)
+
+        # Extensión opt-in: auto-aprobar también `ejecutar_comando`.
+        # Deshabilitada mientras el piloto principal esté apagado.
+        self.auto_approve_shell_check = QCheckBox(
+            "Incluir ejecución de scripts"
+        )
+        self.auto_approve_shell_check.setObjectName("AutoApproveShellCheck")
+        self.auto_approve_shell_check.setStyleSheet("margin-left: 22px;")
+        self.auto_approve_shell_check.setToolTip(
+            "⚠ Auto-aprueba también `ejecutar_comando`. El modelo podrá "
+            "lanzar comandos sin diálogo de confirmación. Úsalo solo con "
+            "modelos de confianza y en workspaces que controles."
+        )
+        self.auto_approve_shell_check.setEnabled(False)
+        self.auto_approve_shell_check.toggled.connect(
+            self.auto_approve_shell_changed.emit
+        )
+        layout.addWidget(self.auto_approve_shell_check)
 
         # -- SESIÓN --
         layout.addSpacing(14)
@@ -249,9 +268,51 @@ class Sidebar(QWidget):
         blocked = self.auto_approve_check.blockSignals(True)
         self.auto_approve_check.setChecked(bool(enabled))
         self.auto_approve_check.blockSignals(blocked)
+        # Cascada de init: si el piloto queda apagado, la extensión
+        # también (aunque el checkbox de shell no emita la señal).
+        if not enabled and self.auto_approve_shell_check.isChecked():
+            blocked = self.auto_approve_shell_check.blockSignals(True)
+            self.auto_approve_shell_check.setChecked(False)
+            self.auto_approve_shell_check.blockSignals(blocked)
+        self.auto_approve_shell_check.setEnabled(bool(enabled))
 
     def is_auto_approve(self) -> bool:
         return self.auto_approve_check.isChecked()
+
+    def set_auto_approve_shell(self, enabled: bool) -> None:
+        """Inicializa el checkbox sin disparar la señal.
+
+        Si el piloto principal está apagado, se ignora el intento de
+        activar la extensión: no puede haber shell auto-aprobado sin
+        el piloto.
+        """
+        if enabled and not self.auto_approve_check.isChecked():
+            enabled = False
+        blocked = self.auto_approve_shell_check.blockSignals(True)
+        self.auto_approve_shell_check.setChecked(bool(enabled))
+        self.auto_approve_shell_check.blockSignals(blocked)
+        self.auto_approve_shell_check.setEnabled(
+            self.auto_approve_check.isChecked()
+        )
+
+    def is_auto_approve_shell(self) -> bool:
+        return self.auto_approve_shell_check.isChecked()
+
+    def _on_auto_approve_toggled(self, enabled: bool) -> None:
+        """Encadena la extensión de shell al piloto principal.
+
+        Si el piloto se apaga, la extensión también y se deshabilita
+        el checkbox. Si se enciende, se habilita pero queda desmarcada
+        (opt-in separado). Emite `auto_approve_shell_changed(False)`
+        cuando la cascada apaga la extensión.
+        """
+        self.auto_approve_shell_check.setEnabled(enabled)
+        if not enabled and self.auto_approve_shell_check.isChecked():
+            self.auto_approve_shell_check.blockSignals(True)
+            self.auto_approve_shell_check.setChecked(False)
+            self.auto_approve_shell_check.blockSignals(False)
+            self.auto_approve_shell_changed.emit(False)
+        self.auto_approve_changed.emit(enabled)
 
     # -- helpers -------------------------------------------------------------
     def _apply_busy(self) -> None:

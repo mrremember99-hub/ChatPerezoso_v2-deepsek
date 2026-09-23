@@ -208,6 +208,7 @@ class ChatWorker(QObject):
         options: dict | None = None,
         system_prompt: str = "",
         auto_approve: bool = False,
+        auto_approve_shell: bool = False,
         context_window: Any = None,
     ):
         super().__init__()
@@ -218,6 +219,7 @@ class ChatWorker(QObject):
         self.options = options
         self.system_prompt = system_prompt
         self.auto_approve = auto_approve
+        self.auto_approve_shell = auto_approve_shell
         # ContextWindow opcional. Si viene, OllamaClient.chat() ajusta
         # el historial al presupuesto en cada ronda del bucle de tools.
         self.context_window = context_window
@@ -296,14 +298,28 @@ class ChatWorker(QObject):
 
     # -- ejecución de herramientas -----------------------------------------
 
+    def _is_auto_approved(self, name: str) -> bool:
+        """Decide si una tool se ejecuta sin diálogo de confirmación.
+
+        Reglas:
+          - `ejecutar_comando` (shell) solo se auto-aprueba si AMBOS
+            `auto_approve` y `auto_approve_shell` están activos.
+            Doble puerta por si un llamante futuro construye el worker
+            sin la cascada correcta.
+          - El resto se auto-aprueba con `auto_approve`.
+        """
+        if name == "ejecutar_comando":
+            return self.auto_approve and self.auto_approve_shell
+        return self.auto_approve
+
     def _call_tool(self, name: str, arguments: dict) -> str:
         self.tool.emit(name)
 
         requires = self.tools.requires_confirmation(name)
-        # Piloto automático: salta el diálogo para todas las tools
-        # EXCEPTO `ejecutar_comando`. El shell siempre confirma: es la
-        # única garantía frente a comandos destructivos.
-        auto = self.auto_approve and name != "ejecutar_comando"
+        # Piloto automático: salta el diálogo para todas las tools.
+        # `ejecutar_comando` solo se auto-aprueba si el usuario activó
+        # explícitamente la extensión (`auto_approve_shell`).
+        auto = self._is_auto_approved(name)
 
         if requires and not auto:
             # _request_confirmation devuelve también el tiempo REAL de
