@@ -21,10 +21,24 @@ import asyncio
 import concurrent.futures
 import logging
 import threading
+import time
 from typing import Any, Callable, Coroutine
 
 
 logger = logging.getLogger(__name__)
+
+
+def _remaining(deadline: float | None, *, default: float) -> float:
+    """Segundos restantes hasta `deadline`.
+
+    Si `deadline` es None, devuelve `default`. Si ya paso, devuelve 0.
+    Sirve para repartir un presupuesto total de shutdown entre fases
+    sin que cada una espere su timeout individual completo.
+    """
+    if deadline is None:
+        return default
+    return max(0.0, deadline - time.monotonic())
+
 
 
 # Intervalo de comprobación del hilo watcher. Solo importa cuando el
@@ -168,23 +182,60 @@ class AsyncRunner:
                 )
             self._loop.close()
 
-    def close(self) -> None:
+    def close(self, timeout: float | None = None) -> bool:
+        """Cierra el runner.
+
+        `timeout` es el presupuesto total para el cierre completo
+        (callback + join). Se reparte entre las dos fases segun el
+        tiempo restante. Si `timeout` es None, se usan los timeouts
+        individuales (3s + 3s) como hasta ahora, para mantener
+        compatibilidad con las llamadas existentes.
+
+        Devuelve True si el cierre se completo limpiamente. False si
+        alguna fase expiro su porcion del presupuesto: en ese caso el
+        loop y el hilo se dejan como estan y el proceso terminara al
+        salir.
+        """
         with self._lock:
             if self._closed:
-                return
+                return True
             self._closed = True
             loop = self._loop
             thread = self._thread
             close_cb = self._close_callback
 
-        # 1. Ejecutar el callback de cierre dentro del loop (antes de
-        #    pararlo). Es donde se cierra el AsyncClient persistente.
+        deadline = (
+            time.monotonic() + timeout
+            if timeout is not None
+            else None
+        )
+        ok = True
+
+        # 1. Callback de cierre dentro del loop (antes de pararlo).
+        #    Es donde se cierra el AsyncClient persistente.
         if loop is not None and close_cb is not None and not loop.is_closed():
-            try:
-                future = asyncio.run_coroutine_threadsafe(close_cb(), loop)
-                future.result(timeout=3)
-            except Exception as exc:
-                logger.warning("Error cerrando recursos del runner: %s", exc)
+            cb_timeout = _remaining(deadline, default=3.0)
+            if cb_timeout <= 0:
+                logger.warning(
+                    "AsyncRunner.close: sin tiempo para close_callback"
+                )
+                ok = False
+            else:
+                try:
+                    future = asyncio.run_coroutine_threadsafe(
+                        close_cb(), loop
+                    )
+                    future.result(timeout=cb_timeout)
+                except TimeoutError:
+                    logger.warning(
+                        "AsyncRunner.close: close_callback excedio %.2fs",
+                        cb_timeout,
+                    )
+                    ok = False
+                except Exception as exc:
+                    logger.warning(
+                        "Error cerrando recursos del runner: %s", exc
+                    )
 
         # 2. Parar el loop y esperar al hilo.
         if loop is not None:
@@ -197,9 +248,21 @@ class AsyncRunner:
             and thread.is_alive()
             and thread is not threading.current_thread()
         ):
-            thread.join(timeout=3)
+            join_timeout = _remaining(deadline, default=3.0)
+            if join_timeout <= 0:
+                logger.warning("AsyncRunner.close: sin tiempo para join")
+                ok = False
+            else:
+                thread.join(timeout=join_timeout)
+                if thread.is_alive():
+                    logger.warning(
+                        "AsyncRunner.close: hilo sigue vivo tras %.2fs",
+                        join_timeout,
+                    )
+                    ok = False
         self._loop = None
         self._thread = None
+        return ok
 
     # -- ejecución -----------------------------------------------------------
 
