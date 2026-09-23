@@ -49,3 +49,10 @@ tmp/
 test_output.png
 workspace/*
 !workspace/.gitkeep
+
+# Scripts de parches puntuales (one-shot, no reutilizables)
+scripts/*_patch.py
+scripts/*_patch2.py
+
+# Placeholder del workspace
+!workspace/.gitkeep

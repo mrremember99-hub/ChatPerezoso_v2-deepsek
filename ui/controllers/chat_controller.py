@@ -78,6 +78,7 @@ class ChatController(QObject):
     queue_list_set = Signal(list)
     # Estado de un elemento: (índice 1-based, estado).
     queue_item_status_changed = Signal(int, str)
+    queue_paused = Signal()
     # Métricas reales de la última ronda del worker.
     metrics_updated = Signal(object)
 
@@ -131,6 +132,15 @@ class ChatController(QObject):
         self._queue: list[str] = []
         self._queue_total: int = 0
         self._queue_active: bool = False
+        # Cuando un prompt falla, la cola se pausa en vez de
+        # descartarse. El usuario decide si reintentar, saltar
+        # o cancelar desde la UI.
+        self._queue_paused: bool = False
+        # Prompt en curso (o que acaba de fallar). Guardado
+        # porque _advance_queue hace pop antes de enviar.
+        self._current_prompt: str = ""
+        # Reintentos del prompt actual. Solo informativo.
+        self._current_retry_count: int = 0
         self._current_actions: list[ToolResult] = []
         # Limite de contexto del modelo activo, en tokens. 0 = desconocido.
         self._context_limit: int = 0
@@ -254,6 +264,8 @@ class ChatController(QObject):
         current = self._queue_total - len(self._queue) + 1
         total = self._queue_total
         next_prompt = self._queue.pop(0)
+        self._current_prompt = next_prompt
+        self._current_retry_count = 0
         self.queue_progress.emit(current, total)
         # Marcar el prompt que arranca como "running".
         self.queue_item_status_changed.emit(current, "running")
@@ -263,6 +275,58 @@ class ChatController(QObject):
             self._last_options,
             self._last_system_prompt,
         )
+
+    def resume_queue_retry(self) -> bool:
+        """Reintenta el prompt que falló. Solo válido si pausada.
+
+        Reenvía el mismo prompt con el mismo contexto. No hay
+        límite de reintentos: el usuario decide cuándo parar.
+        """
+        if not self._queue_paused:
+            return False
+        self._queue_paused = False
+        self._current_retry_count += 1
+        current = self._queue_total - len(self._queue)
+        self.queue_item_status_changed.emit(current, "running")
+        self.status.emit(
+            f"Reintentando prompt {current} "
+            f"(intento {self._current_retry_count + 1})"
+        )
+        self.send(
+            self._current_prompt,
+            self._last_model,
+            self._last_options,
+            self._last_system_prompt,
+        )
+        return True
+
+    def resume_queue_skip(self) -> bool:
+        """Salta el prompt que falló y sigue con el siguiente."""
+        if not self._queue_paused:
+            return False
+        self._queue_paused = False
+        self._current_retry_count = 0
+        current = self._queue_total - len(self._queue)
+        self.queue_item_status_changed.emit(current, "skipped")
+        self._current_prompt = ""
+        self.status.emit(f"Prompt {current} saltado, continúa la cola")
+        self._advance_queue()
+        return True
+
+    def cancel_paused_queue(self) -> bool:
+        """Cancela la cola pausada y descarta lo pendiente."""
+        if not self._queue_paused:
+            return False
+        self._queue_paused = False
+        self._current_prompt = ""
+        self._current_retry_count = 0
+        current = self._queue_total - len(self._queue)
+        self.queue_item_status_changed.emit(current, "cancelled")
+        self._stop_queue_with_message("Cola cancelada por el usuario")
+        return True
+
+    def is_queue_paused(self) -> bool:
+        return self._queue_paused
 
     def set_auto_approve(self, enabled: bool) -> None:
         """Activa o desactiva el piloto automático de confirmaciones.
@@ -743,12 +807,42 @@ class ChatController(QObject):
                 self.queue_item_status_changed.emit(current_done, "done")
                 self._advance_queue()
             elif status == "Cancelado":
+                # Pausar también al cancelar: el usuario decide si
+                # reintentar, saltar o descartar la cola entera.
                 self.queue_item_status_changed.emit(current_done, "cancelled")
-                self._stop_queue_with_message("Cola cancelada")
+                self._queue_paused = True
+                self.queue_paused.emit()
+                total = self._queue_total
+                pending = len(self._queue)
+                if pending > 0:
+                    self.status.emit(
+                        f"Cola pausada en {current_done}/{total} · "
+                        f"{pending} pendiente(s)"
+                    )
+                else:
+                    self.status.emit(
+                        f"Cola pausada en {current_done}/{total} · "
+                        "último prompt cancelado"
+                    )
             else:
-                # status == "Error"
+                # status == "Error": pausar en vez de descartar.
+                # El usuario decide si reintentar el prompt, saltarlo
+                # o cancelar la cola desde el panel derecho.
                 self.queue_item_status_changed.emit(current_done, "error")
-                self._stop_queue_with_message("Cola detenida por error")
+                self._queue_paused = True
+                self.queue_paused.emit()
+                total = self._queue_total
+                pending = len(self._queue)
+                if pending > 0:
+                    self.status.emit(
+                        f"Cola pausada en {current_done}/{total} · "
+                        f"{pending} pendiente(s)"
+                    )
+                else:
+                    self.status.emit(
+                        f"Cola pausada en {current_done}/{total} · "
+                        "último prompt falló"
+                    )
 
     def _cleanup(self) -> None:
         if self._stream_timer.isActive():

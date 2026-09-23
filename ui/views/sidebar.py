@@ -136,7 +136,6 @@ class Sidebar(QWidget):
             "Incluir ejecución de scripts"
         )
         self.auto_approve_shell_check.setObjectName("AutoApproveShellCheck")
-        self.auto_approve_shell_check.setStyleSheet("margin-left: 22px;")
         self.auto_approve_shell_check.setToolTip(
             "⚠ Auto-aprueba también `ejecutar_comando`. El modelo podrá "
             "lanzar comandos sin diálogo de confirmación. Úsalo solo con "

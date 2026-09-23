@@ -22,6 +22,7 @@ from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication,
+    QHBoxLayout,
     QFileSystemModel,
     QLabel,
     QMenu,
@@ -109,6 +110,10 @@ class QueueRow(QLabel):
 
 
 class RightPanel(QWidget):
+
+    queue_retry_requested = Signal()
+    queue_skip_requested = Signal()
+    queue_cancel_requested = Signal()
     mcp_toggle_requested = Signal(str, bool)
 
     def __init__(self) -> None:
@@ -165,6 +170,39 @@ class RightPanel(QWidget):
         self.queue_list = QVBoxLayout()
         self.queue_list.setSpacing(2)
         layout.addLayout(self.queue_list)
+
+        # Barra de pausa: aparece cuando un prompt falla y la
+        # cola queda detenida esperando decisión del usuario.
+        self.queue_paused_bar = QWidget()
+        self.queue_paused_bar.setObjectName("QueuePausedBar")
+        paused_lay = QHBoxLayout(self.queue_paused_bar)
+        paused_lay.setContentsMargins(0, 6, 0, 0)
+        paused_lay.setSpacing(6)
+        _btn_style = "padding: 1px 4px; font-size: 9px; min-height: 0;"
+        self.queue_retry_btn = QPushButton("↻")
+        self.queue_retry_btn.setObjectName("QueuePausedBtn")
+        self.queue_retry_btn.setToolTip("Reintentar el prompt que falló")
+        self.queue_retry_btn.setStyleSheet(_btn_style)
+        self.queue_retry_btn.setFixedHeight(20)
+        self.queue_retry_btn.clicked.connect(self._on_retry_clicked)
+        paused_lay.addWidget(self.queue_retry_btn)
+        self.queue_skip_btn = QPushButton("→")
+        self.queue_skip_btn.setObjectName("QueuePausedBtn")
+        self.queue_skip_btn.setToolTip("Saltar al siguiente prompt")
+        self.queue_skip_btn.setStyleSheet(_btn_style)
+        self.queue_skip_btn.setFixedHeight(20)
+        self.queue_skip_btn.clicked.connect(self._on_skip_clicked)
+        paused_lay.addWidget(self.queue_skip_btn)
+        self.queue_cancel_btn = QPushButton("✕")
+        self.queue_cancel_btn.setObjectName("QueuePausedBtn")
+        self.queue_cancel_btn.setToolTip("Cancelar toda la cola")
+        self.queue_cancel_btn.setStyleSheet(_btn_style)
+        self.queue_cancel_btn.setFixedHeight(20)
+        self.queue_cancel_btn.clicked.connect(self._on_cancel_clicked)
+        paused_lay.addWidget(self.queue_cancel_btn)
+        paused_lay.addStretch(1)
+        self.queue_paused_bar.setVisible(False)
+        layout.addWidget(self.queue_paused_bar)
 
         # -- ARCHIVOS --
         layout.addSpacing(14)
@@ -337,11 +375,31 @@ class RightPanel(QWidget):
             clipboard.setText(str(path))
 
     # -- cola de prompts -----------------------------------------------------
+    def show_queue_paused(self) -> None:
+        self.queue_paused_bar.setVisible(True)
+
+    def hide_queue_paused(self) -> None:
+        self.queue_paused_bar.setVisible(False)
+
+    def _on_retry_clicked(self) -> None:
+        self.queue_paused_bar.setVisible(False)
+        self.queue_retry_requested.emit()
+
+    def _on_skip_clicked(self) -> None:
+        self.queue_paused_bar.setVisible(False)
+        self.queue_skip_requested.emit()
+
+    def _on_cancel_clicked(self) -> None:
+        self.queue_paused_bar.setVisible(False)
+        self.queue_cancel_requested.emit()
+
     def set_queue_list(self, prompts: list[str]) -> None:
         """Reemplaza las filas del todo list con la nueva cola.
 
         Si `prompts` está vacío, oculta la sección.
         """
+        # Nueva cola: ocultar barra de pausa si estaba visible.
+        self.queue_paused_bar.setVisible(False)
         # Limpiar filas anteriores.
         for row in self._queue_rows:
             self.queue_list.removeWidget(row)

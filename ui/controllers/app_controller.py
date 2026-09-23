@@ -251,6 +251,18 @@ class AppController(QObject):
             self.view.right_panel.update_queue_item
         )
         self.chat_ctrl.queue_finished.connect(self._on_queue_finished)
+        self.chat_ctrl.queue_paused.connect(
+            self.view.right_panel.show_queue_paused
+        )
+        self.view.right_panel.queue_retry_requested.connect(
+            self.chat_ctrl.resume_queue_retry
+        )
+        self.view.right_panel.queue_skip_requested.connect(
+            self.chat_ctrl.resume_queue_skip
+        )
+        self.view.right_panel.queue_cancel_requested.connect(
+            self.chat_ctrl.cancel_paused_queue
+        )
         self.chat_ctrl.metrics_updated.connect(self.diagnostics_ctrl.set_metrics)
 
         s.clear_chat_requested.connect(self._clear_chat)

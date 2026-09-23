@@ -227,15 +227,22 @@ QLabel#DiagnosticLine {
     background-color: transparent;
 }
 
-QCheckBox#AutoApproveCheck {
+QCheckBox#AutoApproveCheck,
+QCheckBox#AutoApproveShellCheck,
+QCheckBox#VerificadorCheck {
     color: #9BAFA7;
     font-size: 11px;
     padding: 4px 0;
     background-color: transparent;
 }
-QCheckBox#AutoApproveCheck:checked {
+QCheckBox#AutoApproveCheck:checked,
+QCheckBox#AutoApproveShellCheck:checked,
+QCheckBox#VerificadorCheck:checked {
     color: #E0BC7A;
     font-weight: 600;
+}
+QCheckBox#AutoApproveShellCheck {
+    margin-left: 22px;
 }
 
 QTreeView#WorkspaceTree {
