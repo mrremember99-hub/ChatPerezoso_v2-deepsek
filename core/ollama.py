@@ -480,6 +480,13 @@ class OllamaClient:
         strategy = self._choose_strategy(caps, tools, model)
 
         history = list(messages)
+
+        # Si vamos en modo XML, normalizar el historial: no enviamos
+        # `tools` en el payload, asi que los tool_calls nativos de
+        # rondas anteriores rompen el chat template del modelo (500).
+        if isinstance(strategy, XmlToolStrategy):
+            history = self._strip_native_tool_calls(history)
+
         definitions = self._extract_definitions(tools)
         authorization_text = self._last_user_text(history)
         gate = self._build_intent_gate(tools)
@@ -871,6 +878,52 @@ class OllamaClient:
             return False
         lower = text.lower()
         return any(v in lower for v in _VERIFICATION_VERBS)
+
+    @staticmethod
+    def _strip_native_tool_calls(
+        history: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Adapta el historial al modo XML.
+
+        Cuando pasamos de NativeToolStrategy a XmlToolStrategy
+        (porque el modelo fallo repetidamente en tool calling), el
+        historial puede tener mensajes con estructura nativa:
+
+          · assistant con `tool_calls` declarados.
+          · role="tool" con `tool_name`.
+
+        En modo XML esos mensajes no son validos: no enviamos `tools`
+        en el payload, y el chat template del modelo revienta (500)
+        al intentar renderizarlos. Aqui los normalizamos:
+
+          · assistant con tool_calls → assistant sin tool_calls
+            (conservamos el content visible).
+          · role="tool" → role="user" con prefijo [TOOL_RESULT:name]
+            para que _last_user_text los ignore (confused deputy).
+
+        Devuelve una lista nueva; no muta la original.
+        """
+        cleaned: list[dict[str, Any]] = []
+        for m in history:
+            role = m.get("role")
+            if role == "assistant" and m.get("tool_calls"):
+                new_m = {
+                    k: v for k, v in m.items()
+                    if k != "tool_calls"
+                }
+                cleaned.append(new_m)
+            elif role == "tool":
+                name = str(
+                    m.get("tool_name") or m.get("name") or "tool"
+                )
+                content = str(m.get("content") or "")
+                cleaned.append({
+                    "role": "user",
+                    "content": f"[TOOL_RESULT:{name}]\n{content}",
+                })
+            else:
+                cleaned.append(m)
+        return cleaned
 
     @staticmethod
     def _last_user_text(history: list[dict[str, Any]]) -> str:

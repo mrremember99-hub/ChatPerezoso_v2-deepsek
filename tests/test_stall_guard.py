@@ -224,3 +224,60 @@ def test_reset_forced_xml_all():
     client._force_xml_models.add("m2")
     client.reset_forced_xml()
     assert not client._force_xml_models
+    
+
+# ── _strip_native_tool_calls (fix del 500 en modo XML) ─────────────
+
+def test_strip_native_tool_calls_removes_tool_calls_field():
+    history = [
+        {"role": "user", "content": "lista"},
+        {
+            "role": "assistant",
+            "content": "Voy a listar.",
+            "tool_calls": [
+                {"function": {"name": "listar_carpeta", "arguments": {}}}
+            ],
+        },
+        {"role": "tool", "content": "a.txt\nb.txt",
+         "tool_name": "listar_carpeta"},
+        {"role": "assistant", "content": "Aquí están."},
+    ]
+    cleaned = OllamaClient._strip_native_tool_calls(history)
+
+    # El assistant ya no tiene tool_calls.
+    assistant_with_tools = [
+        m for m in cleaned
+        if m.get("role") == "assistant" and m.get("tool_calls")
+    ]
+    assert assistant_with_tools == []
+
+    # El assistant con content conserva el content.
+    assert cleaned[1]["content"] == "Voy a listar."
+
+    # El role="tool" se convirtió en role="user" con prefijo.
+    tool_msgs = [
+        m for m in cleaned
+        if m.get("role") == "user"
+        and str(m.get("content", "")).startswith("[TOOL_RESULT:")
+    ]
+    assert len(tool_msgs) == 1
+    assert "listar_carpeta" in tool_msgs[0]["content"]
+
+
+def test_strip_native_tool_calls_preserves_normal_messages():
+    history = [
+        {"role": "user", "content": "hola"},
+        {"role": "assistant", "content": "qué tal"},
+    ]
+    cleaned = OllamaClient._strip_native_tool_calls(history)
+    assert cleaned == history
+
+
+def test_strip_native_tool_calls_does_not_mutate_original():
+    original = [
+        {"role": "assistant", "content": "x",
+         "tool_calls": [{"function": {"name": "y", "arguments": {}}}]},
+    ]
+    OllamaClient._strip_native_tool_calls(original)
+    # El dict original sigue teniendo tool_calls.
+    assert "tool_calls" in original[0]
