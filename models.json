@@ -1,79 +1,34 @@
 {
   "overrides": {
-    "deepseek-r1:latest": {
-      "mode": "xml",
-      "recommendation": "Razonamiento puro · Sin tool calling nativo"
-    },
-    "devstral:latest": {
-      "mode": "auto",
-      "recommendation": "24B · Solo con num_ctx ≤ 4096 · Lento en M4 24GB"
-    },
-    "gemma4:12b": {
-      "mode": "auto",
-      "recommendation": "Google · Vision · 256K contexto"
-    },
-    "glm-4.7-flash:latest": {
-      "mode": "auto",
-      "recommendation": "19 GB · Requiere RAM libre"
-    },
     "gpt-oss:20b": {
       "mode": "auto",
-      "recommendation": "13 GB · ~24 tok/s · Agentes y tool calling"
-    },
-    "granite4.1:3b": {
-      "mode": "auto",
-      "recommendation": "Rapidísimo · Tareas simples"
-    },
-    "hdnh2006/salamandra-7b-instruct:latest": {
-      "mode": "xml",
-      "recommendation": "Español · Rechaza tools nativos"
-    },
-    "hermes3:latest": {
-      "mode": "auto",
-      "recommendation": "Alternativa a Llama 3.1 · Instrucciones"
-    },
-    "lfm2.5:latest": {
-      "mode": "auto",
-      "recommendation": "Arquitectura híbrida · Experimental"
-    },
-    "llama3.1:latest": {
-      "mode": "auto",
-      "recommendation": "24 tok/s · Generalista · Programación diaria"
-    },
-    "ministral-3:latest": {
-      "mode": "auto",
-      "recommendation": "Conversación rápida · Poca memoria"
+      "recommendation": "13 GB · Agente principal · Verificado 9/9 en OVERPAPER"
     },
     "muse-glimmer:latest": {
       "mode": "auto",
       "thinking": false,
-      "recommendation": "Vision + tools · 18 GB"
+      "recommendation": "18 GB MoE · 86.6 tool calling · Agente alternativo"
     },
-    "north-mini-code-1.0:latest": {
+    "mistral-small3.2:latest": {
+      "mode": "auto",
+      "recommendation": "15 GB · 32k contexto · Verificación y contexto largo"
+    },
+    "qwen3.6:27b": {
       "mode": "auto",
       "thinking": false,
-      "recommendation": "Código · 18 GB, requiere RAM libre"
+      "recommendation": "17 GB · Coding one-shot · Requiere --jinja en Ollama"
+    },
+    "ministral-3:latest": {
+      "mode": "auto",
+      "recommendation": "6 GB · Rápido (4s warm) · Verificado 8.5/9"
     },
     "ornith-1.5:9b": {
       "mode": "auto",
-      "recommendation": "Alternativa mediana · 262K contexto"
+      "recommendation": "6.6 GB · 262K contexto · Agentic M4"
     },
-    "qwen3-coder:30b": {
+    "lfm2.5:latest": {
       "mode": "auto",
-      "recommendation": "18 GB MoE · ~30 tok/s · Código rápido"
-    },
-    "qwen3:14b": {
-      "mode": "auto",
-      "thinking": false,
-      "recommendation": "Razonamiento · desactivar thinking para TTFT"
-    },
-    "rnj-1:latest": {
-      "mode": "auto",
-      "recommendation": "Código + STEM · Tuning japonés"
-    },
-    "translategemma:12b": {
-      "mode": "auto",
-      "recommendation": "~8 GB · Traducción especializada · 55 idiomas"
+      "recommendation": "5.2 GB MoE · 1.5B activos · Chat rápido"
     }
   }
 }
