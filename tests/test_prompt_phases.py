@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from core.prompt_phases import (
-    DetectedPhases,
     build_phase_prompt,
     detect_phases,
 )

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.composite_tools import CompositeToolProvider, FilteredToolProvider
+from core.composite_tools import FilteredToolProvider
 from core.intent import IntentRule
 
 

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import threading
-from pathlib import Path
 
 import pytest
 
@@ -134,7 +133,6 @@ def test_mcp_deactivate_makes_rules_inert(tmp_path):
     con las que compartía nombres. Ahora las reglas simplemente
     desaparecen del gate porque el tool ya no está en definitions().
     """
-    from core.intent import ToolIntentGate
     from core.tools import ToolRegistry
     from core.workspace import Workspace
     from plugins.mcp import MCPToolBridge

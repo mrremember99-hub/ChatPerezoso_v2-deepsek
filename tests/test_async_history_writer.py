@@ -11,8 +11,6 @@ Ahora se encola en un ThreadPoolExecutor(max_workers=1):
 """
 from __future__ import annotations
 
-import json
-import threading
 import time
 
 from core.history import AsyncHistoryWriter, HistoryStore, _MAX_MESSAGES

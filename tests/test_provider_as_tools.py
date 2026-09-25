@@ -6,10 +6,8 @@ cuanto la petición no era una "workspace operation".
 """
 from __future__ import annotations
 
-import threading
 from typing import Any
 
-import pytest
 
 from core.intent import IntentRule
 from core.ollama import OllamaClient

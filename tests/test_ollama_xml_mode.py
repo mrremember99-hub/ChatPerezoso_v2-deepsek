@@ -1,13 +1,12 @@
 """Tests end-to-end del modo XML en OllamaClient.chat."""
 from __future__ import annotations
 
-import json
 
 import pytest
 
 from core import model_capabilities
 from core.intent import IntentRule
-from core.ollama import OllamaCancelled, OllamaClient, OllamaError
+from core.ollama import OllamaClient
 
 
 @pytest.fixture(autouse=True)
@@ -121,7 +120,7 @@ def json_module_dumps(obj):
 
 def test_chat_xml_mode_executes_tool_and_returns_text(monkeypatch):
     _patch_show(monkeypatch, capabilities=["completion"])
-    payloads = _patch_stream(monkeypatch, rounds=[
+    _patch_stream(monkeypatch, rounds=[
         # Round 1: el modelo emite un bloque XML
         [{"message": {"content": 'Voy a listar.\n<tool_call>{"name": "listar_carpeta", "arguments": {"path": "."}}</tool_call>'}, "done": False},
          {"message": {}, "done": True}],

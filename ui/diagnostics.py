@@ -5,7 +5,7 @@ lo renderiza. Mantenerlo separado facilita los tests.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 # Aproximación de tokens: 1 token ≈ 4 caracteres. Es el ratio estándar

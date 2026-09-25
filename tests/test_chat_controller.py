@@ -13,7 +13,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QObject
 
 from core.tool_result import ToolResult
-from ui.controllers.chat_controller import ChatController, MIN_TURNS_TO_KEEP
+from ui.controllers.chat_controller import ChatController
 
 
 # -- dobles de prueba --------------------------------------------------------

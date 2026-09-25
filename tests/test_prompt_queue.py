@@ -1,7 +1,6 @@
 """Tests de la cola de prompts (Enviar todo)."""
 from __future__ import annotations
 
-import pytest
 
 from ui.controllers.app_controller import split_prompts
 

@@ -30,7 +30,6 @@ from .tool_strategies import (
     XmlToolStrategy,
     authorize_and_execute,
 )
-from .xml_tools import build_tools_prompt, parse_tool_calls, strip_tool_call_blocks
 
 
 logger = logging.getLogger(__name__)
@@ -315,8 +314,6 @@ class OllamaClient:
         # Aliases locales. El cuerpo del bucle los usa tal cual.
         history = ctx.history
         strategy = ctx.strategy
-        gate = ctx.gate
-        authorization_text = ctx.authorization_text
         send_tools = ctx.send_tools
         buffer_only = ctx.buffer_only
         tool_names = ctx.tool_names
@@ -449,9 +446,6 @@ class OllamaClient:
                 # chat template del modelo entienda la cadena.
                 execution = self._execute_round_tools(ctx, result)
                 state.any_tool_call_emitted = True
-                round_signature = execution.round_signature
-                round_had_block = execution.had_block
-                round_had_execution = execution.had_execution
 
                 stop = self._evaluate_round(ctx, execution, state)
                 if stop is not None:

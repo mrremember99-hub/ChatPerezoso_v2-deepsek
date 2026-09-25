@@ -1,7 +1,7 @@
 """Tests del cálculo del presupuesto de contexto."""
 from __future__ import annotations
 
-from core.context_window import ContextBudget, ContextWindow
+from core.context_window import ContextWindow
 
 
 # -- estimación ---------------------------------------------------------------

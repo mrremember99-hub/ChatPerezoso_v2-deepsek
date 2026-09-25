@@ -4,7 +4,7 @@ import logging
 import threading
 from typing import Any
 
-from core.intent import IntentRule, ToolIntentGate
+from core.intent import IntentRule
 from core.tools import ToolRegistry
 
 from ._base import MCPError

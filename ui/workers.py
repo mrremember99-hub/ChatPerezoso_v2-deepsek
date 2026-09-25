@@ -9,7 +9,7 @@ from PySide6.QtCore import QObject, Signal
 
 from core.ollama import OllamaCancelled, OllamaClient, OllamaError
 from core.tool_result import ToolResult
-from plugins.mcp import MCPClient, MCPError
+from plugins.mcp import MCPError
 
 
 # Tiempo máximo que un worker espera una confirmación del usuario.

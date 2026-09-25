@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, QThread, QTimer, Signal
 from PySide6.QtWidgets import QWidget
 
 import logging
 
 from core.context_window import ContextWindow
 from core.history import AsyncHistoryWriter, HistoryStore
-from core.ollama import OllamaClient, is_textual_tool_failure
+from core.ollama import is_textual_tool_failure
 from core.models_config import is_verified_tool_model
 from core.tool_provider import ToolProvider
 from core.prompt_phases import (

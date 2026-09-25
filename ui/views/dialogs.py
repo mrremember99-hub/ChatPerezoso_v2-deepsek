@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
-    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -234,7 +233,6 @@ def _confirm_file_write(parent: QWidget | None, name: str, arguments: dict) -> b
     """
     path = str(arguments.get("path", ""))
     content = str(arguments.get("content", ""))
-    is_mcp = name.startswith("mcp__")
     if "write_file" in name or "create_file" in name or name == "crear_archivo":
         action = "escribir"
     else:

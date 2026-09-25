@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 
-import pytest
 
 from core.tools import ToolRegistry, _matches_type
 from core.workspace import Workspace, WorkspaceError

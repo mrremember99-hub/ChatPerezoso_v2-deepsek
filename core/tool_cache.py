@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any, Callable
+from typing import Any
 
 
 # TTL por defecto: 5 segundos. Suficiente para absorber ráfagas del
