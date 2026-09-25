@@ -301,5 +301,24 @@ Detectado con `mistral-small3.2`: llama a `ejecutar_comando` sin `command` (fall
 - **Bundles de seguridad**: `../chatperezoso-2026-09-25.bundle` (y 23, 24)
 
 ---
+## Deuda técnica conocida
+
+Símbolos detectados como nunca usados por `vulture`, no eliminados por
+relación riesgo/beneficio. Son ~100 líneas cosméticas. Si algún día se
+borran, hacerlo a mano con `pytest -q` entre medias.
+
+- `core/async_runner.py` — `is_cancelled_error()`
+- `core/context_window.py` — `estimate_request()`
+- `core/ollama.py` — `force_close_active()`
+- `core/tool_strategies.py` — `ToolCallingStrategy` (Protocol huérfano)
+- `core/token_calibration.py` — `last_actual` (asignado, nunca leído)
+- `ui/controllers/chat_controller.py` — `MIN_TURNS_TO_KEEP`, `error_message` (Signal), `has_queue()`, `is_queue_paused()`
+- `ui/controllers/mcp_controller.py` — `pending_ids` (property)
+- `ui/rendering/plain_text.py` — `_code_fence_lang` (asignado, nunca leído)
+- `ui/views/chat_panel.py` — `set_streaming()`
+- `ui/views/right_panel.py` — `hide_queue_paused()`
+- `ui/views/sidebar.py` — `is_auto_approve()`, `is_verificador()`
+
+Herramienta usada: `vulture core/ ui/ plugins/ scripts/ tests/ --min-confidence 60`.
 
 *Última actualización: 2026-09-25. Documento unificado.*
