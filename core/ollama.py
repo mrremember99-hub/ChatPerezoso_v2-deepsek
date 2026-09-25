@@ -481,7 +481,18 @@ class OllamaClient:
                     state.false_completion_retries_used
                     < _MAX_FALSE_COMPLETION_RETRIES
                     and state.any_tool_call_emitted
-                    and state.any_tool_failed
+                    # H7 del out(1): dispara si (a) alguna tool
+                    # fallo (patron mistral: ejecutar_comando sin
+                    # command), o (b) hay una tool de escritura
+                    # disponible que no se uso (patron read-only
+                    # -> 'Hecho.'). Sin (b), el caso 'user pide
+                    # crear + modelo lee + dice Hecho' no se
+                    # detectaba. Sin (a), el test con tools=[leer]
+                    # y 'edita x.txt' disparaba en falso.
+                    and (
+                        state.any_tool_failed
+                        or bool(_WRITE_TOOLS & ctx.tool_names)
+                    )
                     and not state.any_write_executed
                     and ctx.tool_names
                     and self._user_requested_write(

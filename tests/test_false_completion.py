@@ -132,3 +132,75 @@ def test_tool_fallida_si_dispara_caso_mistral():
         and looks_completed
     )
     assert condition
+
+
+# -- Integracion: H7 read->"Hecho" con write disponible ------------------
+
+def test_read_ok_con_write_disponible_dispara_nudge(monkeypatch, tmp_path):
+    """H7 del out(1): user pide crear, modelo lee OK, dice 'Hecho.'.
+
+    Con una tool de escritura disponible y no usada, es falso
+    completado: el nudge debe dispararse y forzar una segunda ronda.
+    """
+    from core.intent import ToolIntentGate
+    from core.ollama import OllamaClient
+    from core.tools import ToolRegistry
+    from core.workspace import Workspace
+
+    rules = ToolRegistry(Workspace(tmp_path)).intent_rules()
+    ToolIntentGate.register_rules(rules)
+
+    client = OllamaClient()
+    calls: list[str] = []
+    responses = iter([
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "function": {
+                    "name": "leer_archivo",
+                    "arguments": {"path": "gui.py"},
+                }
+            }],
+        },
+        {"role": "assistant", "content": "Hecho."},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "function": {
+                    "name": "crear_archivo",
+                    "arguments": {
+                        "path": "gui.py",
+                        "content": "print(1)",
+                    },
+                }
+            }],
+        },
+        {"role": "assistant", "content": "Listo."},
+    ])
+
+    def fake_stream(model, messages, tools, on_text, cancel_event=None, options=None):
+        try:
+            return next(responses)
+        except StopIteration:
+            raise AssertionError(
+                "nudge no disparo: menos rondas de las esperadas"
+            )
+
+    monkeypatch.setattr(client, "_stream", fake_stream)
+
+    client.chat(
+        "test-model",
+        [{"role": "user", "content": "crea gui.py con un print"}],
+        [
+            {"type": "function", "function": {"name": "leer_archivo"}},
+            {"type": "function", "function": {"name": "crear_archivo"}},
+        ],
+        lambda _: None,
+        lambda name, args: calls.append(name) or "ok",
+    )
+
+    assert "crear_archivo" in calls, (
+        f"El nudge no forzo la escritura. Calls: {calls}"
+    )
