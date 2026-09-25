@@ -19,7 +19,7 @@ from .stream_events import (
     TextDelta,
     ToolCallsDelta,
 )
-from .intent import ToolIntentGate
+from .intent import ToolIntentGate, _cached_verb_forms
 from .context_window import ContextWindow, RequestTokenCache
 from . import token_calibration
 from .model_capabilities import get_capabilities
@@ -198,6 +198,23 @@ _FALSE_COMPLETION_MARKERS: tuple[str, ...] = (
     "todo listo", "fase completada", "fase verificada",
 )
 
+# Ampliacion de vocabulario (H1 auditoria 2026-09-26).
+# Los tests demuestran que estas variantes se pierden hoy.
+_WRITE_VERBS = _WRITE_VERBS + (
+    "corrige", "corregir", "arregla", "arreglar",
+    "soluciona", "solucionar", "refactoriza", "refactorizar",
+)
+_VERIFICATION_VERBS = _VERIFICATION_VERBS + (
+    "corre", "correr", "lanza", "lanzar",
+    "compila", "compilar", "testea", "testear",
+    "pasa", "pasar",
+)
+_FALSE_COMPLETION_MARKERS = _FALSE_COMPLETION_MARKERS + (
+    "resuelto", "solucionado", "arreglado", "corregido",
+    "ya esta", "funciona", "funcionando", "operativo",
+    "acabado",
+)
+
 _FALSE_COMPLETION_NUDGE = (
     "REGLA DE HIERRO: has declarado la tarea como completada "
     "o verificada, pero NO has escrito ningun archivo en este "
@@ -229,6 +246,62 @@ _TRUNCATED_STREAM_SUFFIX = (
     "de generacion (num_predict). Aumenta el limite o divide "
     "la tarea.]"
 )
+
+
+
+# ── Helpers de matching normalizado (H1) ──────────────────────
+
+_MENTIONS_PATTERN_CACHE: dict[tuple[str, ...], "re.Pattern[str]"] = {}
+
+
+def _mentions_pattern(verbs: tuple[str, ...]) -> "re.Pattern[str]":
+    """Regex (word-boundary) que matchea cualquier forma conjugada.
+
+    Cachea el patron por tupla: mismo conjunto de verbos =
+    mismo regex. Reutiliza _cached_verb_forms de intent.py.
+    """
+    pat = _MENTIONS_PATTERN_CACHE.get(verbs)
+    if pat is not None:
+        return pat
+    forms: set[str] = set()
+    for v in verbs:
+        norm = ToolIntentGate._normalise(v).lower()
+        conjugated = _cached_verb_forms(norm)
+        forms.update(conjugated)
+        # Encliticos: "escribe" + "lo" -> "escribelo".
+        # Solo aplica a formas que terminan en vocal (imperativos).
+        for form in conjugated:
+            if form and form[-1] in "aeiouáéíóú":
+                for suf in (
+                    "lo", "la", "los", "las",
+                    "le", "les", "me", "te", "se", "nos",
+                ):
+                    forms.add(form + suf)
+    alt = "|".join(
+        re.escape(f) for f in sorted(forms, key=len, reverse=True)
+    )
+    pat = re.compile(rf"(?<!\w)(?:{alt})(?!\w)")
+    _MENTIONS_PATTERN_CACHE[verbs] = pat
+    return pat
+
+
+def _mentions_any(text: str | None, verbs: tuple[str, ...]) -> bool:
+    """True si el texto menciona alguna forma de algun verbo."""
+    if not text:
+        return False
+    norm = ToolIntentGate._normalise(text).lower()
+    return bool(_mentions_pattern(verbs).search(norm))
+
+
+def _mentions_marker(text: str | None, markers: tuple[str, ...]) -> bool:
+    """True si el texto contiene algun marcador (normalizado)."""
+    if not text:
+        return False
+    norm = ToolIntentGate._normalise(text).lower()
+    for m in markers:
+        if ToolIntentGate._normalise(m).lower() in norm:
+            return True
+    return False
 
 
 def is_textual_tool_failure(text: str | None) -> bool:
@@ -1103,32 +1176,36 @@ class OllamaClient:
 
     @staticmethod
     def _user_requested_write(text: str | None) -> bool:
-        """True si el usuario pidio escribir/modificar algo."""
-        if not text:
-            return False
-        lower = text.lower()
-        return any(v in lower for v in _WRITE_VERBS)
+        """True si el usuario pidio escribir/modificar algo.
+
+        Normaliza acentos y expande conjugaciones via
+        intent._cached_verb_forms. Antes era substring match
+        plano y se perdian variantes ("corrige", "arreglar"...).
+        """
+        return _mentions_any(text, _WRITE_VERBS)
 
     @staticmethod
     def _looks_like_false_completion(text: str | None) -> bool:
-        """True si el texto final declara la tarea hecha."""
-        if not text:
-            return False
-        lower = text.lower()
-        return any(m in lower for m in _FALSE_COMPLETION_MARKERS)
+        """True si el texto final declara la tarea hecha.
+
+        Normaliza acentos para que "ya esta" y "ya está"
+        matcheen igual. Los marcadores se ampliaron con formas
+        como "resuelto", "solucionado", "funciona" (H1).
+        """
+        return _mentions_marker(text, _FALSE_COMPLETION_MARKERS)
 
     @staticmethod
-    def _user_requested_verification(text: str) -> bool:
+    def _user_requested_verification(text: str | None) -> bool:
         """True si el mensaje del usuario pide verificacion explicita.
 
         Se usa para activar el stall guard: si el modelo responde
         sin emitir tool calls y el usuario pidio ejecutar/verificar/
         citar, se inyecta un nudge y se repite la ronda.
+
+        Normaliza y conjuga: "corre los tests", "compilalo",
+        "pasa las pruebas" ahora matchean (H1).
         """
-        if not text:
-            return False
-        lower = text.lower()
-        return any(v in lower for v in _VERIFICATION_VERBS)
+        return _mentions_any(text, _VERIFICATION_VERBS)
 
     @staticmethod
     def _strip_native_tool_calls(

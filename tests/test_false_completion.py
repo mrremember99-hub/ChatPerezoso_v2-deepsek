@@ -204,3 +204,66 @@ def test_read_ok_con_write_disponible_dispara_nudge(monkeypatch, tmp_path):
     assert "crear_archivo" in calls, (
         f"El nudge no forzo la escritura. Calls: {calls}"
     )
+
+
+# -- H1 (auditoria 2026-09-26): variantes que antes se perdian ----------
+
+def test_mentions_write_variantes_conjugadas():
+    from core.ollama import OllamaClient
+    # Formas que antes NO matcheaban por lista plana.
+    assert OllamaClient._user_requested_write("corrige la función")
+    assert OllamaClient._user_requested_write("arregla el bug")
+    assert OllamaClient._user_requested_write("soluciona el error")
+    assert OllamaClient._user_requested_write("refactoriza esto")
+
+
+def test_mentions_write_con_acentos():
+    from core.ollama import OllamaClient
+    # La normalizacion debe quitar acentos.
+    assert OllamaClient._user_requested_write("escríbelo")
+
+
+def test_mentions_write_no_falso_positivo():
+    from core.ollama import OllamaClient
+    # Regresion: frases que NO deben autorizar.
+    assert not OllamaClient._user_requested_write("que es python?")
+    assert not OllamaClient._user_requested_write("explícame el código")
+    assert not OllamaClient._user_requested_write("")
+
+
+def test_resuelto_dispara_falso_completado():
+    from core.ollama import OllamaClient
+    # "Resuelto." no estaba en la lista original.
+    assert OllamaClient._looks_like_false_completion("Resuelto.")
+    assert OllamaClient._looks_like_false_completion("Ya está arreglado.")
+    assert OllamaClient._looks_like_false_completion("Solucionado.")
+
+
+def test_marcador_con_acento_o_sin_acento_matchea_igual():
+    from core.ollama import OllamaClient
+    assert OllamaClient._looks_like_false_completion("ya está")
+    assert OllamaClient._looks_like_false_completion("ya esta")
+
+
+def test_verification_corre_los_tests():
+    from core.ollama import OllamaClient
+    # Verbos que antes no estaban en _VERIFICATION_VERBS.
+    assert OllamaClient._user_requested_verification("corre los tests")
+    assert OllamaClient._user_requested_verification("compílalo")
+    assert OllamaClient._user_requested_verification("lanza las pruebas")
+    assert OllamaClient._user_requested_verification("pasa el linter")
+
+
+def test_verification_no_falso_positivo():
+    from core.ollama import OllamaClient
+    assert not OllamaClient._user_requested_verification("hola")
+    assert not OllamaClient._user_requested_verification("")
+    assert not OllamaClient._user_requested_verification(None)
+
+
+def test_word_boundary_no_matchea_subcadenas():
+    """El matching con word-boundary evita falsos positivos raros."""
+    from core.ollama import OllamaClient
+    # "ejecutiva" contiene "ejecut" pero no es "ejecuta".
+    # Nota: con conjugaciones, "ejecutar" genera "ejecuta", no "ejecutiva".
+    assert not OllamaClient._user_requested_verification("una decisión ejecutiva")
