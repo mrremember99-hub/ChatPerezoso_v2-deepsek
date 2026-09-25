@@ -245,3 +245,58 @@ def test_trace_respeta_cap_total_chars():
     t = ctrl._build_tool_trace()
     assert len(t) <= 3400
     assert t.count("-> ok") >= 5
+
+
+def test_send_turno2_hereda_error_py_compile_del_turno1():
+    """Caso real: turno 1 ejecuta py_compile y falla; turno 2 lo recibe.
+
+    El usuario dice "corrige el error" en el turno 2. Sin el trace
+    ampliado, el modelo solo sabria que "ejecutar_comando -> error"
+    pero no QUE error. Con el fix, ve el SyntaxError completo.
+    """
+    ctrl = _make_ctrl()
+
+    # Estado simulado: el turno 1 termino con este error.
+    ctrl._current_actions = [
+        ToolResult(
+            tool_name="ejecutar_comando",
+            is_error=True,
+            summary="SyntaxError: line 83, unexpected indent",
+            detail=(
+                "SyntaxError: line 83, unexpected indent\n"
+                "  File \"gui.py\", line 83\n"
+                "    def foo():\n"
+                "    ^\n"
+            ),
+            metadata={
+                "arguments": {
+                    "command": "python -m py_compile gui.py",
+                }
+            },
+        ),
+    ]
+
+    ctrl._state = MagicMock(is_active=False)
+    ctrl.renderer = MagicMock()
+    ctrl._append_message = MagicMock()
+    ctrl._last_model = ""
+    ctrl._last_options = {}
+    ctrl._last_system_prompt = "SYSTEM BASE"
+    ctrl.status = MagicMock()
+    ctrl._set_state = MagicMock()
+    ctrl._spawn_worker = MagicMock()
+
+    ctrl.send("corrige el error", "gpt-oss:20b", None, "SYSTEM BASE")
+
+    assert ctrl._spawn_worker.called
+    prompt = ctrl._spawn_worker.call_args.args[2]
+
+    # El system prompt efectivo del turno 2 lleva:
+    # - El comando exacto.
+    # - El SyntaxError y la linea.
+    # - La cabecera del bloque.
+    assert "python -m py_compile gui.py" in prompt
+    assert "SyntaxError: line 83" in prompt
+    assert "[ACCIONES DEL TURNO ANTERIOR]" in prompt
+    # Y la base sigue intacta.
+    assert "SYSTEM BASE" in prompt
