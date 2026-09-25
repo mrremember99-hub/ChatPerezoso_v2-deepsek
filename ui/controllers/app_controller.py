@@ -456,6 +456,21 @@ class AppController(QObject):
         # Propagar el limite de contexto al ChatController para que la
         # compactacion del historial se adapte al modelo activo.
         self.chat_ctrl.set_context_limit(caps.context_length)
+        # H8: si /api/show no expone context_length (probed=True
+        # pero context_length=0), ChatController cae a 4096 sin
+        # avisar. Se lo decimos al usuario para que sepa que el
+        # historial se poda muy por debajo de la ventana real.
+        if getattr(caps, "probed", False) and caps.context_length == 0:
+            self.view.set_status(
+                f"Ventana de contexto desconocida para {model} — "
+                "usando 4096 por seguridad"
+            )
+            logger.warning(
+                "Modelo %s: context_length no expuesto por "
+                "/api/show. Fallback a 4096 en la compactacion.",
+                model,
+            )
+            return
         # Si el modo viene de un override manual, lo indicamos en el
         # status para que el usuario sepa que su config está activa.
         if getattr(caps, "source", "") == "override":
