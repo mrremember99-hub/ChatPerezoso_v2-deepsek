@@ -104,6 +104,8 @@ class _RoundExecution:
     round_signature: str | None
     had_block: bool
     had_execution: bool
+    had_write: bool = False
+    had_failure: bool = False
 
 
 @dataclass
@@ -124,6 +126,10 @@ class _LoopState:
     # el modelo emitio alguna tool call en este chat().
     stall_retries_used: int = 0
     any_tool_call_emitted: bool = False
+    # Falso completado: peticion de escritura sin escribir_archivo.
+    false_completion_retries_used: int = 0
+    any_write_executed: bool = False
+    any_tool_failed: bool = False
 
 
 
@@ -160,6 +166,48 @@ _STALL_NUDGE_MESSAGE = (
 # Maximo de reintentos tras detectar un stall. Con 1 basta: si el
 # modelo ignora el nudge una vez, no lo va a obedecer a la segunda.
 _MAX_STALL_RETRIES = 1
+
+
+# Tools que consideramos "escritura real". Si una de estas
+# devuelve exito en el turno, el modelo ha hecho su trabajo.
+_WRITE_TOOLS: frozenset[str] = frozenset({
+    "escribir_archivo",
+    "crear_archivo",
+    "crear_carpeta",
+})
+
+# Verbos que indican que el usuario pidio escribir o modificar.
+_WRITE_VERBS: tuple[str, ...] = (
+    "crea", "crear", "escribe", "escribir",
+    "modifica", "modificar", "anade", "anadir",
+    "agrega", "agregar", "implementa", "implementar",
+    "genera", "generar", "refactoriza", "refactorizar",
+    "actualiza", "actualizar", "edita", "editar",
+    "write", "create", "edit", "update", "add",
+)
+
+# Marcadores en el texto final que sugieren que el modelo cree
+# haber terminado. Si aparece uno sin haber escrito, es falso
+# completado.
+_FALSE_COMPLETION_MARKERS: tuple[str, ...] = (
+    "verificada", "completado", "completada", "terminado",
+    "terminada", "listo", "lista para usar", "hecho",
+    "done", "completed", "finished", "ready",
+    "todo listo", "fase completada", "fase verificada",
+)
+
+_FALSE_COMPLETION_NUDGE = (
+    "REGLA DE HIERRO: has declarado la tarea como completada "
+    "o verificada, pero NO has escrito ningun archivo en este "
+    "turno. Si el usuario pidio crear o modificar un archivo, "
+    "DEBES usar escribir_archivo (o crear_archivo) con el "
+    "contenido FINAL COMPLETO antes de cerrar la tarea. No "
+    "declares exito sin haber recibido el resultado de la "
+    "escritura."
+)
+
+# Maximo de nudges por falso completado. Uno basta.
+_MAX_FALSE_COMPLETION_RETRIES = 1
 
 
 def is_textual_tool_failure(text: str | None) -> bool:
@@ -383,6 +431,36 @@ class OllamaClient:
 
             # Respuesta final.
             if result.is_final:
+                # Falso completado: el usuario pidio escribir o
+                # modificar, el modelo emitio alguna tool call
+                # pero ninguna de escritura fue exitosa, y el
+                # texto final declara exito. Nudge especifico.
+                if (
+                    state.false_completion_retries_used
+                    < _MAX_FALSE_COMPLETION_RETRIES
+                    and state.any_tool_call_emitted
+                    and state.any_tool_failed
+                    and not state.any_write_executed
+                    and ctx.tool_names
+                    and self._user_requested_write(
+                        ctx.authorization_text
+                    )
+                    and self._looks_like_false_completion(
+                        result.final_text
+                    )
+                ):
+                    state.false_completion_retries_used += 1
+                    logger.info(
+                        "Falso completado (modelo %s): peticion "
+                        "de escritura sin escribir_archivo. "
+                        "Inyectando nudge y repitiendo ronda.",
+                        ctx.model,
+                    )
+                    ctx.history.append({
+                        "role": "user",
+                        "content": _FALSE_COMPLETION_NUDGE,
+                    })
+                    continue
                 # Stall guard: si el usuario pidio verificacion
                 # explicita y el modelo NO ha emitido ninguna tool
                 # call en todo el chat(), no aceptamos la respuesta
@@ -446,6 +524,10 @@ class OllamaClient:
                 # chat template del modelo entienda la cadena.
                 execution = self._execute_round_tools(ctx, result)
                 state.any_tool_call_emitted = True
+                if execution.had_write:
+                    state.any_write_executed = True
+                if execution.had_failure:
+                    state.any_tool_failed = True
 
                 stop = self._evaluate_round(ctx, execution, state)
                 if stop is not None:
@@ -636,6 +718,8 @@ class OllamaClient:
         ctx.history.append(assistant_msg)
         had_block = False
         had_execution = False
+        had_write = False
+        had_failure = False
         signature: str | None = None
         for name, args in result.tool_calls:
             text = authorize_and_execute(
@@ -646,6 +730,14 @@ class OllamaClient:
                 had_block = True
             else:
                 had_execution = True
+                if text.startswith("ERROR"):
+                    had_failure = True
+                if (
+                    name in _WRITE_TOOLS
+                    and not text.startswith("ERROR")
+                    and not text.startswith("OPERACIÓN CANCELADA")
+                ):
+                    had_write = True
                 try:
                     signature = json.dumps(
                         {"name": name, "args": args},
@@ -660,6 +752,8 @@ class OllamaClient:
             round_signature=signature,
             had_block=had_block,
             had_execution=had_execution,
+            had_write=had_write,
+            had_failure=had_failure,
         )
 
     @staticmethod
@@ -913,6 +1007,22 @@ class OllamaClient:
             "## LLAMADAS NATIVAS\n"
             "Usa exclusivamente las llamadas de herramienta nativas de Ollama."
         )
+
+    @staticmethod
+    def _user_requested_write(text: str | None) -> bool:
+        """True si el usuario pidio escribir/modificar algo."""
+        if not text:
+            return False
+        lower = text.lower()
+        return any(v in lower for v in _WRITE_VERBS)
+
+    @staticmethod
+    def _looks_like_false_completion(text: str | None) -> bool:
+        """True si el texto final declara la tarea hecha."""
+        if not text:
+            return False
+        lower = text.lower()
+        return any(m in lower for m in _FALSE_COMPLETION_MARKERS)
 
     @staticmethod
     def _user_requested_verification(text: str) -> bool:
