@@ -63,7 +63,7 @@ _SPECS: tuple[dict[str, Any], ...] = (
                 "description": "Contenido completo del archivo.",
             },
         },
-        "required": ["path"],
+        "required": ["path", "content"],
     },
     {
         "name": "crear_carpeta",
@@ -274,8 +274,11 @@ class ToolRegistry:
                 end_line=end if end is not None else None,
             )
         if name == "crear_archivo":
+            # content es obligatorio (el schema lo declara). Sin
+            # este acceso directo, un modelo que omitia content
+            # creaba archivos vacios silenciosamente. H7 del out(4).
             result = self.workspace.create_file(
-                arguments["path"], arguments.get("content", "")
+                arguments["path"], arguments["content"]
             )
             return self._with_verification(result, arguments["path"])
         if name == "crear_carpeta":

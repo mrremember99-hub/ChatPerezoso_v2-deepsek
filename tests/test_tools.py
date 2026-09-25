@@ -90,7 +90,7 @@ def test_registry_contract_is_complete(tmp_path):
 
     assert by_name["listar_carpeta"]["parameters"]["required"] == []
     assert by_name["leer_archivo"]["parameters"]["required"] == ["path"]
-    assert by_name["crear_archivo"]["parameters"]["required"] == ["path"]
+    assert by_name["crear_archivo"]["parameters"]["required"] == ["path", "content"]
     assert by_name["crear_carpeta"]["parameters"]["required"] == ["path"]
     assert by_name["escribir_archivo"]["parameters"]["required"] == ["path", "content"]
     assert by_name["borrar_archivo"]["parameters"]["required"] == ["path"]
@@ -183,3 +183,27 @@ def test_registry_recursive_listing(tmp_path):
     (tmp_path / "sub" / "x.txt").write_text("hola", encoding="utf-8")
     result = tools.call("listar_carpeta", {"recursive": True})
     assert "x.txt" in result
+
+
+def test_crear_archivo_sin_content_no_crea_archivo_vacio(tmp_path):
+    """H7 del out(4): content es obligatorio.
+
+    Antes el dispatch usaba `arguments.get("content", "")` y creaba
+    archivos vacios cuando el modelo omitia content.
+    """
+    from core.tools import ToolRegistry
+    from core.workspace import Workspace
+
+    tools = ToolRegistry(Workspace(tmp_path))
+    try:
+        tools.call(
+            "crear_archivo",
+            {"path": "sin_content.txt"},
+            allow_destructive=True,
+        )
+    except (KeyError, Exception):
+        pass  # esperado: KeyError -> capturada por ToolRegistry.call
+    # Pase lo que pase, no se crea archivo vacio.
+    assert not (tmp_path / "sin_content.txt").exists(), (
+        "crear_archivo sin content creo un archivo vacio"
+    )
