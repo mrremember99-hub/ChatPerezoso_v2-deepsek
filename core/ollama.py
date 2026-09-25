@@ -57,6 +57,20 @@ _BLOCKED_ROUNDS_MSG = (
 _MAX_REPEATED_SIGNATURES = 2
 _MAX_CONSECUTIVE_BLOCKED_ROUNDS = 3
 
+# Keywords que aparecen en el JSON de una tool call textual. Se usan
+# para decidir si el buffering activado por un `{` es realmente una
+# tool call o simplemente código/JSON en prosa.
+_TOOL_CALL_KEYWORDS: tuple[str, ...] = (
+    '"function"',
+    '"name"',
+    '"parameters"',
+    '"arguments"',
+    '"tool_call"',
+)
+# Safety net: si tras este número de caracteres buffereados no se ha
+# visto ninguna keyword ni un cierre de JSON, se cancela el buffering.
+_MAX_PEEK_CHARS = 200
+
 
 @dataclass
 class _ChatContext:
@@ -1169,6 +1183,10 @@ class OllamaClient:
         message: dict[str, Any] = {}
         metrics: dict[str, int] = {}
         buffering_textual = False
+        # `True` cuando tras inspeccionar el buffer hemos visto una
+        # keyword inequívoca de tool call. Una vez confirmado, no se
+        # cancela: el buffering se mantiene hasta el final.
+        buffering_confirmed = False
         # Fragmentos guardados desde que se activó el buffering. Al
         # final, si NO era tool-call, se emite SOLO este fragmento, no
         # el content completo (eso duplicaba el texto ya emitido).
@@ -1181,6 +1199,26 @@ class OllamaClient:
                 if on_text is not None:
                     if buffering_textual:
                         buffered_parts.append(event.text)
+                        if not buffering_confirmed:
+                            joined = "".join(buffered_parts)
+                            if any(
+                                kw in joined
+                                for kw in _TOOL_CALL_KEYWORDS
+                            ):
+                                # Confirma tool call: seguir buffereando.
+                                buffering_confirmed = True
+                            elif "}" in joined or "]" in joined:
+                                # JSON cerrado y sin keywords: es
+                                # prosa con código/JSON. Emitir.
+                                on_text(joined)
+                                buffering_textual = False
+                                buffered_parts.clear()
+                            elif len(joined) > _MAX_PEEK_CHARS:
+                                # Safety net: demasiado tiempo sin
+                                # decidir. Asumir prosa.
+                                on_text(joined)
+                                buffering_textual = False
+                                buffered_parts.clear()
                     else:
                         # Buscar un posible inicio de JSON en CUALQUIER
                         # posicion del delta, no solo al principio. Con
@@ -1195,11 +1233,13 @@ class OllamaClient:
                             on_text(event.text)
                         elif start == 0:
                             buffering_textual = True
+                            buffering_confirmed = False
                             buffered_parts.append(event.text)
                         else:
                             # Emitir lo previo, bufferear desde el `{`.
                             on_text(event.text[:start])
                             buffering_textual = True
+                            buffering_confirmed = False
                             buffered_parts.append(event.text[start:])
             elif isinstance(event, StreamFinished):
                 message = event.message
