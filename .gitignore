@@ -56,3 +56,4 @@ scripts/*_patch2.py
 # Placeholder del workspace
 !workspace/.gitkeep
 models.json
+benchmark_modelos_*.md

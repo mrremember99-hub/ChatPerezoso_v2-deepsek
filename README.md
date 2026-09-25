@@ -99,7 +99,7 @@ Si el usuario pega un prompt con `FASE 1`, `FASE 2`, ... `FASE N`, la app lo tro
 |---|---|
 | `gpt-oss:20b` | 9/9 ✅ (más rápido que sin orquestación) |
 | `ministral-3` | 8.5/9 ✅ |
-| `muse-glimmer` | 6/9 ⚠️ (falla en Fase 6, output grande) |
+| `muse-glimmer` (eliminado) | 6/9 ⚠️ (falla en Fase 6, output grande) |
 | `gemma4:12b` | 5/9 ⚠️ (timeout prefill) |
 | `qwen3-coder:30b`, `granite`, `rnj-1` | 0-3/9 ❌ |
 
@@ -155,19 +155,17 @@ cat >> README.md << 'BLOQUE3'
 
 ### Stack actual
 
-| Modelo | Tamaño | Rol | Tool calling |
+| Modelo | Tamaño | Rol | Benchmark |
 |---|---|---|---|
-| `gpt-oss:20b` | 13 GB | Principal, multi-fase | ✅ 9/9 |
-| `ministral-3:latest` | 6.0 GB | Secundario, rápido | ✅ 8.5/9 |
-| `muse-glimmer:latest` | 18 GB | Creativo | ⚠️ 6/9 |
-| `mistral-small3.2:latest` | 15 GB | Alternativo | ✅ |
-| `qwen3.6:27b` | 17 GB | Razonamiento | ✅ |
-| `ornith-1.5:9b` | 6.6 GB | Ligero | ✅ |
-| `lfm2.5:latest` | 5.2 GB | Muy ligero | ✅ |
+| `gpt-oss:20b` | 13 GB | Principal, multi-fase | 5/5 · 59.5s |
+| `ministral-3:latest` | 6.0 GB | Secundario, código ligero | 5/5 · 54.6s |
+| `mistral-small3.2:latest` | 15 GB | Contexto largo, verificación | 5/5 · 281.9s |
+| `ornith-1.5:9b` | 6.6 GB | Alternativa ligera | 5/5 · 58.2s |
+| `qwen3:1.7b` | 1.4 GB | Chat rápido, sin pensar | 5/5 · 18.7s |
 
 ### Novedades 2026 (búsqueda web)
 
-**Tool calling en Ollama** — modelos con soporte nativo fiable: `qwen3` (todas las tallas), `gpt-oss:20b`, `llama3.1:8b`, `mistral-small3.2`, `gemma4` (≥ 0.20.0), `qwen3.6` (≥ 0.32.10). Evitar `qwen3.5` (tool calling roto en marzo 2026, PR #14603).
+**Tool calling en Ollama** — modelos con soporte nativo fiable: `qwen3` (todas las tallas), `gpt-oss:20b`, `llama3.1:8b`, `mistral-small3.2`, `gemma4` (≥ 0.20.0). Evitar `qwen3.5` (tool calling roto en marzo 2026, PR #14603). Evitar `qwen3.6:27b` (falla con tools en esta version de Ollama).
 
 **Benchmark de modelos pequeños** (MikeVeerman/tool-calling-benchmark, 2026):
 - 🥇 `qwen3:1.7b` — 0.960 Agent Score.
