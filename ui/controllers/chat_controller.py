@@ -503,10 +503,22 @@ class ChatController(QObject):
         self.renderer.insert_user_message(text)
         self._append_message({"role": "user", "content": text})
         self.renderer.reset()
+        # Trace del turno anterior: leer ANTES de limpiar
+        # _current_actions. Los tool_results no van al historial
+        # persistente, asi que sin esto el modelo no sabe que
+        # tools se ejecutaron en el turno inmediatamente anterior.
+        trace = self._build_tool_trace()
+        effective_system_prompt = self._last_system_prompt or ""
+        if trace:
+            effective_system_prompt = (
+                effective_system_prompt + "\n\n---\n\n" + trace
+                if effective_system_prompt.strip()
+                else trace
+            )
         self._current_actions = []
         self._set_state(ChatState.STREAMING)
         self.status.emit("Generando…")
-        self._spawn_worker(model, self._last_options, self._last_system_prompt)
+        self._spawn_worker(model, self._last_options, effective_system_prompt)
 
     def regenerate(self, model: str) -> None:
         if self._state.is_active or not self.messages or not model:
@@ -868,6 +880,60 @@ class ChatController(QObject):
             + ", ".join(parts)
             + f" · tiempo total {total_ms} ms"
         )
+
+    # Limites del bloque de trace que se inyecta al system prompt
+    # del turno siguiente. ~15 lineas x ~30 tokens, por debajo
+    # del presupuesto de 300 tokens del diseno.
+    _TOOL_TRACE_MAX_ITEMS = 15
+    _TOOL_TRACE_MAX_LINE = 140
+
+    def _build_tool_trace(self) -> str:
+        """Resumen del ultimo turno para inyectar como bloque de sistema.
+
+        Devuelve "" si no hubo acciones. El bloque se concatena al
+        system prompt del siguiente turno para que el modelo sepa que
+        tools se ejecutaron (los tool_results no van al historial
+        persistente).
+        """
+        actions = self._current_actions
+        if not actions:
+            return ""
+        lines = ["[ACCIONES DEL TURNO ANTERIOR]"]
+        for a in actions[-self._TOOL_TRACE_MAX_ITEMS :]:
+            args = (a.metadata or {}).get("arguments") or {}
+            arg_hint = self._format_tool_arg_hint(args)
+            line = f"{a.tool_name}{arg_hint} -> {a.status}"
+            if len(line) > self._TOOL_TRACE_MAX_LINE:
+                line = line[: self._TOOL_TRACE_MAX_LINE - 1] + "..."
+            lines.append(line)
+        extra = len(actions) - self._TOOL_TRACE_MAX_ITEMS
+        if extra > 0:
+            lines.append(f"(+{extra} acciones anteriores omitidas)")
+        lines.append(
+            "Estas acciones YA se ejecutaron en el turno anterior. "
+            "No las repitas sin motivo."
+        )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_tool_arg_hint(arguments: dict) -> str:
+        """Argumento mas relevante entre parentesis, recortado."""
+        if not arguments:
+            return ""
+        for key in (
+            "path", "ruta", "file", "archivo", "filename",
+            "command", "cmd", "pattern", "patron", "query",
+        ):
+            if key in arguments:
+                val = str(arguments[key])
+                if len(val) > 60:
+                    val = val[:59] + "..."
+                return f"({val})"
+        k, v = next(iter(arguments.items()))
+        s = f"{k}={v}"
+        if len(s) > 60:
+            s = s[:59] + "..."
+        return f"({s})"
 
     def _on_cancelled(self) -> None:
         self._finish("Cancelado")

@@ -352,6 +352,12 @@ class ChatWorker(QObject):
             duration_ms = int((time.monotonic() - start) * 1000)
 
         tool_result = self._build_result(name, result, duration_ms)
+        if arguments:
+            # Guardar los argumentos en metadata para que el tool
+            # trace del siguiente turno pueda referenciar el path
+            # o comando concreto. Sin esto solo quedaría el
+            # nombre de la tool.
+            tool_result.metadata["arguments"] = dict(arguments)
         tool_result = self._maybe_verify(name, arguments, tool_result)
         self.tool_result.emit(tool_result)
         return tool_result.to_text()
