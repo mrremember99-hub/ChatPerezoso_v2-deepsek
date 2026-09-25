@@ -71,12 +71,28 @@ class SearchProvider:
     def intent_rules(self) -> dict[str, IntentRule]:
         return {
             "buscar_en_workspace": IntentRule(
-                verbs=("busca", "buscar", "encuentra", "encontrar", "dónde"),
+                # Verbos fuertes: "busca X" autoriza aunque X no sea
+                # una palabra de target_words (es una búsqueda real).
+                verbs=("busca", "buscar", "encuentra", "encontrar"),
+                # Verbos débiles: "¿dónde está X?" solo autoriza si X
+                # parece del proyecto (target_word o filename). Evita
+                # falsos positivos como "¿dónde está Asturias?".
+                weak_verbs=("dónde", "donde"),
                 target_words=(
                     "workspace", "proyecto", "archivo", "archivos",
                     "fichero", "ficheros", "código", "codigo",
+                    "función", "funcion", "funciones", "funcions",
+                    "clase", "clases", "método", "metodo",
+                    "métodos", "metodos", "variable", "variables",
+                    "definición", "definicion", "implementación",
+                    "implementacion",
                 ),
+                # Los verbos fuertes NO exigen target, así que la
+                # regla no lo exige globalmente. Los débiles lo exigen
+                # por su propia rama en el gate.
                 requires_target=False,
+                # Habilita "¿dónde está main.py?".
+                accepts_filename=True,
             ),
         }
 

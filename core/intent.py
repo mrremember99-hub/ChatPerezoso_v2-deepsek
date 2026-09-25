@@ -60,8 +60,15 @@ class IntentRule:
     Una regla vacía (``IntentRule()``) nunca autoriza la herramienta.
     """
 
-    # Verbos que activan la herramienta ("crea", "lee", "diff").
+    # Verbos que activan la herramienta siempre, sin necesidad de
+    # target ("crea", "lee", "diff").
     verbs: tuple[str, ...] = ()
+
+    # Verbos débiles: solo activan la herramienta si además aparece
+    # un target_word o un filename válido. Sirven para distinguir
+    # "¿dónde está X del proyecto?" (autoriza) de "¿dónde está la
+    # capital de Asturias?" (no autoriza, es pregunta general).
+    weak_verbs: tuple[str, ...] = ()
 
     # Palabras-objetivo del dominio de la herramienta ("archivo", "repo").
     target_words: tuple[str, ...] = ()
@@ -118,13 +125,28 @@ class ToolIntentGate:
             else:
                 return False
 
-        if self._is_negated(rule.verbs, text):
+        all_verbs = rule.verbs + rule.weak_verbs
+        if self._is_negated(all_verbs, text):
             return False
 
         if rule.mcp_explicit_name_required:
             return self._mcp_explicit_request(name, text)
 
         normalised = self._normalise(text)
+
+        # weak_verbs: autorizan solo si hay target. Se evalúan antes
+        # del chequeo de requires_target.
+        if rule.weak_verbs and self._mentions_any_word(
+            normalised, rule.weak_verbs
+        ):
+            if self._mentions_target(
+                rule.target_words, text, normalised,
+                rule.accepts_filename,
+            ):
+                return True
+            # Verbo débil sin target: no autoriza por esta vía. Pero
+            # podría autorizar por verbo fuerte. Caer al chequeo
+            # final.
 
         if rule.requires_target and not self._mentions_target(
             rule.target_words, text, normalised, rule.accepts_filename
@@ -261,6 +283,20 @@ class ToolIntentGate:
         for rule in self.rules.values():
             if rule.mcp_explicit_name_required:
                 continue
+            # weak_verbs: autorizan SOLO si hay target. Se evalúan
+            # antes del chequeo de requires_target porque tienen
+            # semántica propia: "verbo débil + target" → sí;
+            # "verbo débil sin target" → no (pero sigue probando
+            # los verbs fuertes).
+            if rule.weak_verbs:
+                has_target = self._mentions_target(
+                    rule.target_words, text, normalised,
+                    rule.accepts_filename,
+                )
+                if has_target and self._mentions_any_word(
+                    normalised, rule.weak_verbs
+                ):
+                    return True
             if rule.requires_target and not self._mentions_target(
                 rule.target_words, text, normalised, rule.accepts_filename
             ):
