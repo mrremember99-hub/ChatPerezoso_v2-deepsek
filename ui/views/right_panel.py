@@ -403,6 +403,11 @@ class RightPanel(QWidget):
         # Limpiar filas anteriores.
         for row in self._queue_rows:
             self.queue_list.removeWidget(row)
+            # Desvincular del padre INMEDIATAMENTE. Sin esto el
+            # widget sigue visible hasta que el event loop procese
+            # deleteLater(), y al reemplazar la cola se ven las
+            # filas viejas superpuestas con las nuevas.
+            row.setParent(None)
             row.deleteLater()
         self._queue_rows.clear()
 
