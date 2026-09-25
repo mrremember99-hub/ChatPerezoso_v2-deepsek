@@ -10,6 +10,7 @@ import threading
 from typing import Any
 
 from core.workspace import Workspace, WorkspaceError
+from core.intent import IntentRule
 
 from .client import verify_all
 
@@ -62,8 +63,30 @@ class VerificadorProvider:
             },
         }
 
-    def intent_rules(self):
-        return {}
+    def intent_rules(self) -> dict[str, IntentRule]:
+        """Regla para verificar_codigo.
+
+        Verbos de verificacion + target obligatorio (archivo,
+        fichero, codigo, o un nombre de archivo con extension).
+
+        Sin esta regla, ToolIntentGate.tool_is_requested devuelve
+        False (regla ausente = bloqueo) y la tool queda inaccesible
+        aunque el modelo la invoque. H4 del informe out(1).
+        """
+        return {
+            "verificar_codigo": IntentRule(
+                verbs=(
+                    "verifica", "verificar",
+                    "comprueba", "comprobar",
+                    "valida", "validar",
+                    "check", "verify",
+                ),
+                target_words=(
+                    "archivo", "fichero", "codigo", "código",
+                ),
+                accepts_filename=True,
+            ),
+        }
 
     def requires_confirmation(self, name: str) -> bool:
         return False

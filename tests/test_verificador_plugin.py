@@ -52,9 +52,40 @@ def test_provider_nunca_requiere_confirmacion(tmp_path):
     assert not p.requires_confirmation("verificar_codigo")
 
 
-def test_provider_intent_rules_vacio(tmp_path):
+def test_provider_intent_rules_tiene_regla(tmp_path):
+    """El proveedor declara regla para verificar_codigo.
+
+    Antes devolvia {} y el gate bloqueaba la tool siempre (H4 del
+    informe out(1)).
+    """
     p = VerificadorProvider(Workspace(tmp_path))
-    assert p.intent_rules() == {}
+    rules = p.intent_rules()
+    assert "verificar_codigo" in rules
+    rule = rules["verificar_codigo"]
+    assert "verifica" in rule.verbs
+    assert "comprueba" in rule.verbs
+
+
+def test_gate_autoriza_verifica_con_archivo(tmp_path):
+    """El gate autoriza cuando el usuario dice 'verifica X.py'."""
+    from core.intent import ToolIntentGate
+
+    rules = VerificadorProvider(Workspace(tmp_path)).intent_rules()
+    gate = ToolIntentGate(rules)
+    assert gate.tool_is_requested("verificar_codigo", "verifica foo.py")
+    assert gate.tool_is_requested(
+        "verificar_codigo", "comprueba el archivo principal"
+    )
+
+
+def test_gate_no_autoriza_sin_verbo(tmp_path):
+    from core.intent import ToolIntentGate
+
+    rules = VerificadorProvider(Workspace(tmp_path)).intent_rules()
+    gate = ToolIntentGate(rules)
+    assert not gate.tool_is_requested(
+        "verificar_codigo", "crea un archivo nuevo"
+    )
 
 
 # -- provider: call ---------------------------------------------------
