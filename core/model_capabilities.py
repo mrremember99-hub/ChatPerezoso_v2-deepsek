@@ -82,30 +82,31 @@ def get_capabilities(host, model, *, timeout=5.0, force_refresh=False):
     if not model:
         return ModelCapabilities(name=model, native_tools=False, probed=False, source="fallback")
 
-    # 1. Override manual tiene prioridad absoluta.
+    # 1. Consultamos /api/show con cache (independientemente del
+    #    override). Antes, un override cortaba el probe y se perdian
+    #    context_length, vision y thinking que Ollama si expone.
+    #    H6 del out(4).
     override = get_override(model)
-    if override.is_forced():
-        native = override.mode == "native"
-        caps = ModelCapabilities(
-            name=model,
-            native_tools=native,
-            probed=True,
-            source="override",
-        )
-        return _with_recommendation(caps, override)
-
-    # 2. Sin override: consultamos /api/show (con caché).
     key = (host.rstrip("/"), model)
+    base: ModelCapabilities | None = None
     if not force_refresh:
         with _CACHE_LOCK:
-            cached = _CACHE.get(key)
-        if cached is not None:
-            return _with_recommendation(cached, override)
+            base = _CACHE.get(key)
+    if base is None:
+        base = _probe(host, model, timeout=timeout)
+        with _CACHE_LOCK:
+            _CACHE[key] = base
 
-    caps = _probe(host, model, timeout=timeout)
-    with _CACHE_LOCK:
-        _CACHE[key] = caps
-    return _with_recommendation(caps, override)
+    # 2. Override manual: solo cambia native_tools y source. El
+    #    resto del probe (context_length, vision, thinking, probed)
+    #    se preserva.
+    if override.is_forced():
+        from dataclasses import replace
+        native = override.mode == "native"
+        caps = replace(base, native_tools=native, source="override")
+        return _with_recommendation(caps, override)
+
+    return _with_recommendation(base, override)
 
 
 def _probe(host, model, *, timeout):

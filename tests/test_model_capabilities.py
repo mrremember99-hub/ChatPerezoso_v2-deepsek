@@ -185,17 +185,48 @@ def test_context_length_on_fallback_error(monkeypatch):
     assert caps.probed is False
 
 
-def test_context_length_on_override(monkeypatch):
-    """Con override manual, context_length es 0 (no consultamos /api/show)."""
+def test_override_preserva_context_length(monkeypatch):
+    """H6 del out(4): override solo cambia native_tools; el resto del
+    probe (context_length, vision, thinking) se preserva."""
     from core.models_config import set_override
 
+    _patch_post(monkeypatch, data={
+        "capabilities": ["tools", "vision", "thinking"],
+        "model_info": {"llama.context_length": 131072},
+    })
     set_override("modelo-forzado", "xml")
     try:
         caps = get_capabilities("http://localhost:11434", "modelo-forzado")
-        assert caps.context_length == 0
         assert caps.source == "override"
+        # El override cambio native_tools (mode=xml).
+        assert caps.native_tools is False
+        # Pero el probe trajo el resto.
+        assert caps.context_length == 131072
+        assert caps.vision is True
+        assert caps.thinking is True
     finally:
-        # Limpiar el override al terminar
         from core.models_config import ModelsConfig
         cfg = ModelsConfig()
         cfg.remove("modelo-forzado")
+
+
+def test_override_native_preserva_context_length(monkeypatch):
+    """Con mode=native, native_tools=True y context_length del probe."""
+    from core.models_config import set_override
+
+    _patch_post(monkeypatch, data={
+        "capabilities": ["completion"],
+        "model_info": {"llama.context_length": 32768},
+    })
+    set_override("modelo-forzado-2", "native")
+    try:
+        caps = get_capabilities(
+            "http://localhost:11434", "modelo-forzado-2"
+        )
+        assert caps.source == "override"
+        assert caps.native_tools is True
+        assert caps.context_length == 32768
+    finally:
+        from core.models_config import ModelsConfig
+        cfg = ModelsConfig()
+        cfg.remove("modelo-forzado-2")
