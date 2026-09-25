@@ -686,7 +686,20 @@ class ChatController(QObject):
         """
         window = self._get_context_window()
 
-        system_prompt = self._last_system_prompt or ""
+        # Reservar espacio para el trace que send() va a anadir
+        # despues. El padding es intencionalmente barato: solo
+        # infla la estimacion de tokens para que la poda de
+        # self.messages sea coherente con el envio real (H2).
+        #
+        # Solo se reserva si HAY acciones previas: sin ellas
+        # _build_tool_trace() devuelve cadena vacia y no hay
+        # nada que reservar. Reservar siempre aplastaba ventanas
+        # pequeñas (limit=500 del test de regresion).
+        actions = getattr(self, "_current_actions", None) or []
+        reserve = self._TRACE_RESERVE_CHARS if actions else 0
+        system_prompt = (self._last_system_prompt or "") + (
+            " " * reserve
+        )
         try:
             tool_definitions = self.tools.definitions()
         except Exception:
@@ -915,6 +928,12 @@ class ChatController(QObject):
     # Si se supera, se eliminan primero las acciones mas
     # antiguas (las recientes son mas relevantes).
     _TOOL_TRACE_MAX_TOTAL_CHARS = 3000
+    # Reserva para _compact_if_needed: el trace del system prompt
+    # se construye DESPUES de _append_message, pero el envio real
+    # a Ollama lo incluye. Sin esta reserva, la poda de
+    # self.messages usaría un presupuesto mas generoso que el que
+    # aplica OllamaClient._fit_round_history (H2 auditoria).
+    _TRACE_RESERVE_CHARS = _TOOL_TRACE_MAX_TOTAL_CHARS
     # Limites de detalle por categoria.
     _TOOL_TRACE_ERROR_DETAIL_MAX = 400
     _TOOL_TRACE_EXEC_OUTPUT_MAX = 300
