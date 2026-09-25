@@ -150,11 +150,22 @@ def test_bracket_in_middle_of_delta_is_detected(monkeypatch):
 
 
 def test_early_chars_before_brace_are_emitted(monkeypatch):
-    """Los chars antes del `{` se emiten como texto normal."""
-    client = _make_client(monkeypatch, rounds=[[
-        {"message": {"content": 'Voy a usar: {"name": "leer_archivo"}'}, "done": False},
-        {"message": {}, "done": True},
-    ]])
+    """Los chars antes del `{` se emiten como texto normal.
+
+    El modelo emite un tool call textual en la ronda 1; el retry
+    consume un segundo round. Sin ese segundo round, el stream del
+    retry queda vacio y (con H1) se rechaza como interrumpido.
+    """
+    client = _make_client(monkeypatch, rounds=[
+        [
+            {"message": {"content": 'Voy a usar: {"name": "leer_archivo"}'}, "done": False},
+            {"message": {}, "done": True},
+        ],
+        [
+            {"message": {"content": "Listo."}, "done": False},
+            {"message": {}, "done": True},
+        ],
+    ])
 
     emitted: list[str] = []
     client.chat(

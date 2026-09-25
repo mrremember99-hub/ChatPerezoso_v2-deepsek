@@ -210,6 +210,25 @@ _FALSE_COMPLETION_NUDGE = (
 _MAX_FALSE_COMPLETION_RETRIES = 1
 
 
+# Mensaje cuando el stream se corto antes de done=true (EOF, red,
+# timeout sin cierre limpio). El texto parcial ya se mostro al
+# usuario via on_text, pero NO debe guardarse como respuesta del
+# asistente en el historial.
+_INTERRUPTED_STREAM_MSG = (
+    "La conexion con Ollama se cerro antes de que el modelo "
+    "terminara de responder. El texto parcial no se ha guardado "
+    "en el historial. Reintenta la peticion."
+)
+
+# Sufijo visible cuando Ollama corta la generacion por num_predict.
+# La respuesta es valida pero incompleta por limite de tokens.
+_TRUNCATED_STREAM_SUFFIX = (
+    "\n\n[Respuesta truncada: se alcanzo el limite de tokens "
+    "de generacion (num_predict). Aumenta el limite o divide "
+    "la tarea.]"
+)
+
+
 def is_textual_tool_failure(text: str | None) -> bool:
     """True si `text` proviene de un fallo de tool calling textual.
 
@@ -404,6 +423,10 @@ class OllamaClient:
             self._emit_round_metrics(ctx, message, state.token_cache)
 
             result = strategy.process_round(message, tool_names)
+            # Extraer estado de finalizacion del mensaje. Los
+            # anade _stream_async al consumir StreamFinished.
+            result.completed = bool(message.pop("_stream_completed", True))
+            result.done_reason = message.pop("_stream_done_reason", None)
             # Preservar thinking del modelo para la siguiente ronda de
             # tool calling. Las estrategias no lo leen; se propaga aquí
             # para no duplicar el código en cada una.
@@ -428,6 +451,25 @@ class OllamaClient:
             # Mostrar al usuario el texto visible (sin bloques XML).
             if result.visible_text:
                 on_text(result.visible_text)
+
+            # H1: respuesta final sin done=true no es valida.
+            if result.is_final and not result.completed:
+                logger.warning(
+                    "Stream interrumpido sin done=true "
+                    "(modelo %s). No se persiste la respuesta.",
+                    ctx.model,
+                )
+                raise OllamaError(_INTERRUPTED_STREAM_MSG)
+            # H2: truncamiento por num_predict. La respuesta es
+            # valida pero incompleta. Se marca visualmente.
+            if result.is_final and result.done_reason == "length":
+                logger.info(
+                    "Respuesta truncada por num_predict (modelo %s).",
+                    ctx.model,
+                )
+                result.final_text = (
+                    result.final_text + _TRUNCATED_STREAM_SUFFIX
+                )
 
             # Respuesta final.
             if result.is_final:
@@ -517,6 +559,15 @@ class OllamaClient:
                     return msg
                 return result.final_text
 
+            # H5: si el stream se interrumpio, NO ejecutar tools
+            # parciales. Los tool_calls pueden estar incompletos.
+            if result.tool_calls and not result.completed:
+                logger.warning(
+                    "Stream interrumpido con tool_calls pendientes "
+                    "(modelo %s). No se ejecutan.",
+                    ctx.model,
+                )
+                raise OllamaError(_INTERRUPTED_STREAM_MSG)
             # Hay tool calls: ejecutar y volver a la siguiente ronda.
             if result.tool_calls:
                 # Ejecutar las tool calls. El mensaje assistant con
@@ -1348,6 +1399,11 @@ class OllamaClient:
             elif isinstance(event, StreamFinished):
                 message = event.message
                 metrics = event.metrics
+                # H1/H2: propagar estado de finalizacion. Sin esto,
+                # chat() no puede distinguir respuesta completa de
+                # interrumpida o truncada por limite de tokens.
+                message["_stream_completed"] = event.completed
+                message["_stream_done_reason"] = event.done_reason
 
         content = message.get("content", "")
         textual_name: str | None = None

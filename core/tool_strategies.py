@@ -43,6 +43,11 @@ class RoundResult:
     # el assistant message previo). Cadena vacía si el modelo no lo
     # emite. No se muestra al usuario.
     assistant_thinking: str = ""
+    # Estado del stream. Los rellena ``chat()`` desde el mensaje
+    # (prefijo ``_stream_``) porque las estrategias no tienen
+    # visibilidad sobre el transporte.
+    completed: bool = True
+    done_reason: str | None = None
     retry_requested: bool = False
     retry_message: str = ""
 
