@@ -389,3 +389,65 @@ def test_fit_overflow_false_when_only_pruned():
     )
     assert budget.dropped_messages > 0  # se podo
     assert budget.overflow is False      # pero no por overflow de fixed
+
+# -- H3: la poda NO debe dejar solo el user inicial -----------------------
+
+def test_poda_no_destruye_tool_chain_completa():
+    """Un tool loop (user + N×tools + final) no debe reducirse a [user].
+
+    El informe out(1) reproduce: 11 mensajes -> 1 conservado (solo user).
+    Si la poda por role=user no encuentra donde cortar, el suelo preserva
+    solo el ultimo user y pierde toda la cadena de tools.
+    """
+    from core.context_window import ContextWindow
+
+    # Contexto muy pequeno para forzar poda agresiva.
+    window = ContextWindow(limit_tokens=400, output_reserve=50)
+
+    messages = [
+        {"role": "user", "content": "Modifica x.py y verifica."},
+    ]
+    # 5 rondas de tool call + tool result (cadena larga).
+    for i in range(5):
+        messages.append({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "function": {
+                    "name": "leer_archivo",
+                    "arguments": {"path": f"f{i}.py"},
+                }
+            }],
+        })
+        messages.append({
+            "role": "tool",
+            "content": "contenido del archivo " * 50,
+            "tool_name": "leer_archivo",
+        })
+    messages.append({"role": "assistant", "content": "Hecho."})
+
+    pruned, budget = window.fit(
+        system_prompt="system",
+        tool_definitions=[],
+        messages=messages,
+    )
+
+    # Diagnostico util si falla.
+    roles = [m.get("role") for m in pruned]
+    print(f"pruned roles: {roles}")
+    print(f"budget: {budget}")
+
+    # El bug: si solo queda 1 mensaje (el user), se ha perdido la cadena.
+    assert len(pruned) > 1, (
+        f"Poda destructiva: solo se conservaron {len(pruned)} mensajes "
+        f"(roles: {roles})"
+    )
+    # Debe contener al menos un tool_result o un assistant con tool_calls.
+    tiene_tool_chain = any(
+        m.get("role") in ("tool", "assistant")
+        and (m.get("tool_calls") or m.get("role") == "tool")
+        for m in pruned
+    )
+    assert tiene_tool_chain, (
+        f"La cadena de tools desaparecio. Roles: {roles}"
+    )

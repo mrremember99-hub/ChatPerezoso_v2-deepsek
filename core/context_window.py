@@ -339,12 +339,15 @@ class ContextWindow:
 
         Devuelve ``(historial_podado, budget)``. La poda respeta dos
         reglas, en este orden:
-          1. El sufijo resultante debe caber en el presupuesto. NUNCA
-             se devuelve un historial que exceda el límite por respetar
-             min_turns: si no cabe, se poda hasta que quepa.
-          2. Si es posible sin violar (1), se conservan al menos
-             min_turns turnos completos. Y el primer mensaje del
-             historial es siempre un ``user``.
+          1. NUNCA parte una cadena de tool calls por la mitad. Si el
+             historial termina en un tool loop sin otro user, retrocede
+             al user inicial y conserva la cadena entera (aunque el
+             resultado exceda ligeramente el presupuesto). Perder la
+             cadena degrada mas la calidad que pasarse unos cientos de
+             tokens. Ver H3 del informe out(1).
+          2. Si es posible sin violar (1), el sufijo cabe en el
+             presupuesto y se conservan al menos min_turns turnos
+             completos. El primer mensaje es siempre un ``user``.
 
         El cálculo usa prefix sums: O(n) en lugar del O(n²) anterior.
         """
@@ -429,15 +432,37 @@ class ContextWindow:
         while cut_at < len(messages) and (total - prefix[cut_at]) > available:
             cut_at += 1
 
+        # Posiciones de todos los 'user'. Se calcula ANTES del ajuste
+        # hacia adelante porque lo necesitamos como red de seguridad.
+        user_positions = [
+            i for i, m in enumerate(messages) if m.get("role") == "user"
+        ]
+
         # Ajustar hacia adelante hasta el siguiente "user".
         while cut_at < len(messages) and messages[cut_at].get("role") != "user":
             cut_at += 1
 
+        # H3: si NO hemos encontrado otro user (tool loop al final
+        # del historial), retroceder al ULTIMO user SI hay cadena
+        # de tools. Sin esto, cut_at llegaba a len(messages),
+        # pruned quedaba vacio y el suelo preservaba solo el user
+        # inicial truncado, perdiendo toda la cadena.
+        #
+        # OJO: solo aplica si hay tools. En historial normal
+        # (user+assistant sin tools), el suelo original (truncar
+        # el user) sigue siendo el comportamiento correcto.
+        if cut_at >= len(messages) and user_positions:
+            last_user_idx = user_positions[-1]
+            tail = messages[last_user_idx + 1:]
+            has_tool_chain = any(
+                m.get("role") == "tool" or m.get("tool_calls")
+                for m in tail
+            )
+            if has_tool_chain:
+                cut_at = last_user_idx
+
         # Si es posible, retroceder hacia atrás para respetar min_turns
         # sin exceder el presupuesto.
-        user_positions = [
-            i for i, m in enumerate(messages) if m.get("role") == "user"
-        ]
         if len(user_positions) >= self._min_turns:
             min_start = user_positions[-self._min_turns]
             if min_start < cut_at and (total - prefix[min_start]) <= available:
