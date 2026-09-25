@@ -185,48 +185,48 @@ def test_context_length_on_fallback_error(monkeypatch):
     assert caps.probed is False
 
 
-def test_override_preserva_context_length(monkeypatch):
+def _isolate_models_config(monkeypatch, tmp_path):
+    """Sustituye el singleton _default por un ModelsConfig en tmp_path.
+
+    Sin esto, los tests escriben en models.json real (config del
+    usuario) y dejan residuos entre ejecuciones.
+    """
+    from core import models_config
+    fake = models_config.ModelsConfig(tmp_path / "models.json")
+    monkeypatch.setattr(models_config, "_default", fake)
+    return fake
+
+
+def test_override_preserva_context_length(monkeypatch, tmp_path):
     """H6 del out(4): override solo cambia native_tools; el resto del
     probe (context_length, vision, thinking) se preserva."""
-    from core.models_config import set_override
+    fake = _isolate_models_config(monkeypatch, tmp_path)
 
     _patch_post(monkeypatch, data={
         "capabilities": ["tools", "vision", "thinking"],
         "model_info": {"llama.context_length": 131072},
     })
-    set_override("modelo-forzado", "xml")
-    try:
-        caps = get_capabilities("http://localhost:11434", "modelo-forzado")
-        assert caps.source == "override"
-        # El override cambio native_tools (mode=xml).
-        assert caps.native_tools is False
-        # Pero el probe trajo el resto.
-        assert caps.context_length == 131072
-        assert caps.vision is True
-        assert caps.thinking is True
-    finally:
-        from core.models_config import ModelsConfig
-        cfg = ModelsConfig()
-        cfg.remove("modelo-forzado")
+    fake.set("modelo-forzado", "xml")
+    caps = get_capabilities("http://localhost:11434", "modelo-forzado")
+    assert caps.source == "override"
+    assert caps.native_tools is False
+    assert caps.context_length == 131072
+    assert caps.vision is True
+    assert caps.thinking is True
 
 
-def test_override_native_preserva_context_length(monkeypatch):
+def test_override_native_preserva_context_length(monkeypatch, tmp_path):
     """Con mode=native, native_tools=True y context_length del probe."""
-    from core.models_config import set_override
+    fake = _isolate_models_config(monkeypatch, tmp_path)
 
     _patch_post(monkeypatch, data={
         "capabilities": ["completion"],
         "model_info": {"llama.context_length": 32768},
     })
-    set_override("modelo-forzado-2", "native")
-    try:
-        caps = get_capabilities(
-            "http://localhost:11434", "modelo-forzado-2"
-        )
-        assert caps.source == "override"
-        assert caps.native_tools is True
-        assert caps.context_length == 32768
-    finally:
-        from core.models_config import ModelsConfig
-        cfg = ModelsConfig()
-        cfg.remove("modelo-forzado-2")
+    fake.set("modelo-forzado-2", "native")
+    caps = get_capabilities(
+        "http://localhost:11434", "modelo-forzado-2"
+    )
+    assert caps.source == "override"
+    assert caps.native_tools is True
+    assert caps.context_length == 32768
