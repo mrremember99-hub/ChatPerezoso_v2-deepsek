@@ -275,6 +275,10 @@ Detectado con `mistral-small3.2`: llama a `ejecutar_comando` sin `command` (fall
 - Commits con tags: `feat-X`, `fix-X`.
 - El usuario decide el diseño. El asistente propone.
 - **Terminal**: los heredocs `python3 - <<'PYEOF'` se rompen al pegar. Usar `python3 -c "..."` de una línea o scripts `apply_patch.py` que verifiquen el reemplazo.
+- **Scripts de parche**: el check de "ya presente" debe buscar
+  `def nombre` o un marcador único, NUNCA el nombre suelto del
+  símbolo. El propio parche puede insertar el símbolo antes del
+  check (referencias, condiciones), causando falso skip.
 
 ## Historial de sesiones recientes
 
