@@ -358,7 +358,10 @@ class OllamaClient:
         tools: Any,
         on_text: Callable[[str], None],
         on_tool: Callable[[str, dict[str, Any]], str],
-        max_rounds: int = 8,
+        # 15 en lugar de 8: tareas multi-modulo necesitan leer
+        # varios archivos antes de escribir el orquestador. Con 8
+        # el modelo se queda sin rondas antes de empezar.
+        max_rounds: int = 15,
         cancel_event: threading.Event | None = None,
         options: dict[str, Any] | None = None,
         system_prompt: str = "",
