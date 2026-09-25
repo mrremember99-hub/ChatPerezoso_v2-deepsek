@@ -911,6 +911,26 @@ class ChatController(QObject):
     # del presupuesto de 300 tokens del diseno.
     _TOOL_TRACE_MAX_ITEMS = 15
     _TOOL_TRACE_MAX_LINE = 140
+    # Cap total de chars del bloque. ~3000 chars ≈ 750 tokens.
+    # Si se supera, se eliminan primero las acciones mas
+    # antiguas (las recientes son mas relevantes).
+    _TOOL_TRACE_MAX_TOTAL_CHARS = 3000
+    # Limites de detalle por categoria.
+    _TOOL_TRACE_ERROR_DETAIL_MAX = 400
+    _TOOL_TRACE_EXEC_OUTPUT_MAX = 300
+    _TOOL_TRACE_READ_SHORT_MAX = 250
+    # Herramientas de escritura (sin detalle: el path ya va en la
+    # cabecera). El modelo sabe que escribio por su respuesta
+    # final del turno anterior.
+    _TOOL_TRACE_WRITE_TOOLS = frozenset({
+        "escribir_archivo", "crear_archivo", "crear_carpeta",
+        "borrar_archivo",
+    })
+    # Herramientas de lectura/inspeccion: contenido completo si
+    # es corto, omitido si es largo (evita inundar el trace).
+    _TOOL_TRACE_READ_CONTENT_TOOLS = frozenset({
+        "leer_archivo", "listar_carpeta",
+    })
 
     def _build_tool_trace(self) -> str:
         """Resumen del ultimo turno para inyectar como bloque de sistema.
@@ -919,26 +939,86 @@ class ChatController(QObject):
         system prompt del siguiente turno para que el modelo sepa que
         tools se ejecutaron (los tool_results no van al historial
         persistente).
+
+        Incluye el output real de cada tool segun la politica por
+        categoria (H3 de los informes out(3/4)): los errores siempre
+        (truncados), las lecturas cortas con contenido, los comandos
+        con su salida. Con cap total de chars: si se supera, se
+        eliminan primero las acciones mas antiguas.
         """
         actions = self._current_actions
         if not actions:
             return ""
+
+        # Construir de mas reciente a mas antigua para priorizar lo
+        # reciente si hay que recortar por presupuesto.
+        recent = actions[-self._TOOL_TRACE_MAX_ITEMS :]
+        blocks: list[str] = []
+        total = 0
+        for a in reversed(recent):
+            block = self._format_trace_block(a)
+            if total + len(block) > self._TOOL_TRACE_MAX_TOTAL_CHARS:
+                break
+            blocks.append(block)
+            total += len(block)
+        blocks.reverse()
+
         lines = ["[ACCIONES DEL TURNO ANTERIOR]"]
-        for a in actions[-self._TOOL_TRACE_MAX_ITEMS :]:
-            args = (a.metadata or {}).get("arguments") or {}
-            arg_hint = self._format_tool_arg_hint(args)
-            line = f"{a.tool_name}{arg_hint} -> {a.status}"
-            if len(line) > self._TOOL_TRACE_MAX_LINE:
-                line = line[: self._TOOL_TRACE_MAX_LINE - 1] + "..."
-            lines.append(line)
-        extra = len(actions) - self._TOOL_TRACE_MAX_ITEMS
+        extra = len(actions) - len(blocks)
         if extra > 0:
             lines.append(f"(+{extra} acciones anteriores omitidas)")
+        lines.extend(blocks)
         lines.append(
             "Estas acciones YA se ejecutaron en el turno anterior. "
             "No las repitas sin motivo."
         )
         return "\n".join(lines)
+
+    def _format_trace_block(self, a: ToolResult) -> str:
+        """Cabecera + detalle (indentado) de una ToolResult."""
+        args = (a.metadata or {}).get("arguments") or {}
+        arg_hint = self._format_tool_arg_hint(args)
+        head = f"{a.tool_name}{arg_hint} -> {a.status}"
+        if len(head) > self._TOOL_TRACE_MAX_LINE:
+            head = head[: self._TOOL_TRACE_MAX_LINE - 1] + "..."
+
+        detail = self._trace_detail_for(a)
+        if not detail:
+            return head
+        indented = "\n".join("  " + line for line in detail.splitlines())
+        return head + "\n" + indented
+
+    def _trace_detail_for(self, a: ToolResult) -> str:
+        """Detalle segun la categoria de la tool.
+
+        - Errores: siempre, hasta _TOOL_TRACE_ERROR_DETAIL_MAX chars.
+        - Escrituras OK: nada (el path ya va en la cabecera).
+        - Lecturas de contenido: completo si es corto, si no, nada.
+        - Otros (exec, search, git, MCP): output truncado.
+        """
+        if a.is_error:
+            raw = a.detail or a.summary
+            return self._truncate_trace(
+                raw, self._TOOL_TRACE_ERROR_DETAIL_MAX
+            )
+        if a.tool_name in self._TOOL_TRACE_WRITE_TOOLS:
+            return ""
+        if a.tool_name in self._TOOL_TRACE_READ_CONTENT_TOOLS:
+            raw = a.to_text()
+            if len(raw) <= self._TOOL_TRACE_READ_SHORT_MAX:
+                return raw
+            return ""
+        raw = a.to_text()
+        return self._truncate_trace(raw, self._TOOL_TRACE_EXEC_OUTPUT_MAX)
+
+    @staticmethod
+    def _truncate_trace(text: str, max_len: int) -> str:
+        """Trunca conservando un marcador visible."""
+        if not text:
+            return ""
+        if len(text) <= max_len:
+            return text
+        return text[: max_len - 20].rstrip() + "\n[... truncado]"
 
     @staticmethod
     def _format_tool_arg_hint(arguments: dict) -> str:
