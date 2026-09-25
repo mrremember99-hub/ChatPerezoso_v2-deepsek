@@ -11,6 +11,11 @@ from core.context_window import ContextWindow
 from core.history import AsyncHistoryWriter, HistoryStore
 from core.ollama import OllamaClient, is_textual_tool_failure
 from core.tool_provider import ToolProvider
+from core.prompt_phases import (
+    DetectedPhases,
+    build_phase_prompt,
+    detect_phases,
+)
 from core.tool_result import ToolResult
 from core.shutdown import remaining
 
@@ -130,6 +135,13 @@ class ChatController(QObject):
         self._verificador_hook: Any = None
         # Cola de prompts para envío secuencial. Vacía = no hay cola.
         self._queue: list[str] = []
+        # Orquestación determinista: si el prompt tiene N>=2 fases
+        # detectables, se activa este plan. Cada elemento de
+        # _phase_bodies es el cuerpo de una fase. En cada ronda
+        # _advance_queue regenera el prompt con snapshot fresco.
+        self._phase_plan: DetectedPhases | None = None
+        self._phase_bodies: list[str] = []
+        self._workspace_provider: Any = None
         self._queue_total: int = 0
         self._queue_active: bool = False
         # Cuando un prompt falla, la cola se pausa en vez de
@@ -252,11 +264,76 @@ class ChatController(QObject):
         if remaining > 0:
             self.status.emit(f"{message}: {remaining} pendiente(s)")
 
+    def set_workspace_provider(self, provider: Any) -> None:
+        """Registra un callable que devuelve el Workspace actual.
+
+        Se usa para regenerar el snapshot del workspace antes de
+        cada fase en modo orquestación. Si es None, no se incluye
+        snapshot en los prompts de fase.
+        """
+        self._workspace_provider = provider
+
+    def _current_workspace_snapshot(self) -> str:
+        if self._workspace_provider is None:
+            return ""
+        try:
+            ws = self._workspace_provider()
+        except Exception:
+            return ""
+        if ws is None:
+            return ""
+        try:
+            from core.workspace_snapshot import snapshot_workspace
+            return snapshot_workspace(ws)
+        except Exception:
+            return ""
+
+    def send_user_input(
+        self,
+        text: str,
+        model: str,
+        options: dict[str, Any] | None = None,
+        system_prompt: str | None = None,
+    ) -> bool:
+        """Punto de entrada del chat con detección de fases.
+
+        Si el texto contiene N>=2 fases (``FASE 1``, ``FASE 2``...),
+        lo trocea en N conversaciones independientes y las envía
+        secuencialmente con la cola existente. Cada fase recibe el
+        mismo *preamble*, su propio cuerpo, y un snapshot fresco
+        del workspace en el momento de enviarse.
+
+        Si no hay fases, delega a ``send()`` normal.
+        """
+        if self._state.is_active or self._queue_active:
+            return False
+        if not text or not model:
+            return False
+
+        plan = detect_phases(text)
+        if plan is None:
+            self.send(text, model, options, system_prompt)
+            return True
+
+        self._phase_plan = plan
+        self._phase_bodies = list(plan.phases)
+        snapshot = self._current_workspace_snapshot()
+        prompts = [
+            build_phase_prompt(plan.preamble, body, snapshot)
+            for body in plan.phases
+        ]
+        self.status.emit(
+            f"Orquestando {plan.count} fases · prefill por fase reducido"
+        )
+        return self.enqueue(prompts, model, options, system_prompt)
+
     def _advance_queue(self) -> None:
         """Envía el siguiente prompt. Si no hay más, cierra la cola."""
         if not self._queue:
             self._queue_total = 0
             self._queue_active = False
+            self._phase_plan = None
+            self._phase_bodies.clear()
             self.status.emit("Cola completada")
             self.queue_finished.emit()
             return
@@ -264,6 +341,20 @@ class ChatController(QObject):
         current = self._queue_total - len(self._queue) + 1
         total = self._queue_total
         next_prompt = self._queue.pop(0)
+
+        # Orquestación: regenerar el prompt de esta fase con
+        # snapshot fresco del workspace (la fase anterior puede
+        # haber creado o modificado archivos).
+        if self._phase_plan is not None and self._phase_bodies:
+            idx = current - 1
+            if 0 <= idx < len(self._phase_bodies):
+                snapshot = self._current_workspace_snapshot()
+                next_prompt = build_phase_prompt(
+                    self._phase_plan.preamble,
+                    self._phase_bodies[idx],
+                    snapshot,
+                )
+
         self._current_prompt = next_prompt
         self._current_retry_count = 0
         self.queue_progress.emit(current, total)

@@ -158,6 +158,9 @@ class AppController(QObject):
             store=self.history_store,
             initial_messages=initial_messages,
         )
+        self.chat_ctrl.set_workspace_provider(
+            lambda: self.workspace
+        )
         self.diagnostics_ctrl = DiagnosticsController(
             self,
             self.chat_ctrl,
@@ -534,7 +537,7 @@ class AppController(QObject):
         if not text:
             return
         agent = self.agent_ctrl.active_agent()
-        self.chat_ctrl.send(
+        self.chat_ctrl.send_user_input(
             text,
             model,
             agent.options(),
