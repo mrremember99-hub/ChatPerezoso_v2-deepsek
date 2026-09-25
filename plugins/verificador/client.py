@@ -78,6 +78,45 @@ class ConflictIssue:
 # ─────────────────────────────────────────────────────────────────────
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Filtro de codigos relevantes
+#
+# Ruff y mypy reportan decenas de warnings cosmeticos (orden de
+# imports, int() redundante, __all__ sin ordenar, Tuple->tuple...)
+# que no rompen el codigo pero consumen rondas del modelo. El
+# objetivo de la verificacion es detectar CODIGO ROTO, no estilo.
+#
+# Solo pasan los codigos que indican un error real:
+#   - No compila (syntax).
+#   - Import/name roto (F821, F811, name-defined, import-not-found).
+#   - Llamada con tipos/args incorrectos (arg-type, call-arg,
+#     call-overload, return-value, attr-defined).
+#
+# Todo lo demas se descarta silenciosamente.
+# ─────────────────────────────────────────────────────────────────────
+
+_RUFF_RELEVANT_CODES: frozenset[str] = frozenset({
+    "invalid-syntax",   # syntax real
+    "F821",              # undefined name
+    "F811",              # redefinition
+    "F823",              # local referenced before assignment
+    "F501",              # % format error
+    "E999",              # syntax error (legacy)
+})
+
+_MYPY_RELEVANT_CODES: frozenset[str] = frozenset({
+    "syntax",           # syntax real
+    "name-defined",     # undefined name
+    "attr-defined",     # attribute unknown
+    "import-not-found", # import roto
+    "arg-type",         # arg de tipo incorrecto
+    "call-arg",         # arg faltante/extra
+    "call-overload",    # call invalido
+    "return-value",     # return incorrecto
+    "valid-type",       # tipo invalido
+})
+
+
 def check_python_syntax(path: Path) -> list[SyntaxIssue]:
     try:
         source = path.read_text(encoding="utf-8")
@@ -114,7 +153,8 @@ _RUFF_LINE = re.compile(
 )
 _MYPY_LINE = re.compile(
     r"^.+?:(?P<line>\d+):(?:\s*(?P<col>\d+):)?\s*"
-    r"(?P<code>error|warning|note):\s*(?P<msg>.+)$"
+    r"(?P<sev>error|warning|note):\s*(?P<msg>.+?)"
+    r"(?:\s+\[(?P<code>[a-z-]+)\])?$"
 )
 
 
@@ -143,10 +183,15 @@ def _run_ruff(path: Path) -> list[QualityIssue]:
         m = _RUFF_LINE.match(raw.strip())
         if not m:
             continue
+        code = m.group("code")
+        if code not in _RUFF_RELEVANT_CODES:
+            # Cosmetica (I001, RUF*, UP*, BLE*, S110, F401...):
+            # se descarta. Consume rondas del modelo sin aportar.
+            continue
         out.append(QualityIssue(
             line=int(m.group("line")),
             column=int(m.group("col")),
-            code=m.group("code"),
+            code=code,
             message=m.group("msg").strip(),
         ))
     return out
@@ -167,7 +212,13 @@ def _run_mypy(path: Path) -> list[QualityIssue]:
         m = _MYPY_LINE.match(raw.strip())
         if not m:
             continue
-        if m.group("code") == "note":
+        # `sev` = error|warning|note. `code` = codigo real entre
+        # [..] al final (attr-defined, arg-type, etc.) o None.
+        sev = m.group("sev")
+        if sev == "note":
+            continue
+        code = m.group("code")
+        if code is None or code not in _MYPY_RELEVANT_CODES:
             continue
         out.append(QualityIssue(
             line=int(m.group("line")),

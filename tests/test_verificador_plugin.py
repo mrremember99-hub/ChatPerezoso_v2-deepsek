@@ -274,7 +274,13 @@ def test_check_quality_archivo_no_python(tmp_path):
     assert check_quality(f) == []
 
 
-def test_check_quality_detecta_import_sin_usar(tmp_path):
+def test_check_quality_filtra_F401_cosmetico(tmp_path):
+    """F401 (import sin usar) es cosmetico y se descarta.
+
+    Antes se reportaba, pero el modelo perdia rondas
+    intentando arreglarlo. Ahora el verificador solo reporta
+    errores que rompen codigo (F821, invalid-syntax, etc.).
+    """
     import shutil
     from plugins.verificador import check_quality
     if shutil.which("ruff") is None:
@@ -284,7 +290,7 @@ def test_check_quality_detecta_import_sin_usar(tmp_path):
     f.write_text("import os\n\nx = 1\n", encoding="utf-8")
     issues = check_quality(f)
     codes = {i.code for i in issues}
-    assert "F401" in codes
+    assert "F401" not in codes
 
 
 # -- secretos ---------------------------------------------------------
