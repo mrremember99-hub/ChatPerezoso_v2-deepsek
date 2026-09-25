@@ -96,6 +96,8 @@ class _ChatContext:
     tool_names: set[str]
     send_tools: list[dict[str, Any]] | None
     buffer_only: bool
+    # Diagnostico: se construye solo con DEBUG activo.
+    snapshot: Any = None
 
 
 @dataclass
@@ -666,6 +668,27 @@ class OllamaClient:
         )
         buffer_only = strategy.needs_full_buffer(bool(active_tools))
 
+        # Snapshot de diagnostico. Solo se construye si el logger
+        # tiene DEBUG activo: en produccion es None y no cuesta
+        # nada. Agrupa lo que el modelo va a recibir.
+        snapshot: Any = None
+        if logger.isEnabledFor(logging.DEBUG):
+            from .request_snapshot import RequestSnapshot
+            sys_content = ""
+            for m in history:
+                if m.get("role") == "system":
+                    sys_content = str(m.get("content", ""))
+                    break
+            snapshot = RequestSnapshot(
+                model=model,
+                system_prompt_chars=len(sys_content),
+                system_prompt_preview=sys_content[:200],
+                history_messages=len(history),
+                active_tools=sorted(tool_names),
+                options=options,
+                thinking_override=get_override(model).thinking,
+            )
+
         return _ChatContext(
             model=model,
             options=options,
@@ -681,6 +704,7 @@ class OllamaClient:
             tool_names=tool_names,
             send_tools=send_tools,
             buffer_only=buffer_only,
+            snapshot=snapshot,
         )
 
     @staticmethod
