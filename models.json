@@ -4,31 +4,31 @@
       "mode": "auto",
       "recommendation": "13 GB · Agente principal · Verificado 9/9 en OVERPAPER"
     },
-    "muse-glimmer:latest": {
+    "lfm2.5:latest": {
       "mode": "auto",
-      "thinking": false,
-      "recommendation": "18 GB MoE · 86.6 tool calling · Agente alternativo"
-    },
-    "mistral-small3.2:latest": {
-      "mode": "auto",
-      "recommendation": "15 GB · 32k contexto · Verificación y contexto largo"
-    },
-    "qwen3.6:27b": {
-      "mode": "auto",
-      "thinking": false,
-      "recommendation": "17 GB · Coding one-shot · Requiere --jinja en Ollama"
+      "recommendation": "5.2 GB MoE · 1.5B activos · Chat rápido"
     },
     "ministral-3:latest": {
       "mode": "auto",
       "recommendation": "6 GB · Rápido (4s warm) · Verificado 8.5/9"
     },
+    "mistral-small3.2:latest": {
+      "mode": "auto",
+      "recommendation": "15 GB · 32k contexto · Verificación y contexto largo"
+    },
+    "muse-glimmer:latest": {
+      "mode": "auto",
+      "thinking": false,
+      "recommendation": "18 GB MoE · 86.6 tool calling · Agente alternativo"
+    },
     "ornith-1.5:9b": {
       "mode": "auto",
       "recommendation": "6.6 GB · 262K contexto · Agentic M4"
     },
-    "lfm2.5:latest": {
+    "qwen3.6:27b": {
       "mode": "auto",
-      "recommendation": "5.2 GB MoE · 1.5B activos · Chat rápido"
+      "thinking": false,
+      "recommendation": "17 GB · Coding one-shot · Requiere --jinja en Ollama"
     }
   }
 }

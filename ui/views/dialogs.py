@@ -483,4 +483,11 @@ def edit_agent(
         allowed_tools=allowed,
         model=selected_model,
         category=category_edit.text().strip(),
+        # La UI de edición todavía no expone estos tres campos. Se
+        # preservan tal cual del agente original para no perderlos al
+        # guardar. Cuando se añadan al formulario, sustituir por los
+        # valores de los widgets correspondientes.
+        top_p=agent.top_p,
+        top_k=agent.top_k,
+        repeat_penalty=agent.repeat_penalty,
     )

@@ -139,3 +139,68 @@ de fix porque `requires_target=True` rompe casos legítimos
 Diseño pendiente: campo `IntentRule.verbs_strong` (verbos de acción
 que siempre autorizan: busca, encuentra) vs `verbs_weak` (verbos de
 pregunta que requieren target: dónde). Estimado: 1-2h.
+
+## Proyecto: sistema de etiquetas XML para modelos sin tool calling nativo
+
+**Motivación**: 3 de 5 modelos probados (granite, rnj-1, qwen3-coder:30b en
+contexto largo) no emiten tool calls nativas fiables. El fallback XML actual
+se quitó porque los modelos que fallan tampoco escriben XML coherente cuando
+se les pide. Pero hay toda una familia de proyectos (OpenLovable, Bolt.diy,
+Claude Artifacts, Aider, Chisel) que resuelven esto con un **cambio de
+paradigma**: el modelo nunca intenta tool calling, solo escribe texto con
+etiquetas personalizadas, y la app las parsea en streaming.
+
+### Diferencia con lo que ya probamos
+
+| Fallback XML antiguo | Sistema de etiquetas |
+|----------------------|----------------------|
+| El modelo intenta tool nativo primero | El modelo solo escribe texto |
+| Si falla, reinterpretamos su output | No hay tool calling, solo etiquetas |
+| El modelo está "confundido" entre modos | Un único modo: texto con etiquetas |
+
+### Diseño propuesto
+
+Modo dual en `core/ollama.py`:
+- **Nativo** (actual): para `gpt-oss:20b` y modelos con tool calling fiable.
+- **Etiquetas** (nuevo): para el resto. No se envían `tools` al payload.
+  El system prompt pide formato XML y el parser lo convierte a acciones.
+
+Formato propuesto:
+
+## Sprint modelos 2026-09 (cerrado)
+
+Resultados OVERPAPER (9 fases):
+- gpt-oss:20b      9/9  ✅
+- ministral-3      8.5/9 ✅
+- muse-glimmer     6/9  ⚠️ prefill en Air
+- gemma4:12b       5/9  ⚠️ prefill en Air
+- qwen3-coder:30b  3/9  ❌ pierde tool calling
+- granite, rnj-1   0/9  ❌ no tool calling
+
+Stack final: 7 modelos, cada uno con rol.
+Recomendación: gpt-oss:20b para multi-fase, ministral-3 para rápido.
+
+## Próximo objetivo
+
+**Orquestación determinista de prompts con fases** (3-4h).
+Detectar "FASE N" en el prompt y trocear en conversaciones
+independientes. Cada fase recibe solo su prompt (800 tokens)
++ estado mínimo del workspace. Resuelve el prefill killer
+en Air y desbloquea muse-glimmer, gemma4 y mistral-small3.2
+para tareas largas. Ya implementado parcialmente: la cola
+pausable de `feat-queue-pause` es la base.
+
+### Mitigación de "falso completado"
+
+Detectado con mistral-small3.2: el modelo llama a `ejecutar_comando`
+sin `command` (falla la tool) y luego declara "FASE VERIFICADA" y
+"PROYECTO COMPLETADO" sin haber llamado a `escribir_archivo`.
+
+El stall guard no lo detecta porque el modelo sí emite tool calls.
+
+Mitigación propuesta (30 min): si `ejecutar_comando` se invoca sin
+que haya habido un `escribir_archivo` exitoso en el mismo turno,
+bloquear con mensaje: "no has escrito el archivo, hazlo primero".
+
+Integrar en la orquestación determinista (próxima sesión) que ya
+verifica externamente el estado del workspace entre fases.

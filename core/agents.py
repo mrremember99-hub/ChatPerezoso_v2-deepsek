@@ -120,13 +120,17 @@ class Agent:
         if isinstance(raw_top_k, bool) or not isinstance(raw_top_k, int):
             top_k: int | None = None
         else:
-            top_k = max(0, min(raw_top_k, 1000)) or None
+            # top_k=0 es un valor válido (desactivar top_k en algunos
+            # contextos). No se colapsa a None como antes.
+            top_k = max(0, min(raw_top_k, 1000))
 
         raw_rp = data.get("repeat_penalty")
         if isinstance(raw_rp, bool) or not isinstance(raw_rp, (int, float)):
             repeat_penalty: float | None = None
         else:
-            repeat_penalty = max(0.0, float(raw_rp)) or None
+            # 0.0 es válido (desactivar la penalización). No se
+            # colapsa a None.
+            repeat_penalty = max(0.0, float(raw_rp))
 
         return cls(
             name=name.strip(),
