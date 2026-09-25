@@ -397,6 +397,10 @@ class OllamaClient:
         )
 
         for _ in range(max_rounds):
+            # Diagnostico: loggear el snapshot si DEBUG.
+            if ctx.snapshot is not None:
+                ctx.snapshot.round_number += 1
+                logger.debug(ctx.snapshot.to_log())
             self._check_cancel(cancel_event)
 
             # Ajustar el historial al presupuesto antes de cada ronda.
