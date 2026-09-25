@@ -26,6 +26,7 @@ from core.config import AppConfig
 from core.history import HistoryStore
 from core.mcp_servers import MCPServerStore
 from core.ollama import OllamaClient
+from core.prompt_phases import detect_phases
 from core.plugins_registry import (
     discover_plugin_factories,
     instantiate_plugins,
@@ -554,6 +555,17 @@ class AppController(QObject):
             return
         text = self.view.chat_panel.take_input()
         if not text:
+            return
+        # Orquestación determinista: si el texto contiene headers
+        # FASE N consecutivos desde 1, delegar en send_user_input
+        # (preamble + snapshot fresco por fase) en lugar de partir
+        # por separadores --- / ===. Evita que split_prompts cuente
+        # cabecera, cierre o preamble como items extra.
+        if detect_phases(text) is not None:
+            agent = self.agent_ctrl.active_agent()
+            self.chat_ctrl.send_user_input(
+                text, model, agent.options(), agent.system_prompt,
+            )
             return
         prompts = split_prompts(text)
         if not prompts:
