@@ -204,3 +204,32 @@ bloquear con mensaje: "no has escrito el archivo, hazlo primero".
 
 Integrar en la orquestación determinista (próxima sesión) que ya
 verifica externamente el estado del workspace entre fases.
+
+## Orquestación determinista (2026-09-25) — CERRADA
+
+Feature: `core/prompt_phases.py` + `core/workspace_snapshot.py` +
+`ChatController.send_user_input()` + wiring en AppController.
+
+Los prompts con N>=2 fases (`FASE 1`, `FASE 2`...) se trocean
+automáticamente en N conversaciones independientes. Cada fase recibe:
+- El preamble (reglas globales) del prompt original.
+- El cuerpo de su propia fase.
+- Snapshot fresco del workspace en el momento de enviarse.
+
+Resultados OVERPAPER (9 fases):
+- gpt-oss:20b:    9/9 ✅ (más rápido que sin orquestación)
+- muse-glimmer:   6/9 ⚠️ (mismo límite: Fase 6 reescribe archivo grande)
+- ministral-3:    sin re-probar
+
+Conclusión: la orquestación resuelve el prefill del prompt global.
+NO resuelve fases que reescriben archivos grandes (Fase 6 de OVERPAPER).
+Para eso haría falta edición por diff (proyecto aparte).
+
+Bug menor conocido: en prompts con N fases, la cola muestra N+1 items.
+Investigar cuando haya tiempo.
+
+## Próximos objetivos pendientes
+
+- Tool trace persistente (P1 auditoría externa). 3-4h.
+- Edición por diff para fases de reescritura grande. Proyecto.
+- Historial de tools en conversaciones largas (informe externo #3).
