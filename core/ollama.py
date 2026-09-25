@@ -71,6 +71,17 @@ _TOOL_CALL_KEYWORDS: tuple[str, ...] = (
 _MAX_PEEK_CHARS = 200
 
 
+def _in_code_fence(text: str) -> bool:
+    """True si `text` termina dentro de un code-fence markdown.
+
+    Cuenta los triple-backtick: numero impar = fence abierto.
+    Se usa para evitar activar el buffering anti-tool-call cuando
+    el `{`/`[` esta en un bloque de codigo del propio mensaje
+    (H5 auditoria 2026-09-26).
+    """
+    return text.count("```") % 2 == 1
+
+
 @dataclass
 class _ChatContext:
     """Estado constante durante el bucle de rondas de chat().
@@ -1465,6 +1476,10 @@ class OllamaClient:
         # final, si NO era tool-call, se emite SOLO este fragmento, no
         # el content completo (eso duplicaba el texto ya emitido).
         buffered_parts: list[str] = []
+        # Texto ya emitido por on_text. Se usa para saber si
+        # estamos dentro de un code-fence markdown (``` abierto)
+        # y por tanto un `{` NO es una tool call textual.
+        emitted_so_far: list[str] = []
 
         async for event in self.iter_ollama_events(
             payload, cancel_event=cancel_event
@@ -1485,12 +1500,14 @@ class OllamaClient:
                                 # JSON cerrado y sin keywords: es
                                 # prosa con código/JSON. Emitir.
                                 on_text(joined)
+                                emitted_so_far.append(joined)
                                 buffering_textual = False
                                 buffered_parts.clear()
                             elif len(joined) > _MAX_PEEK_CHARS:
                                 # Safety net: demasiado tiempo sin
                                 # decidir. Asumir prosa.
                                 on_text(joined)
+                                emitted_so_far.append(joined)
                                 buffering_textual = False
                                 buffered_parts.clear()
                     else:
@@ -1505,16 +1522,30 @@ class OllamaClient:
                                 start = idx
                         if start == -1:
                             on_text(event.text)
+                            emitted_so_far.append(event.text)
                         elif start == 0:
-                            buffering_textual = True
-                            buffering_confirmed = False
-                            buffered_parts.append(event.text)
+                            # H5: si ya hay un fence abierto, el `{`
+                            # es codigo del mensaje, no tool call.
+                            if _in_code_fence("".join(emitted_so_far)):
+                                on_text(event.text)
+                                emitted_so_far.append(event.text)
+                            else:
+                                buffering_textual = True
+                                buffering_confirmed = False
+                                buffered_parts.append(event.text)
                         else:
-                            # Emitir lo previo, bufferear desde el `{`.
-                            on_text(event.text[:start])
-                            buffering_textual = True
-                            buffering_confirmed = False
-                            buffered_parts.append(event.text[start:])
+                            # Emitir lo previo, luego decidir.
+                            prefix = event.text[:start]
+                            rest = event.text[start:]
+                            on_text(prefix)
+                            emitted_so_far.append(prefix)
+                            if _in_code_fence("".join(emitted_so_far)):
+                                on_text(rest)
+                                emitted_so_far.append(rest)
+                            else:
+                                buffering_textual = True
+                                buffering_confirmed = False
+                                buffered_parts.append(rest)
             elif isinstance(event, StreamFinished):
                 message = event.message
                 metrics = event.metrics
@@ -1585,6 +1616,7 @@ class OllamaClient:
             pending = "".join(buffered_parts)
             if pending:
                 on_text(pending)
+                emitted_so_far.append(pending)
 
         # Adjuntar las métricas reales al mensaje para que chat() las
         # pueda propagar (via callback on_metrics) y la UI las muestre.
