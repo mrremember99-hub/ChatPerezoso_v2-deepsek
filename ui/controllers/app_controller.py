@@ -268,6 +268,9 @@ class AppController(QObject):
             self.chat_ctrl.cancel_paused_queue
         )
         self.chat_ctrl.metrics_updated.connect(self.diagnostics_ctrl.set_metrics)
+        self.chat_ctrl.no_tool_calling_detected.connect(
+            self._on_no_tool_calling_detected
+        )
 
         s.clear_chat_requested.connect(self._clear_chat)
         s.auto_approve_changed.connect(self._on_auto_approve_changed)
@@ -379,9 +382,24 @@ class AppController(QObject):
         warn(self.view, "Ollama", message)
 
     @Slot(str)
+    def _on_no_tool_calling_detected(self, model_name: str) -> None:
+        """Aviso tras varios fallos de tool calling del modelo."""
+        from core.models_config import VERIFIED_TOOL_MODELS
+        from ..views.dialogs import no_tool_calling_dialog
+
+        chosen = no_tool_calling_dialog(
+            self.view, model_name, sorted(VERIFIED_TOOL_MODELS)
+        )
+        if not chosen or chosen == model_name:
+            return
+        if self.view.sidebar.select_model(chosen):
+            self._on_model_selected(chosen)
+
+    @Slot(str)
     def _on_model_selected(self, name: str) -> None:
         if not name:
             return
+        self.chat_ctrl.reset_textual_failures()
         self.config.model = name
         self.config.save()
         self.chat_ctrl.set_current_model(name)

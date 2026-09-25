@@ -50,6 +50,26 @@ MODELS_FILE = BASE_DIR / "models.json"
 
 VALID_MODES = frozenset({"native", "xml", "auto"})
 
+# Modelos verificados con tool calling nativo en la app.
+# Verificados manualmente con el prompt OVERPAPER de 9 fases.
+VERIFIED_TOOL_MODELS: frozenset[str] = frozenset({
+    "gpt-oss:20b",
+    "ministral-3",
+})
+
+def is_verified_tool_model(name: str) -> bool:
+    """True si el modelo esta en la whitelist.
+
+    Compara sin tag: Ollama reporta ``ministral-3:latest``
+    pero el usuario escribe ``ministral-3``. Sin normalizar,
+    un modelo verificado pasaria por no verificado.
+    """
+    base = name.split(":", 1)[0].strip()
+    if not base:
+        return False
+    return any(m.split(":", 1)[0].strip() == base
+               for m in VERIFIED_TOOL_MODELS)
+
 
 @dataclass(frozen=True)
 class ModelOverride:

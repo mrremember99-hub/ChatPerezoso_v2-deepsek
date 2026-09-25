@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QDialog,
+    QComboBox,
     QDialogButtonBox,
     QFormLayout,
     QLabel,
@@ -316,6 +317,58 @@ def warn(parent: QWidget | None, title: str, message: str) -> None:
     box.setText(message)
     box.setTextFormat(Qt.TextFormat.PlainText)
     box.exec()
+
+
+def no_tool_calling_dialog(
+    parent: QWidget | None,
+    model_name: str,
+    verified_models: list[str],
+) -> str | None:
+    """Aviso cuando un modelo no emite tool calls nativas.
+
+    Devuelve el nombre del modelo elegido, o None si el usuario
+    prefiere seguir con el actual.
+    """
+    dialog = QDialog(parent)
+    dialog.setWindowTitle("Modelo sin tool calling")
+    dialog.setMinimumWidth(460)
+    layout = QVBoxLayout(dialog)
+
+    title = QLabel(
+        f"El modelo <b>{model_name}</b> no esta emitiendo "
+        "tool calls nativas."
+    )
+    title.setTextFormat(Qt.TextFormat.RichText)
+    title.setWordWrap(True)
+    layout.addWidget(title)
+
+    info = QLabel(
+        "Es una limitacion conocida del modelo, no de la app."
+    )
+    info.setWordWrap(True)
+    layout.addWidget(info)
+
+    layout.addWidget(QLabel("Cambiar a un modelo verificado:"))
+    combo = QComboBox()
+    combo.addItems(verified_models)
+    layout.addWidget(combo)
+
+    buttons = QDialogButtonBox()
+    change_btn = buttons.addButton(
+        "Cambiar modelo", QDialogButtonBox.ButtonRole.AcceptRole
+    )
+    continue_btn = buttons.addButton(
+        "Continuar de todos modos",
+        QDialogButtonBox.ButtonRole.RejectRole,
+    )
+    layout.addWidget(buttons)
+
+    change_btn.clicked.connect(dialog.accept)
+    continue_btn.clicked.connect(dialog.reject)
+
+    if dialog.exec() == QDialog.DialogCode.Accepted:
+        return combo.currentText().strip()
+    return None
 
 
 # -- agente ------------------------------------------------------------------

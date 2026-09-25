@@ -10,6 +10,7 @@ import logging
 from core.context_window import ContextWindow
 from core.history import AsyncHistoryWriter, HistoryStore
 from core.ollama import OllamaClient, is_textual_tool_failure
+from core.models_config import is_verified_tool_model
 from core.tool_provider import ToolProvider
 from core.prompt_phases import (
     DetectedPhases,
@@ -76,6 +77,10 @@ class ChatController(QObject):
     conversation_changed = Signal()
     mcp_error = Signal(str)
     textual_tool_attempt = Signal()
+    # Se emite tras 2 fallos consecutivos de tool calling con un
+    # modelo no verificado. Lleva el nombre del modelo como
+    # argumento. El AppController abre un dialogo con opciones.
+    no_tool_calling_detected = Signal(str)
     # Cola de prompts: (actual, total), 1-based.
     queue_progress = Signal(int, int)
     queue_finished = Signal()
@@ -154,6 +159,10 @@ class ChatController(QObject):
         # Reintentos del prompt actual. Solo informativo.
         self._current_retry_count: int = 0
         self._current_actions: list[ToolResult] = []
+        # Fallos consecutivos de tool calling textual. Reset:
+        # tras mostrar el dialogo, tras un turno con tool calls
+        # OK, y al cambiar de modelo.
+        self._consecutive_textual_failures: int = 0
         # Limite de contexto del modelo activo, en tokens. 0 = desconocido.
         self._context_limit: int = 0
         # ContextWindow cacheado. Se recrea solo cuando cambia el
@@ -844,6 +853,18 @@ class ChatController(QObject):
         # el JSON como texto dos veces seguidas.
         if is_textual_tool_failure(response_text):
             self.textual_tool_attempt.emit()
+            self._consecutive_textual_failures += 1
+            # Segundo fallo seguido con un modelo no verificado:
+            # avisar antes de que el usuario siga perdiendo tiempo.
+            if (
+                self._consecutive_textual_failures >= 2
+                and not is_verified_tool_model(self._last_model)
+            ):
+                self.no_tool_calling_detected.emit(self._last_model)
+                self._consecutive_textual_failures = 0
+        elif any(a.status == "ok" for a in self._current_actions):
+            # El modelo si tool-callea: resetear el contador.
+            self._consecutive_textual_failures = 0
         summary = self._summarize_actions()
         if summary:
             self.renderer.insert_narration(summary, active=False)
@@ -861,6 +882,10 @@ class ChatController(QObject):
                 active=False,
             )
         self._finish("Listo")
+
+    def reset_textual_failures(self) -> None:
+        """Resetea el contador de fallos consecutivos."""
+        self._consecutive_textual_failures = 0
 
     def _summarize_actions(self) -> str:
         actions = self._current_actions
