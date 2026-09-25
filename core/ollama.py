@@ -712,14 +712,54 @@ class OllamaClient:
             str(system_msg.get("content", "")) if system_msg else ""
         )
 
-        pruned, _budget = context_window.fit(
+        pruned, budget = context_window.fit(
             system_prompt=system_content,
             tool_definitions=tool_definitions,
             messages=rest,
             cache=cache,
         )
 
+        # Marcador de poda: si se recortaron mensajes, avisar al
+        # modelo explícitamente. Sin esto, el modelo sigue razonando
+        # como si tuviera el historial completo y alucina sobre cosas
+        # que ya no están en el contexto. Se re-hace el fit con el
+        # marcador añadido al system para que el presupuesto lo
+        # cuente. El marcador pesa ~50 tokens; la segunda pasada es
+        # rápida (O(n) en el peor caso) y garantiza que no exceda.
+        if budget.dropped_messages > 0:
+            marker = (
+                f"\n\n[CONTEXTO RECORTADO: {budget.dropped_messages} "
+                "mensaje(s) anteriores eliminados por límite de ventana. "
+                "No los tienes disponibles. Si necesitas información "
+                "previa, pídesela al usuario antes de responder.]"
+            )
+            new_system = system_content + marker
+            pruned, budget = context_window.fit(
+                system_prompt=new_system,
+                tool_definitions=tool_definitions,
+                messages=rest,
+                cache=cache,
+            )
+            # Si el system ya no cabe con el marcador, es que el
+            # presupuesto está al borde. Reintentamos sin marcador
+            # (el modelo perderá el aviso, pero al menos habrá
+            # contexto).
+            if budget.overflow and len(pruned) == 0:
+                pruned, budget = context_window.fit(
+                    system_prompt=system_content,
+                    tool_definitions=tool_definitions,
+                    messages=rest,
+                    cache=cache,
+                )
+                new_system = system_content
+            system_content = new_system
+
         if system_msg is not None:
+            # Actualizar el system message con el marcador si lo hay.
+            if system_content != str(system_msg.get("content", "")):
+                updated = dict(system_msg)
+                updated["content"] = system_content
+                return [updated] + list(pruned)
             return [system_msg] + list(pruned)
         return list(pruned)
 
