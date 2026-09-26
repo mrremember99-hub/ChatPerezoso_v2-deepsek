@@ -411,3 +411,14 @@ Con la orquestación determinista, el usuario puede querer:
 
 **Test**: mock de cola con 3 items, editar el segundo, verificar
 coherencia entre `_queue[1]` y `_phase_bodies[1]`.
+
+## Feature pendiente — Editar la cola de mensajes
+
+Con la orquestación determinista, el usuario puede querer editar un
+prompt pendiente, eliminar un item, o reordenar la cola.
+
+**Diseño**: click derecho en un QueueRow → menú contextual con
+Editar / Eliminar / Subir / Bajar. Diálogo modal con QPlainTextEdit.
+Señales nuevas en chat_controller: queue_edit_item,
+queue_remove_item, queue_move_item. Mantener sincronizados _queue,
+_phase_bodies, _queue_total y _queue_rows.
