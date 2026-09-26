@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from typing import Literal
 
@@ -43,7 +44,12 @@ class ModelCapabilities:
         return "native" if self.native_tools else "xml"
 
 
-_CACHE = {}
+# TTL de la caché de /api/show. 60s es suficiente para no
+# spamear Ollama en cada send(), pero corto para detectar
+# cambios en caliente (p. ej. Ollama arrancado tarde →
+# primera probe falla, segunda acierta pasados 60s).
+_CACHE_TTL_S = 60.0
+_CACHE: dict[tuple[str, str], tuple[float, "ModelCapabilities"]] = {}
 _CACHE_LOCK = threading.Lock()
 
 
@@ -89,13 +95,18 @@ def get_capabilities(host, model, *, timeout=5.0, force_refresh=False):
     override = get_override(model)
     key = (host.rstrip("/"), model)
     base: ModelCapabilities | None = None
+    now = time.monotonic()
     if not force_refresh:
         with _CACHE_LOCK:
-            base = _CACHE.get(key)
+            entry = _CACHE.get(key)
+        if entry is not None:
+            ts, cached = entry
+            if (now - ts) < _CACHE_TTL_S:
+                base = cached
     if base is None:
         base = _probe(host, model, timeout=timeout)
         with _CACHE_LOCK:
-            _CACHE[key] = base
+            _CACHE[key] = (time.monotonic(), base)
 
     # 2. Override manual: solo cambia native_tools y source. El
     #    resto del probe (context_length, vision, thinking, probed)
