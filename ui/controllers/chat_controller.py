@@ -597,10 +597,15 @@ class ChatController(QObject):
         summary = getattr(self, "_session_summary", None)
         summary_text = summary.text if summary is not None else ""
         if summary_text:
+            # H2 (auditoria 2026-09-26): base del agente PRIMERO,
+            # resumen despues. Antes el resumen (hasta 2k chars)
+            # desplazaba las instrucciones del rol, degradando
+            # instruction-following en modelos con atencion debil
+            # a tokens iniciales largos.
             effective_system_prompt = (
-                summary_text
+                effective_system_prompt
                 + "\n\n"
-                + effective_system_prompt
+                + summary_text
                 if effective_system_prompt.strip()
                 else summary_text
             )

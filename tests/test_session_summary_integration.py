@@ -156,7 +156,14 @@ def test_segundo_ciclo_no_reenvia_historial_viejo():
 # -- inyección en system prompt ---------------------------------------
 
 
-def test_resumen_se_inyecta_antes_del_system_base():
+def test_resumen_se_inyecta_despues_del_system_base():
+    """H2 (auditoria 2026-09-26): el system base va PRIMERO.
+
+    Antes el resumen (hasta 2k chars) se prependia al system base,
+    desplazando las instrucciones del rol del agente hacia el final
+    y degradando instruction-following. Ahora el rol va primero y
+    el resumen se anade despues.
+    """
     ctrl, captured = _make_ctrl_for_send()
     ctrl._session_summary.text = "[RESUMEN DE LA SESIÓN]\n· Progreso: X"
     ctrl._session_summary.last_message_count = 20
@@ -164,6 +171,7 @@ def test_resumen_se_inyecta_antes_del_system_base():
     _fill(ctrl, 19)
     ctrl.send("hola", "m", None, "SYSTEM BASE")
     sys_prompt = captured["calls"][0]["system_prompt"]
-    assert sys_prompt.startswith("[RESUMEN DE LA SESIÓN]")
     assert "SYSTEM BASE" in sys_prompt
-    assert sys_prompt.index("[RESUMEN DE LA SESIÓN]") < sys_prompt.index("SYSTEM BASE")
+    assert "[RESUMEN DE LA SESIÓN]" in sys_prompt
+    # Base primero, resumen despues.
+    assert sys_prompt.index("SYSTEM BASE") < sys_prompt.index("[RESUMEN DE LA SESIÓN]")

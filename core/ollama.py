@@ -222,8 +222,8 @@ _TOOL_RESULT_KEEP_TAIL = 20
 # loop de 5+ rondas acumula 15-25k tokens de thinking en el
 # payload (Hueco 5, 2026-09-26).
 _THINKING_MAX_CHARS = 4000
-_THINKING_KEEP_HEAD = 2500
-_THINKING_KEEP_TAIL = 1200
+_THINKING_KEEP_HEAD = 800
+_THINKING_KEEP_TAIL = 3000
 
 
 def _shrink_thinking(text: str | None) -> str:
@@ -1195,22 +1195,30 @@ class OllamaClient:
             else:
                 rest.append(m)
 
-        # Truncado selectivo: tool results largos se recortan antes
-        # de medir, para que fit() no los elimine enteros por no
-        # caber. Preserva head + tail; el modelo puede volver a
-        # leer si necesita mas. Ver Hueco 3 (2026-09-26).
-        rest = _shrink_tool_results(rest)
-
         system_content = (
             str(system_msg.get("content", "")) if system_msg else ""
         )
 
+        # H17 (auditoria 2026-09-26): fit() primero SIN shrinkear.
+        # El shrink incondicional cortaba tool results que el modelo
+        # necesitaba (p.ej. un archivo de 200 lineas reducido a 80)
+        # aunque hubiera presupuesto de sobra. Solo shrinkeamos si
+        # fit() reporta que algo no cabe.
         pruned, budget = context_window.fit(
             system_prompt=system_content,
             tool_definitions=tool_definitions,
             messages=rest,
             cache=cache,
         )
+
+        if budget.dropped_messages > 0 or budget.overflow:
+            rest = _shrink_tool_results(rest)
+            pruned, budget = context_window.fit(
+                system_prompt=system_content,
+                tool_definitions=tool_definitions,
+                messages=rest,
+                cache=cache,
+            )
 
         # Marcador de poda: si se recortaron mensajes, avisar al
         # modelo explícitamente. Sin esto, el modelo sigue razonando

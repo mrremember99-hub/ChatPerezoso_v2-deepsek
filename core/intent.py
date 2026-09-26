@@ -34,6 +34,16 @@ _CONFIRMATIONS: frozenset[str] = frozenset({
 from typing import Any
 
 
+# H13 (auditoria 2026-09-26): sufijos encliticos del imperativo
+# espanol ("ejecutalo", "leelo", "borrala").  no matchea el
+# verbo base contra la forma con enclitico porque la letra que
+# sigue crea continuidad, no frontera.
+_ENCLITIC_SUFFIXES: tuple[str, ...] = (
+    "lo", "la", "los", "las", "le", "les",
+    "me", "te", "se", "nos",
+)
+
+
 _CONJUGATION_SUFFIXES: tuple[str, ...] = (
     "o", "as", "a", "amos", "áis", "an",
     "o", "es", "e", "emos", "éis", "en",
@@ -43,6 +53,17 @@ _CONJUGATION_SUFFIXES: tuple[str, ...] = (
     "e", "es", "e", "emos", "éis", "en",
     "a", "as", "a", "amos", "áis", "an",
 )
+
+
+_IRREGULAR_FORMS: dict[str, tuple[str, ...]] = {
+    "encontrar": ("encontro", "encontraron", "encontrado", "encontrando"),
+    "buscar": ("buscando", "buscado"),
+    "correr": ("corrio", "corrieron", "corrido", "corriendo"),
+    "ejecutar": ("ejecutando", "ejecutado"),
+    "escribir": ("escribio", "escribieron", "escrito", "escribiendo"),
+    "leer": ("leyo", "leyeron", "leido", "leyendo"),
+    "editar": ("editando", "editado"),
+}
 
 
 MCP_ACTION_VERBS: tuple[str, ...] = (
@@ -337,6 +358,24 @@ class ToolIntentGate:
                 continue
             if re.search(rf"\b{re.escape(w)}\b", normalised):
                 return True
+            # H13: aceptar imperativo + enclitico ("ejecutalo" ->
+            # "ejecuta"+"lo"). Solo si el verbo termina en vocal
+            # (imperativo afirmativo: "lee"->"leelo", "borra"->"borralo").
+            if w[-1:] in "aeiou":
+                for suf in _ENCLITIC_SUFFIXES:
+                    if re.search(
+                        rf"\b{re.escape(w + suf)}\b", normalised
+                    ):
+                        return True
+            # H14 (auditoria 2026-09-26): formas irregulares de
+            # participio/gerundio/pret. 3a persona que el stemmer
+            # regular no genera ("buscando", "encontro", "escrito").
+            # Solo irregulares explicitos — NO formas regulares
+            # conjugadas, para no colisionar con sustantivos
+            # ("lista" no debe matchear "listar").
+            for irr in _IRREGULAR_FORMS.get(w, ()):
+                if re.search(rf"\b{re.escape(irr)}\b", normalised):
+                    return True
         return False
 
     @classmethod
@@ -443,4 +482,7 @@ def _cached_verb_forms(verb: str) -> tuple[str, ...]:
         stem = verb[:-1]
     if len(stem) >= 2:
         forms.update(f"{stem}{suffix}" for suffix in _CONJUGATION_SUFFIXES)
+    irregular = _IRREGULAR_FORMS.get(verb)
+    if irregular:
+        forms.update(irregular)
     return tuple(forms)

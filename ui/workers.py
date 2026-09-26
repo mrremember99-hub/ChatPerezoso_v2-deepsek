@@ -276,10 +276,12 @@ class ChatWorker(QObject):
         except Exception as exc:
             self.error.emit(str(exc))
             return
-        # D1 (auditoria 2026-09-26): resumen al final del turno, en
-        # el hilo del worker. Nunca bloquea la UI. Best-effort.
-        self._maybe_run_summary()
+        # H3 (auditoria 2026-09-26): finished ANTES del resumen.
+        # El resumen es best-effort y no debe retrasar el fin del
+        # turno visible para el usuario. Si el modelo de resumen
+        # tarda 1-3s, la UI ya habra desbloqueado.
         self.finished.emit(result)
+        self._maybe_run_summary()
 
     def _maybe_run_summary(self) -> None:
         """Genera el resumen de sesion al final del turno (D1).

@@ -188,3 +188,52 @@ def test_gate_still_rejects_generic_questions(tmp_path):
         "explica cómo funciona el módulo os",
     )
 
+
+
+# -- H13: encliticos en _mentions_any_word (auditoria 2026-09-26) --------
+
+import pytest as _pytest  # noqa: E402
+from core.intent import IntentRule, ToolIntentGate as _Gate
+
+
+@_pytest.mark.parametrize("texto, verbo_esperado", [
+    ("ejecutalo por mi", "ejecuta"),
+    ("correlo ahora", "corre"),
+    ("lanzalo ya", "lanza"),
+    ("compilalo primero", "compila"),
+    ("instalalo sin preguntar", "instala"),
+    ("testealo tu", "testea"),
+    ("buscalo en el proyecto", "busca"),
+    ("encuentralo rapido", "encuentra"),
+    ("muestralo", "muestra"),
+    ("borralo del workspace", "borra"),
+    ("leelo", "lee"),
+    ("editalo", "edita"),  # infinitivo, no enclitico pero verifica que no rompe
+])
+def test_enclitic_matches_base_verb(texto, verbo_esperado):
+    gate = _Gate({"_": IntentRule(
+        verbs=(verbo_esperado,),
+        requires_target=False,
+    )})
+    # _mentions_any_word es classmethod; se prueba via tool_is_requested
+    rule = IntentRule(verbs=(verbo_esperado,), requires_target=False)
+    gate2 = _Gate({"_x": rule})
+    assert gate2.tool_is_requested("_x", texto), \
+        f"no matcheo {verbo_esperado!r} en {texto!r}"
+
+
+# -- H14: irregulares ----------------------------------------------------
+
+@_pytest.mark.parametrize("texto, verbo", [
+    ("ya lo encontro", "encontrar"),
+    ("lo ha encontrado", "encontrar"),
+    ("esta buscando", "buscar"),
+    ("se corrio", "correr"),
+    ("ha ejecutado la tarea", "ejecutar"),
+    ("lo ha escrito", "escribir"),
+])
+def test_irregular_forms_match(texto, verbo):
+    rule = IntentRule(verbs=(verbo,), requires_target=False)
+    gate = _Gate({"_x": rule})
+    assert gate.tool_is_requested("_x", texto), \
+        f"no matcheo {verbo!r} en {texto!r}"
