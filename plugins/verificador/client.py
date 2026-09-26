@@ -117,6 +117,54 @@ _MYPY_RELEVANT_CODES: frozenset[str] = frozenset({
 })
 
 
+def _check_main_guard(source: str) -> list[SyntaxIssue]:
+    """Detecta ``if __name__ == "main":`` (falta un guion bajo).
+
+    Modelos pequeños escriben ``"main"`` en vez de ``"__main__"``
+    y el bloque ``main()`` nunca se ejecuta. El script termina con
+    exit 0 sin output y la app no puede distinguirlo de un exito.
+    Ruff y mypy no lo detectan (bug 2026-09-26).
+    """
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        # Si no compila, check_python_syntax ya lo reporta.
+        return []
+    issues: list[SyntaxIssue] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        # Detectar `__name__ == "..."` y `"..." == __name__`.
+        sides: list[ast.expr] = [node.left] + list(node.comparators)
+        if len(sides) != 2:
+            continue
+        left, right = sides
+        name_side: ast.expr | None = None
+        const_side: ast.expr | None = None
+        for a, b in ((left, right), (right, left)):
+            if isinstance(a, ast.Name) and a.id == "__name__":
+                name_side, const_side = a, b
+                break
+        if name_side is None:
+            continue
+        if not isinstance(const_side, ast.Constant):
+            continue
+        value = const_side.value
+        if not isinstance(value, str):
+            continue
+        if value == "__main__":
+            continue
+        issues.append(SyntaxIssue(
+            line=node.lineno,
+            column=node.col_offset,
+            message=(
+                f'__name__ comparado con "{value}" en vez de '
+                '"__main__". El bloque main() no se ejecutara.'
+            ),
+        ))
+    return issues
+
+
 def check_python_syntax(path: Path) -> list[SyntaxIssue]:
     try:
         source = path.read_text(encoding="utf-8")
@@ -134,7 +182,8 @@ def check_python_syntax(path: Path) -> list[SyntaxIssue]:
         ]
     except ValueError as exc:
         return [SyntaxIssue(0, 0, f"parse error: {exc}")]
-    return []
+    # Compila: buscar patrones que ejecutan silenciosamente mal.
+    return _check_main_guard(source)
 
 
 def check_syntax(path: Path) -> list[SyntaxIssue]:
