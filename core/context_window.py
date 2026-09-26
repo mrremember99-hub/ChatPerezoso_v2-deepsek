@@ -20,6 +20,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from typing import Final
+from .token_calibration import (
+    chars_per_token,
+    has_calibration,
+)
 
 
 # Ratio de chars por token según densidad de código.
@@ -49,6 +53,13 @@ _DEFAULT_MIN_TURNS: Final[int] = 8
 # sobreestimado se pase del limite del modelo y Ollama lo trunque
 # en silencio. El coste es conservar un poco menos de historial.
 _PROMPT_BUDGET_MARGIN: Final[float] = 0.85
+# Margen relajado cuando el modelo tiene calibracion empirica
+# (>=3 observaciones de prompt_eval_count). La estimacion
+# chars/token ya esta ajustada al modelo real, no a la heuristica
+# universal. Elegido 0.92 (8% de margen) en vez del 0.94 que
+# propuso la auditoria: con contenido atipico (emojis, codigo
+# con muchos simbolos) un 6% de margen puede ser insuficiente.
+_PROMPT_BUDGET_MARGIN_CALIBRATED: Final[float] = 0.92
 
 
 class RequestTokenCache:
@@ -192,8 +203,12 @@ class ContextWindow:
     def prompt_budget(self) -> int:
         raw = max(0, self._limit - self.output_reserve)
         # Margen de seguridad contra la desviacion de la estimacion.
-        # Ver _PROMPT_BUDGET_MARGIN para la justificacion.
-        return int(raw * _PROMPT_BUDGET_MARGIN)
+        # Con calibracion empirica, la estimacion ya es fiable:
+        # se relaja el margen. Ver _PROMPT_BUDGET_MARGIN.
+        margin = _PROMPT_BUDGET_MARGIN
+        if self._model and has_calibration(self._model):
+            margin = _PROMPT_BUDGET_MARGIN_CALIBRATED
+        return int(raw * margin)
 
     # -- estimación ----------------------------------------------------------
 
@@ -209,7 +224,6 @@ class ContextWindow:
 
         # Si el modelo tiene calibración suficiente, usarla.
         if self._model:
-            from .token_calibration import has_calibration, chars_per_token
             if has_calibration(self._model):
                 ratio = chars_per_token(self._model)
                 return max(1, int(len(text) / ratio))

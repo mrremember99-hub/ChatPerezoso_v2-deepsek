@@ -451,3 +451,45 @@ def test_poda_no_destruye_tool_chain_completa():
     assert tiene_tool_chain, (
         f"La cadena de tools desaparecio. Roles: {roles}"
     )
+
+
+# -- N3 (auditoria 2026-09-26): margen adaptativo ------------------------
+
+def test_prompt_budget_relajado_con_calibracion(monkeypatch):
+    """Con calibracion empirica se usa el margen relajado (0.92)."""
+    import core.context_window as cw
+
+    monkeypatch.setattr(
+        cw, "has_calibration", lambda m: m == "test-model"
+    )
+    w = cw.ContextWindow(
+        limit_tokens=1000, output_reserve=100, model="test-model"
+    )
+    expected = int(900 * cw._PROMPT_BUDGET_MARGIN_CALIBRATED)
+    assert w.prompt_budget == expected
+
+
+def test_prompt_budget_conservador_sin_calibracion(monkeypatch):
+    """Sin calibracion (o sin modelo) se mantiene el margen original."""
+    import core.context_window as cw
+
+    monkeypatch.setattr(cw, "has_calibration", lambda m: False)
+    w = cw.ContextWindow(
+        limit_tokens=1000, output_reserve=100, model="test-model"
+    )
+    expected = int(900 * cw._PROMPT_BUDGET_MARGIN)
+    assert w.prompt_budget == expected
+
+
+def test_prompt_budget_sin_modelo_usa_margen_conservador(monkeypatch):
+    """Sin modelo asignado no se consulta calibracion."""
+    import core.context_window as cw
+
+    # Si alguien intenta consultar, reventamos: no debe llamarse.
+    def boom(m):
+        raise AssertionError("has_calibration no debe llamarse sin modelo")
+
+    monkeypatch.setattr(cw, "has_calibration", boom)
+    w = cw.ContextWindow(limit_tokens=1000, output_reserve=100)
+    expected = int(900 * cw._PROMPT_BUDGET_MARGIN)
+    assert w.prompt_budget == expected
