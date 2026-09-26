@@ -206,6 +206,73 @@ _MAX_STALL_RETRIES = 1
 
 # Tools que consideramos "escritura real". Si una de estas
 # devuelve exito en el turno, el modelo ha hecho su trabajo.
+# Limites del truncado selectivo de tool results largos.
+# 100 lineas = ~60 tokens de contenido + marcador, suficiente
+# para dar contexto sin inflar el prefill. Si el modelo necesita
+# mas, puede volver a leer con start_line/end_line.
+_TOOL_RESULT_MAX_LINES = 100
+_TOOL_RESULT_KEEP_HEAD = 60
+_TOOL_RESULT_KEEP_TAIL = 20
+
+
+def _shrink_tool_result_content(text: str) -> str:
+    """Trunca un tool result largo preservando head + tail.
+
+    Devuelve el texto original si ya es corto. Si no, conserva
+    las primeras _TOOL_RESULT_KEEP_HEAD lineas y las ultimas
+    _TOOL_RESULT_KEEP_TAIL, con un marcador en medio.
+    """
+    if not text:
+        return text
+    lines = text.splitlines(keepends=True)
+    total = len(lines)
+    if total <= _TOOL_RESULT_MAX_LINES:
+        return text
+    head = lines[:_TOOL_RESULT_KEEP_HEAD]
+    tail = lines[-_TOOL_RESULT_KEEP_TAIL:]
+    omitted = total - _TOOL_RESULT_KEEP_HEAD - _TOOL_RESULT_KEEP_TAIL
+    # head[-1] ya termina en \n: no hace falta prefijo en el
+    # marcador, y añadirlo crea una linea vacia intermedia.
+    marker = (
+        f"[... {omitted} lineas omitidas por tamano. "
+        "Si necesitas el contenido completo, vuelve a leerlo "
+        "con start_line/end_line. ...]\n"
+    )
+    return "".join(head) + marker + "".join(tail)
+
+
+def _shrink_tool_results(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Devuelve copia de `messages` con tool results largos truncados.
+
+    Aplica a role="tool" (modo nativo) o a role="user" cuyo
+    content empieza por ``[TOOL_RESULT:`` (modo XML). NO toca
+    assistant ni user reales.
+    """
+    out: list[dict[str, Any]] = []
+    for m in messages:
+        content = m.get("content")
+        if not isinstance(content, str):
+            out.append(m)
+            continue
+        role = m.get("role")
+        is_tool = role == "tool" or (
+            role == "user" and content.startswith("[TOOL_RESULT:")
+        )
+        if not is_tool:
+            out.append(m)
+            continue
+        shrunk = _shrink_tool_result_content(content)
+        if shrunk == content:
+            out.append(m)
+        else:
+            new = dict(m)
+            new["content"] = shrunk
+            out.append(new)
+    return out
+
+
 _WRITE_TOOLS: frozenset[str] = frozenset({
     "escribir_archivo",
     "editar_archivo",
@@ -1075,6 +1142,12 @@ class OllamaClient:
                 system_msg = m
             else:
                 rest.append(m)
+
+        # Truncado selectivo: tool results largos se recortan antes
+        # de medir, para que fit() no los elimine enteros por no
+        # caber. Preserva head + tail; el modelo puede volver a
+        # leer si necesita mas. Ver Hueco 3 (2026-09-26).
+        rest = _shrink_tool_results(rest)
 
         system_content = (
             str(system_msg.get("content", "")) if system_msg else ""
