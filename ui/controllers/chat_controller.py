@@ -165,6 +165,9 @@ class ChatController(QObject):
         self._consecutive_textual_failures: int = 0
         # Limite de contexto del modelo activo, en tokens. 0 = desconocido.
         self._context_limit: int = 0
+        # Ultimo ContextBudget calculado en _compact_if_needed.
+        # Se usa para el badge de contexto del sidebar (Hueco 4).
+        self._last_budget: Any | None = None
         # ContextWindow cacheado. Se recrea solo cuando cambia el
         # limite efectivo (ver _get_context_window).
         self._context_window: ContextWindow | None = None
@@ -703,6 +706,21 @@ class ChatController(QObject):
         self._persist()
         self.conversation_changed.emit()
 
+    def context_summary(self) -> tuple[int, int, int]:
+        """Devuelve (estimated_prompt, prompt_budget, dropped_messages).
+
+        Si aun no hay budget calculado (primer turno), devuelve
+        (0, 0, 0). El sidebar usa esto para el badge de contexto.
+        """
+        b = self._last_budget
+        if b is None:
+            return (0, 0, 0)
+        return (
+            int(getattr(b, "estimated_prompt", 0)),
+            int(getattr(b, "prompt_budget", 0)),
+            int(getattr(b, "dropped_messages", 0)),
+        )
+
     def _compact_if_needed(self) -> None:
         """Poda el historial si no cabe en el presupuesto de contexto.
 
@@ -742,6 +760,7 @@ class ChatController(QObject):
             tool_definitions=tool_definitions,
             messages=self.messages,
         )
+        self._last_budget = budget
 
         if budget.dropped_messages > 0:
             logger.info(

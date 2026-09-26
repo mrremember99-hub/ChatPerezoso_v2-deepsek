@@ -173,6 +173,12 @@ class Sidebar(QWidget):
         layout.addSpacing(14)
         diagnostics_title = QLabel("SESIÓN")
         diagnostics_title.setObjectName("SectionTitle")
+
+        # Badge de uso del contexto (Hueco 4).
+        self.context_usage_label = QLabel("")
+        self.context_usage_label.setObjectName("ContextUsageBadge")
+        self.context_usage_label.setVisible(False)
+        layout.addWidget(self.context_usage_label)
         layout.addWidget(diagnostics_title)
         self.diagnostics = DiagnosticsPanel()
         layout.addWidget(self.diagnostics)
@@ -278,6 +284,44 @@ class Sidebar(QWidget):
     def current_agent(self) -> str:
         return self.agent_combo.currentText().strip()
 
+    def set_context_usage(
+        self,
+        estimated: int,
+        budget: int,
+        dropped: int,
+    ) -> None:
+        """Actualiza el badge de contexto (Hueco 4).
+
+        estimated: tokens estimados del prompt actual.
+        budget: presupuesto efectivo (prompt_budget).
+        dropped: mensajes podados en el ultimo fit.
+        """
+        if budget <= 0:
+            self.context_usage_label.setVisible(False)
+            return
+        self.context_usage_label.setVisible(True)
+        pct = estimated / budget if budget else 0.0
+        txt = (
+            f"Contexto: {_format_tokens(estimated)} / "
+            f"{_format_tokens(budget)}"
+        )
+        if dropped:
+            txt += f" · {dropped} podados"
+        self.context_usage_label.setText(txt)
+        if pct >= 0.9:
+            state = "high"
+        elif pct >= 0.7:
+            state = "mid"
+        else:
+            state = "ok"
+        self.context_usage_label.setProperty("state", state)
+        self.context_usage_label.style().unpolish(
+            self.context_usage_label
+        )
+        self.context_usage_label.style().polish(
+            self.context_usage_label
+        )
+
     def set_workspace_name(self, name: str) -> None:
         self.workspace_label.setText(name)
 
@@ -363,3 +407,9 @@ class Sidebar(QWidget):
         # config persistente que el usuario puede querer cambiar
         # durante un turno. Su cambio no afecta al turno en curso
         # (el worker ya tiene su flag capturado), solo al siguiente.
+
+def _format_tokens(tokens: int) -> str:
+    """Formatea un contador de tokens (12400 -> '12.4k')."""
+    if tokens >= 1000:
+        return f"{tokens / 1000:.1f}k"
+    return str(tokens)

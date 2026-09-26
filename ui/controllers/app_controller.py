@@ -268,6 +268,11 @@ class AppController(QObject):
             self.chat_ctrl.cancel_paused_queue
         )
         self.chat_ctrl.metrics_updated.connect(self.diagnostics_ctrl.set_metrics)
+        # Badge de contexto (Hueco 4): se actualiza cada vez que
+        # cambia la conversacion. Barato (una property leida).
+        self.chat_ctrl.conversation_changed.connect(
+            self._refresh_context_badge
+        )
         self.chat_ctrl.no_tool_calling_detected.connect(
             self._on_no_tool_calling_detected
         )
@@ -632,6 +637,15 @@ class AppController(QObject):
         # los items quedaban visibles tras terminar la cola hasta
         # que el usuario enviara algo nuevo.
         self.view.right_panel.set_queue_list([])
+
+    @Slot()
+    def _refresh_context_badge(self) -> None:
+        """Actualiza el badge de contexto del sidebar (Hueco 4)."""
+        try:
+            est, budget, dropped = self.chat_ctrl.context_summary()
+        except Exception:
+            return
+        self.view.sidebar.set_context_usage(est, budget, dropped)
 
     @Slot()
     def _on_regenerate(self) -> None:
