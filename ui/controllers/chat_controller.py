@@ -369,6 +369,11 @@ class ChatController(QObject):
         self.queue_progress.emit(current, total)
         # Marcar el prompt que arranca como "running".
         self.queue_item_status_changed.emit(current, "running")
+        # P2: resetear historial entre fases. Cada fase es
+        # independiente; sin esto se arrastra el historial de las
+        # anteriores (~12k tokens en un prompt de 9 fases).
+        if self._phase_plan is not None:
+            self._reset_phase_history()
         self.send(
             next_prompt,
             self._last_model,
@@ -595,6 +600,23 @@ class ChatController(QObject):
         if self._persist_timer.isActive():
             self._persist_timer.stop()
         self.store.clear()
+        self.conversation_changed.emit()
+
+    def _reset_phase_history(self) -> None:
+        """Limpia el historial entre fases de orquestacion (P2).
+
+        Cada fase es una conversacion independiente: el modelo
+        no necesita arrastrar los mensajes de fases anteriores.
+        Antes, la fase N recibia el historial completo de las
+        fases 1..N-1, dando prompts de ~14000 tokens cuando
+        bastaban ~2000 (auditoria 2026-09-26, P2).
+
+        NO borra el archivo persistido (store.clear lo haria) y
+        NO toca el render: las fases anteriores siguen visibles
+        en el chat. Solo se limpia lo que va al modelo.
+        """
+        self.messages.clear()
+        self._current_actions.clear()
         self.conversation_changed.emit()
 
     def shutdown(self, deadline: float | None = None) -> bool:

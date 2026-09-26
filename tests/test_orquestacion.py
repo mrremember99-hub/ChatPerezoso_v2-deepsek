@@ -81,3 +81,84 @@ def test_workspace_provider_se_usa_en_snapshot(qapp):
     ctrl.set_workspace_provider(lambda: None)
     assert ctrl._current_workspace_snapshot() == ""
     
+
+# -- P2: reset historial entre fases ------------------------------------
+
+def test_reset_phase_history_limpia_mensajes(qapp):
+    """El helper limpia self.messages y self._current_actions."""
+    from core.prompt_phases import DetectedPhases
+    ctrl = _make_controller(qapp)
+    ctrl.messages = [
+        {"role": "user", "content": "fase 1"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "fase 2"},
+    ]
+    ctrl._current_actions = [object()]
+    ctrl._reset_phase_history()
+    assert ctrl.messages == []
+    assert ctrl._current_actions == []
+
+
+def test_advance_queue_resetea_historial_con_fases(qapp, monkeypatch):
+    """Al avanzar la cola con _phase_plan, el historial previo se limpia."""
+    from core.prompt_phases import DetectedPhases
+    ctrl = _make_controller(qapp)
+    # Simular estado intermedio: fase 1 termino, quedan mensajes.
+    ctrl.messages = [
+        {"role": "user", "content": "fase 1"},
+        {"role": "assistant", "content": "respuesta"},
+    ]
+    ctrl._current_actions = [object()]
+    # Cola con una fase pendiente.
+    ctrl._phase_plan = DetectedPhases(
+        preamble="reglas",
+        phases=["FASE 2\ncuerpo de la fase 2"],
+    )
+    ctrl._phase_bodies = ["FASE 2\ncuerpo de la fase 2"]
+    ctrl._queue = ["prompt-fase-2"]
+    ctrl._queue_total = 2
+    ctrl._queue_active = True
+    ctrl._last_model = "test-model"
+    ctrl._last_options = {}
+    ctrl._last_system_prompt = ""
+    ctrl.set_workspace_provider(lambda: None)
+
+    sent = {"messages_antes": None}
+    def fake_send(*a, **k):
+        # Capturar el estado de messages en el momento del send.
+        sent["messages_antes"] = list(ctrl.messages)
+    monkeypatch.setattr(ctrl, "send", fake_send)
+
+    ctrl._advance_queue()
+
+    # Antes del send, el historial debe estar limpio.
+    assert sent["messages_antes"] == [], (
+        f"Historial no reseteado: {sent['messages_antes']}"
+    )
+
+
+def test_advance_queue_no_resetea_sin_fases(qapp, monkeypatch):
+    """Sin _phase_plan, la cola no toca el historial (compatibilidad)."""
+    ctrl = _make_controller(qapp)
+    ctrl.messages = [
+        {"role": "user", "content": "algo previo"},
+    ]
+    ctrl._phase_plan = None
+    ctrl._queue = ["prompt-suelto"]
+    ctrl._queue_total = 1
+    ctrl._queue_active = True
+    ctrl._last_model = "test-model"
+    ctrl._last_options = {}
+    ctrl._last_system_prompt = ""
+
+    sent = {"messages_antes": None}
+    def fake_send(*a, **k):
+        sent["messages_antes"] = list(ctrl.messages)
+    monkeypatch.setattr(ctrl, "send", fake_send)
+
+    ctrl._advance_queue()
+
+    # Sin plan de fases, el historial se preserva.
+    assert sent["messages_antes"] == [
+        {"role": "user", "content": "algo previo"},
+    ]
