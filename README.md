@@ -364,3 +364,50 @@ inicio de la fase 2 es 1 (solo el user actual).
 `core/ollama.py::_stream_async` topa `num_ctx` a 32k para no forzar
 KV cache gigante en modelos con context_length alto (gpt-oss:
 131072 → ~26 GB KV, no cabe en M4 Air).
+
+## Feature pendiente — Editar la cola de mensajes
+
+Con la orquestación determinista, el usuario puede querer:
+
+- **Editar un prompt pendiente** antes de que se envíe (por ejemplo,
+  reescribir la Fase 5 sin tener que cancelar y reenviar el prompt
+  completo).
+- **Eliminar un item** de la cola.
+- **Reordenar** (mover arriba/abajo).
+
+**Diseño propuesto**:
+- Click derecho en un `QueueRow` → menú contextual con Editar /
+  Eliminar / Subir / Bajar.
+- Diálogo modal con `QPlainTextEdit` para editar.
+- `chat_controller` recibe señales nuevas: `queue_edit_item(idx, text)`,
+  `queue_remove_item(idx)`, `queue_move_item(idx, delta)`.
+- Mantener sincronizados `_queue`, `_phase_bodies`, `_queue_total`,
+  y el `_queue_rows` de la UI.
+
+**Complejidad**: media. Toca `right_panel.py` (QueueRow) +
+`chat_controller.py` (estado de cola) + `app_controller.py` (wiring).
+
+**Test**: mock de cola con 3 items, editar el segundo, verificar
+que `_queue[1]` y `_phase_bodies[1]` cambian coherentemente.
+## Feature pendiente — Editar la cola de mensajes
+
+Con la orquestación determinista, el usuario puede querer:
+
+- **Editar un prompt pendiente** antes de que se envíe.
+- **Eliminar un item** de la cola.
+- **Reordenar** (mover arriba/abajo).
+
+**Diseño propuesto**:
+- Click derecho en un `QueueRow` → menú contextual con Editar /
+  Eliminar / Subir / Bajar.
+- Diálogo modal con `QPlainTextEdit` para editar.
+- `chat_controller` recibe señales: `queue_edit_item(idx, text)`,
+  `queue_remove_item(idx)`, `queue_move_item(idx, delta)`.
+- Mantener sincronizados `_queue`, `_phase_bodies`, `_queue_total`,
+  y `_queue_rows` de la UI.
+
+**Complejidad**: media. Toca `right_panel.py` + `chat_controller.py`
++ `app_controller.py`.
+
+**Test**: mock de cola con 3 items, editar el segundo, verificar
+coherencia entre `_queue[1]` y `_phase_bodies[1]`.
