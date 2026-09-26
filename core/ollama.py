@@ -215,6 +215,38 @@ _TOOL_RESULT_KEEP_HEAD = 60
 _TOOL_RESULT_KEEP_TAIL = 20
 
 
+# Limite de tamano del thinking reenviado al modelo entre rondas
+# de tool calling. ~4k chars aprox ~1k tokens. Sin esto, un tool
+# loop de 5+ rondas acumula 15-25k tokens de thinking en el
+# payload (Hueco 5, 2026-09-26).
+_THINKING_MAX_CHARS = 4000
+_THINKING_KEEP_HEAD = 2500
+_THINKING_KEEP_TAIL = 1200
+
+
+def _shrink_thinking(text: str | None) -> str:
+    """Trunca un thinking largo preservando head + tail.
+
+    El thinking de modelos de razonamiento se reenvia al modelo
+    en el assistant message de la ronda siguiente. Si es muy
+    largo (gpt-oss en nivel high), se acumula y dispara el
+    prefill. Se conserva el final (suele ser la conclusion util)
+    y el inicio (contexto del razonamiento).
+    """
+    if not text:
+        return ""
+    if len(text) <= _THINKING_MAX_CHARS:
+        return text
+    head = text[:_THINKING_KEEP_HEAD]
+    tail = text[-_THINKING_KEEP_TAIL:]
+    omitted = len(text) - _THINKING_KEEP_HEAD - _THINKING_KEEP_TAIL
+    marker = (
+        f"\n\n[... {omitted} caracteres de razonamiento omitidos "
+        "por tamano ...]\n\n"
+    )
+    return head + marker + tail
+
+
 def _shrink_tool_result_content(text: str) -> str:
     """Trunca un tool result largo preservando head + tail.
 
@@ -1045,8 +1077,13 @@ class OllamaClient:
         # Reenviar el thinking del modelo en el assistant message. El
         # chat template de modelos de razonamiento (gpt-oss, qwen3)
         # lo espera; sin él, el tool loop puede degradar.
+        #
+        # Hueco 5 (2026-09-26): truncar para no acumular 20k+ tokens
+        # de thinking en tool loops largos. Preserva head + tail.
         if result.assistant_thinking:
-            assistant_msg["thinking"] = result.assistant_thinking
+            assistant_msg["thinking"] = _shrink_thinking(
+                result.assistant_thinking
+            )
         ctx.history.append(assistant_msg)
         had_block = False
         had_execution = False
