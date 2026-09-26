@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.tools import ToolRegistry
+from core.tools import ToolRegistry, _normalise_args
 from core.workspace import Workspace
 
 
@@ -78,21 +78,6 @@ def test_leer_archivo_acepta_line_start_line_end(tmp_path):
     assert lineas == ['2', '3', '4'], lineas
 
 
-# -- prioridad: canonico gana -----------------------------------------
-
-
-def test_canonico_gana_sobre_alias(tmp_path):
-    (tmp_path / 'real.txt').write_text('contenido real', encoding='utf-8')
-    (tmp_path / 'alias.txt').write_text('del alias', encoding='utf-8')
-    tools = _tools(tmp_path)
-    result = tools.call(
-        'leer_archivo',
-        {'path': 'real.txt', 'archivo': 'alias.txt'},
-    )
-    assert 'contenido real' in result
-    assert 'del alias' not in result
-
-
 # -- alias desconocido sigue rechazado --------------------------------
 
 
@@ -165,3 +150,50 @@ def test_editar_archivo_acepta_aliases_completos(tmp_path):
         },
     )
     assert (tmp_path / "a.py").read_text(encoding="utf-8") == "hola universo"
+
+
+# -- D7: colisión de aliases (auditoría 2026-09-26) ---------------------
+
+def test_canonico_y_alias_mismo_valor_se_colapsa(tmp_path):
+    (tmp_path / "a.txt").write_text("ok", encoding="utf-8")
+    tools = _tools(tmp_path)
+    result = tools.call(
+        "leer_archivo",
+        {"path": "a.txt", "archivo": "a.txt"},
+    )
+    assert "ok" in result
+    assert "ERROR" not in result
+
+
+def test_canonico_y_alias_distinto_valor_es_error(tmp_path):
+    (tmp_path / "real.txt").write_text("contenido real", encoding="utf-8")
+    (tmp_path / "alias.txt").write_text("del alias", encoding="utf-8")
+    tools = _tools(tmp_path)
+    result = tools.call(
+        "leer_archivo",
+        {"path": "real.txt", "archivo": "alias.txt"},
+    )
+    assert result.startswith("ERROR")
+    assert "conflicto" in result
+    assert "path" in result
+
+
+def test_normalise_args_solo_canonico_passthrough():
+    spec = {"properties": {"path": {"type": "string"}}}
+    assert _normalise_args({"path": "x"}, spec) == {"path": "x"}
+
+
+def test_normalise_args_solo_alias_remap():
+    spec = {"properties": {"path": {"type": "string"}}}
+    assert _normalise_args({"archivo": "x"}, spec) == {"path": "x"}
+
+
+def test_normalise_args_mismo_valor_colapsa():
+    spec = {"properties": {"path": {"type": "string"}}}
+    assert _normalise_args({"path": "x", "archivo": "x"}, spec) == {"path": "x"}
+
+
+def test_normalise_args_distinto_valor_error():
+    spec = {"properties": {"path": {"type": "string"}}}
+    out = _normalise_args({"path": "a", "archivo": "b"}, spec)
+    assert isinstance(out, str) and out.startswith("ERROR")

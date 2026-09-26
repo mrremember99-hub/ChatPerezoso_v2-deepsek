@@ -308,6 +308,10 @@ class ToolRegistry:
         # path...) antes de validar. Modelos pequeños inventan
         # nombres; si la intencion es correcta, no rechazamos.
         arguments = _normalise_args(arguments, spec)
+        if isinstance(arguments, str):
+            return arguments
+        if isinstance(arguments, str):
+            return arguments
 
         for field in spec["required"]:
             if field not in arguments:
@@ -477,16 +481,22 @@ _ALIASES: dict[str, tuple[str, ...]] = {
 
 def _normalise_args(
     arguments: dict[str, Any], spec: dict[str, Any]
-) -> dict[str, Any]:
+) -> dict[str, Any] | str:
     """Reemplaza aliases por su nombre canonico (si la tool lo usa).
 
     Reglas:
       - Solo se remapea si la tool declara el canonico en su schema.
-      - Si el canonico ya viene en `arguments`, gana ese; el alias
-        se descarta sin error (un modelo no deberia mandar ambos,
-        pero no rompemos por eso).
-      - Si el alias no esta en la tabla, se mantiene tal cual
-        (y la validacion posterior lo rechaza si no esta en schema).
+      - Si dos claves (canonica o alias) normalizan al mismo canonico
+        con el MISMO valor, se colapsan sin error (idempotente).
+      - Si normalizan al mismo canonico con valores DISTINTOS, se
+        devuelve un str de error (D7, auditoria 2026-09-26). Antes
+        se descartaba el alias en silencio y ganaba el primero.
+      - Si la clave no esta en la tabla, se mantiene tal cual
+        (y la validacion posterior la rechaza si no esta en schema).
+
+    Devuelve un `dict` (caso normal) o un `str` empezando por
+    "ERROR:" (colision con valores distintos). El llamante debe
+    comprobar `isinstance(arguments, str)` antes de usar el dict.
     """
     if not arguments:
         return arguments
@@ -504,22 +514,22 @@ def _normalise_args(
         return arguments
 
     out: dict[str, Any] = {}
-    seen_canonical: set[str] = set()
+    # Nombre original (alias o canonico) que aporto cada valor, para
+    # el mensaje de error si hay colision con valores distintos.
+    origin: dict[str, str] = {}
     for k, v in arguments.items():
-        canonical = alias_to_canonical.get(k)
-        if canonical is None:
-            out[k] = v
-            if k in properties:
-                seen_canonical.add(k)
-            continue
-        if canonical in seen_canonical:
-            # Ya teniamos el canonico: descartar el alias.
-            continue
+        canonical = alias_to_canonical.get(k, k)
+        if canonical in out:
+            if out[canonical] == v:
+                # Mismo valor por dos alias distintos: benigno.
+                continue
+            return (
+                f"ERROR: argumentos en conflicto para {canonical!r}: "
+                f"{origin[canonical]!r} y {k!r} tienen valores distintos."
+            )
         out[canonical] = v
-        seen_canonical.add(canonical)
+        origin[canonical] = k
     return out
-
-
 def _matches_type(value: Any, declared: str) -> bool:
     if declared == "string":
         return isinstance(value, str)
