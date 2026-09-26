@@ -292,6 +292,16 @@ _FALSE_COMPLETION_NUDGE = (
 # Maximo de nudges por falso completado. Uno basta.
 _MAX_FALSE_COMPLETION_RETRIES = 1
 
+# Palabras interrogativas en espanol. Solo con tilde: sin ella,
+# "como"/"que" aparecen en frases declarativas y disparan
+# falsos positivos. La lista es CORTA y estable (las palabras
+# interrogativas de un idioma no crecen).
+_QUESTION_MARKERS: tuple[str, ...] = (
+    "cómo", "qué", "cuál", "cuáles",
+    "cuándo", "dónde", "quién", "quiénes",
+    "por qué", "cuánto", "cuánta", "cuántos", "cuántas",
+)
+
 
 # Mensaje cuando el stream se corto antes de done=true (EOF, red,
 # timeout sin cierre limpio). El texto parcial ya se mostro al
@@ -647,46 +657,28 @@ class OllamaClient:
                 # modificar, el modelo emitio alguna tool call
                 # pero ninguna de escritura fue exitosa, y el
                 # texto final declara exito. Nudge especifico.
+                # Fase 1 (2026-09-26): nudge por evidencia, no por
+                # palabras. Basta con (a) que el usuario pida una
+                # escritura, (b) que NO sea una pregunta
+                # informativa, (c) que el assistant cierre el turno
+                # sin preguntar al usuario, y (d) que NADA se haya
+                # escrito en este turno. Cualquier texto final vale:
+                # no dependemos de mantener listas de frases de
+                # exito ("se ha escrito", "he completado"...).
                 if (
                     state.false_completion_retries_used
                     < _MAX_FALSE_COMPLETION_RETRIES
-                    # H7 del out(1) + bug 2026-09-26: dispara si
-                    # (a) alguna tool fallo (patron mistral:
-                    # ejecutar_comando sin command), (b) hay una
-                    # tool de escritura disponible que no se uso
-                    # (patron read-only -> 'Hecho.'), o (c) el
-                    # modelo NO emitio NINGUNA tool call y dijo
-                    # haber escrito (mistral-small3.2 diciendo
-                    # 'se ha escrito correctamente' tras emitir
-                    # solo texto CLI). Sin (c), el caso 'modelo
-                    # responde texto sin tools' no se detectaba.
-                    and (
-                        state.any_tool_failed
-                        or bool(_WRITE_TOOLS & ctx.tool_names)
-                        or not state.any_tool_call_emitted
-                    )
                     and not state.any_write_executed
                     and ctx.tool_names
+                    and bool(_WRITE_TOOLS & ctx.tool_names)
                     and self._user_requested_write(
                         self._effective_auth_text(ctx)
                     )
-                    and (
-                        self._looks_like_false_completion(
-                            result.final_text
-                        )
-                        or (
-                            not state.any_tool_call_emitted
-                            and self._has_code_block(
-                                result.final_text, 10
-                            )
-                        )
-                        or (
-                            state.any_tool_call_emitted
-                            and bool(_WRITE_TOOLS & ctx.tool_names)
-                            and self._has_code_block(
-                                result.final_text, 10
-                            )
-                        )
+                    and not self._user_asked_question(
+                        ctx.authorization_text
+                    )
+                    and self._assistant_closes_turn(
+                        result.final_text
                     )
                 ):
                     state.false_completion_retries_used += 1
@@ -1281,6 +1273,43 @@ class OllamaClient:
             "## LLAMADAS NATIVAS\n"
             "Usa exclusivamente las llamadas de herramienta nativas de Ollama."
         )
+
+    @staticmethod
+    def _user_asked_question(text: str | None) -> bool:
+        """True si el texto del usuario es una pregunta.
+
+        Evita disparar el nudge por preguntas informativas que
+        mencionan verbos de escritura ("¿cómo escribo un archivo?").
+        Usa marcas inequivocas (?, ¿) y palabras interrogativas
+        con tilde en espanol. NO incluye "que" sin tilde: es
+        demasiado frecuente en frases declarativas.
+        """
+        if not text:
+            return False
+        s = text.strip()
+        if not s:
+            return False
+        if s.endswith(("?", "？")):
+            return True
+        if s.startswith("¿"):
+            return True
+        lower = s.lower()
+        return any(m in lower for m in _QUESTION_MARKERS)
+
+    @staticmethod
+    def _assistant_closes_turn(text: str | None) -> bool:
+        """True si el assistant cerro el turno (no pregunto nada).
+
+        Una respuesta que termina en '?' es una peticion de
+        informacion, no un cierre. Cualquier otra cosa no vacia
+        cuenta como cierre.
+        """
+        if not text:
+            return False
+        s = text.strip()
+        if not s:
+            return False
+        return not s.rstrip().endswith(("?", "？"))
 
     @staticmethod
     def _effective_auth_text(ctx: Any) -> str:

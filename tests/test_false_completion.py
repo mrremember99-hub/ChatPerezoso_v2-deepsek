@@ -460,3 +460,90 @@ def test_confirmacion_corta_hereda_sustantivo_correccion():
     )
     effective = OllamaClient._effective_auth_text(ctx)
     assert OllamaClient._user_requested_write(effective)
+
+
+# -- Fase 1 (2026-09-26): evidencia, no palabras ------------------------
+
+def test_user_asked_question_marca_interrogacion():
+    from core.ollama import OllamaClient
+    assert OllamaClient._user_asked_question("¿Cómo escribo un archivo?")
+    assert OllamaClient._user_asked_question("Cómo escribo un archivo")
+    assert OllamaClient._user_asked_question("Explica qué hace esta función")
+    assert OllamaClient._user_asked_question("escribe archivo?")
+
+
+def test_user_asked_question_no_declarativo():
+    from core.ollama import OllamaClient
+    assert not OllamaClient._user_asked_question("escribe un archivo x.py")
+    assert not OllamaClient._user_asked_question("modifica gui.py")
+    assert not OllamaClient._user_asked_question("añade un botón")
+    assert not OllamaClient._user_asked_question("")
+    assert not OllamaClient._user_asked_question(None)
+
+
+def test_user_asked_question_no_matchea_que_sin_tilde():
+    from core.ollama import OllamaClient
+    assert not OllamaClient._user_asked_question(
+        "escribe un archivo que contenga hola"
+    )
+
+
+def test_assistant_closes_turn_declaracion():
+    from core.ollama import OllamaClient
+    assert OllamaClient._assistant_closes_turn("He completado la tarea.")
+    assert OllamaClient._assistant_closes_turn("Voy a hacerlo.")
+    assert OllamaClient._assistant_closes_turn("Listo.")
+    assert OllamaClient._assistant_closes_turn("Hecho")
+
+
+def test_assistant_closes_turn_pregunta():
+    from core.ollama import OllamaClient
+    assert not OllamaClient._assistant_closes_turn(
+        "¿Quieres que realice esta corrección?"
+    )
+    assert not OllamaClient._assistant_closes_turn("¿Confirmas?")
+    assert not OllamaClient._assistant_closes_turn("")
+
+
+def test_assistant_closes_turn_vacio():
+    from core.ollama import OllamaClient
+    assert not OllamaClient._assistant_closes_turn("")
+    assert not OllamaClient._assistant_closes_turn("   ")
+    assert not OllamaClient._assistant_closes_turn(None)
+
+
+def test_evidence_based_pipeline_detecta_falso_completado():
+    """Pipeline completo sin frases de exito.
+
+    Caso: user pide escribir (no pregunta), assistant dice 'lo he
+    hecho' (no pregunta), nada se escribio. Evidencia: falso
+    completado."""
+    from core.ollama import OllamaClient
+
+    user_text = "modifica gui.py para añadir un botón LOAD"
+    assistant_text = "He modificado el archivo correctamente."
+    any_write_executed = False
+
+    assert OllamaClient._user_requested_write(user_text)
+    assert not OllamaClient._user_asked_question(user_text)
+    assert OllamaClient._assistant_closes_turn(assistant_text)
+    assert not any_write_executed
+
+
+def test_evidence_based_no_dispara_si_usuario_pregunta():
+    from core.ollama import OllamaClient
+
+    user_text = "¿Cómo escribo un archivo en Python?"
+    assert OllamaClient._user_requested_write(user_text)
+    assert OllamaClient._user_asked_question(user_text)
+
+
+def test_evidence_based_no_dispara_si_assistant_pregunta():
+    from core.ollama import OllamaClient
+
+    user_text = "modifica gui.py"
+    assistant_text = "¿Quieres que realice el cambio?"
+
+    assert OllamaClient._user_requested_write(user_text)
+    assert not OllamaClient._user_asked_question(user_text)
+    assert not OllamaClient._assistant_closes_turn(assistant_text)
