@@ -311,7 +311,11 @@ def test_stream_flags_textual_tool_call_without_showing_it(monkeypatch):
         seen.append,
     )
 
-    assert message["_textual_tool_name"] == "leer_archivo"
+    # Investigacion 2026-09-26 (§5): el JSON limpio ahora se
+    # recupera como tool_call nativo en vez de solo marcar el
+    # nombre. El stream no emite nada al usuario (JSON filtrado).
+    assert message.get("tool_calls"), message
+    assert message["tool_calls"][0]["function"]["name"] == "leer_archivo"
     assert seen == []
 
 

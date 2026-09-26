@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import threading
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable
 
@@ -1314,6 +1314,94 @@ class OllamaClient:
         return ""
 
     @staticmethod
+    @staticmethod
+    def _iter_balanced_json(text: str) -> Iterator[str]:
+        """Genera substrings balanceados {...} en orden de aparicion.
+
+        No hace un parseo real: solo cuenta llaves. Cada candidato
+        se intenta json.loads por el llamante. Ignora bloques
+        desbalanceados al final (JSON a medio escribir).
+        """
+        depth = 0
+        start = -1
+        for i, ch in enumerate(text):
+            if ch == "{":
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    yield text[start : i + 1]
+                    start = -1
+                elif depth < 0:
+                    depth = 0
+                    start = -1
+
+    @staticmethod
+    def _parse_textual_json_tool_call(
+        content: str, tool_names: set[str]
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Extrae un tool_call emitido como JSON en prosa.
+
+        Cubre el bug de Ollama #15539 (Gemma4 y similares): el
+        modelo emite el JSON correctamente pero el parser no lo
+        intercepta y aparece como texto plano en content.
+
+        Acepta varias formas:
+          - {"name": "X", "arguments": {...}}
+          - {"name": "X", "parameters": {...}}
+          - {"function": {"name": "X", "arguments": {...}}}
+          - {"tool_calls": [{"function": {...}}]}
+
+        Devuelve (name, args) solo si name esta en tool_names:
+        evita falsos positivos con JSON de ejemplo.
+        """
+        if not content or "{" not in content:
+            return None
+        import json as _json
+        # Endurecido: solo si el content es SOLO bloques JSON
+        # (con whitespace entre ellos). Si hay prosa alrededor,
+        # es narracion del modelo, no una tool call filtrada.
+        # Evita falsos positivos con ejemplos de codigo.
+        remaining = content
+        for block in OllamaClient._iter_balanced_json(content):
+            remaining = remaining.replace(block, "", 1)
+        if remaining.strip():
+            return None
+        for block in OllamaClient._iter_balanced_json(content):
+            try:
+                data = _json.loads(block)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            name = data.get("name")
+            args = data.get("arguments") or data.get("parameters")
+            # Forma {"function": {"name": ..., "arguments": ...}}
+            fn = data.get("function")
+            if not isinstance(name, str) and isinstance(fn, dict):
+                name = fn.get("name")
+                if args is None:
+                    args = fn.get("arguments") or fn.get("parameters")
+            # Forma {"tool_calls": [{"function": {...}}]}
+            if not isinstance(name, str):
+                tcs = data.get("tool_calls")
+                if isinstance(tcs, list) and tcs:
+                    first = tcs[0]
+                    if isinstance(first, dict):
+                        fn2 = first.get("function")
+                        if isinstance(fn2, dict):
+                            name = fn2.get("name")
+                            if args is None:
+                                args = fn2.get("arguments") or fn2.get("parameters")
+            if not isinstance(name, str) or name not in tool_names:
+                continue
+            if not isinstance(args, dict):
+                args = {}
+            return name, args
+        return None
+
     def _textual_tool_call_name(content: str, tool_names: set[str]) -> str | None:
         if "{" in content and '"name"' in content:
             match = OllamaClient._TEXTUAL_CALL_NAME.search(content)
@@ -1629,11 +1717,28 @@ class OllamaClient:
                     )
                     message["content"] = strip_tool_call_blocks(content)
                 else:
-                    textual_name = self._textual_tool_call_name(
+                    # Investigacion 2026-09-26 (§5): fallback JSON
+                    # crudo. Cubre el bug de Ollama #15539 (Gemma4
+                    # y similares): el modelo emite el JSON
+                    # correctamente pero el parser no lo intercepta.
+                    json_call = self._parse_textual_json_tool_call(
                         content, tool_names
                     )
-                    if textual_name:
-                        message["_textual_tool_name"] = textual_name
+                    if json_call is not None:
+                        jname, jargs = json_call
+                        message["_textual_json_call"] = (jname, jargs)
+                        message.setdefault("tool_calls", []).append({
+                            "function": {
+                                "name": jname,
+                                "arguments": jargs,
+                            }
+                        })
+                    else:
+                        textual_name = OllamaClient._textual_tool_call_name(
+                            content, tool_names
+                        )
+                        if textual_name:
+                            message["_textual_tool_name"] = textual_name
 
         # Si activamos buffering pero NO resulto ser tool call
         # textual NI hubo tool_calls nativos, el usuario no ha visto
