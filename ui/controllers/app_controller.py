@@ -131,6 +131,7 @@ class AppController(QObject):
         # Sirve para descartar resultados obsoletos cuando el usuario
         # cambia de modelo varias veces seguidas.
         self._caps_generation: int = 0
+        self._caps_pending: tuple[str, int] | None = None
         self._rebuild_composite()
 
         self.history_store = HistoryStore()
@@ -415,22 +416,27 @@ class AppController(QObject):
     def _refresh_capabilities(self, model: str) -> None:
         """Consulta /api/show en un hilo aparte y actualiza el badge.
 
-        Si ya hay una consulta en curso, se descarta y se lanza la
-        nueva. La consulta antigua termina en su propio hilo; su
-        resultado se descarta al llegar por comparación de generación.
-        No se llama a `wait()`: bloquearía el hilo UI hasta 500 ms.
+        Latest-wins: solo un probe vive a la vez. Si llega una
+        peticion mientras otro corre, se guarda como pendiente y se
+        lanza al terminar. Los cambios intermedios se sobreescriben.
+
+        httpx.post es sincrono con timeout 5s y no se puede cancelar
+        a media llamada; por eso la politica es no solapar, no
+        cancelar. Antes se lanzaba siempre un QThread nuevo y se
+        llamaba quit() al viejo: quit() no hace nada mientras run()
+        esta bloqueado, asi que con N cambios rapidos quedaban N
+        hilos vivos hasta 5s cada uno.
         """
-        # Incrementamos la generación: cualquier resultado que llegue
-        # con una generación anterior se descarta.
         self._caps_generation += 1
         generation = self._caps_generation
 
         if self._caps_thread is not None and self._caps_thread.isRunning():
-            # Sin wait(): el hilo antiguo termina cuando su
-            # get_capabilities() retorne (timeout 5s). Su resultado
-            # se descarta por generación obsoleta.
-            self._caps_thread.quit()
+            self._caps_pending = (model, generation)
+            return
 
+        self._start_caps_worker(model, generation)
+
+    def _start_caps_worker(self, model: str, generation: int) -> None:
         self._caps_thread = QThread(self)
         self._caps_worker = CapabilitiesWorker(
             self.config.ollama_host, model, generation=generation
@@ -441,10 +447,9 @@ class AppController(QObject):
         self._caps_worker.error.connect(self._on_capabilities_error)
         self._caps_worker.finished.connect(self._caps_thread.quit)
         self._caps_worker.error.connect(self._caps_thread.quit)
-        self._caps_thread.finished.connect(self._cleanup_caps_thread)
+        self._caps_thread.finished.connect(self._on_caps_thread_finished)
         self._caps_thread.start()
 
-    @Slot(str, object, int)
     def _on_capabilities_ready(
         self, model: str, caps, generation: int
     ) -> None:
@@ -492,22 +497,24 @@ class AppController(QObject):
         if model == self.view.sidebar.current_model():
             self.view.sidebar.set_capabilities("unknown")
 
-    def _cleanup_caps_thread(self) -> None:
-        # `sender()` es el QThread que acaba de terminar. Si no es el
-        # actual (porque ya lanzamos uno nuevo), solo liberamos el
-        # antiguo.
+    def _on_caps_thread_finished(self) -> None:
+        # Un QThread acaba de terminar. Si hay un modelo pendiente
+        # (el usuario cambio de modelo mientras el actual corria),
+        # lo lanzamos ahora. Si no, dejamos el estado limpio.
         thread = self.sender()
         if thread is not None and thread is not self._caps_thread:
             thread.deleteLater()
-            return
-        if self._caps_thread is not None:
-            self._caps_thread.deleteLater()
-        self._caps_thread = None
-        self._caps_worker = None
+        else:
+            if self._caps_thread is not None:
+                self._caps_thread.deleteLater()
+            self._caps_thread = None
+            self._caps_worker = None
 
-    # -- MCP -----------------------------------------------------------------
+        pending = self._caps_pending
+        self._caps_pending = None
+        if pending is not None:
+            self._start_caps_worker(pending[0], pending[1])
 
-    @Slot(list, list, list, list)
     def _on_mcp_servers_changed(
         self,
         _entries: list,
