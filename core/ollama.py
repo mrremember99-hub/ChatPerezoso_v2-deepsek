@@ -245,6 +245,8 @@ _WRITE_VERBS = _WRITE_VERBS + (
 )
 _WRITE_VERBS = _WRITE_VERBS + (
     "edicion", "ediciones",
+    "correccion", "correcciones",
+    "reparacion", "reparaciones",
     "modificacion", "modificaciones",
     "creacion", "creaciones",
     "actualizacion", "actualizaciones",
@@ -666,7 +668,7 @@ class OllamaClient:
                     and not state.any_write_executed
                     and ctx.tool_names
                     and self._user_requested_write(
-                        ctx.authorization_text
+                        self._effective_auth_text(ctx)
                     )
                     and (
                         self._looks_like_false_completion(
@@ -1279,6 +1281,30 @@ class OllamaClient:
             "## LLAMADAS NATIVAS\n"
             "Usa exclusivamente las llamadas de herramienta nativas de Ollama."
         )
+
+    @staticmethod
+    def _effective_auth_text(ctx: Any) -> str:
+        """Texto de autorizacion efectivo para el nudge.
+
+        Si el usuario esta confirmando con texto corto ("si",
+        "vale", "ok") y el assistant anterior contenia el verbo
+        de escritura en su pregunta, se concatenan. Cubre el flujo
+        assistant-pregunta -> usuario-confirma -> assistant dice
+        'He corregido' sin emitir tool_call (bug 2026-09-26 noche).
+
+        Solo aplica a confirmaciones: en un mensaje normal, se
+        devuelve authorization_text tal cual.
+        """
+        from .intent import ToolIntentGate
+        text = getattr(ctx, "authorization_text", "") or ""
+        if not text:
+            return ""
+        if not ToolIntentGate._is_short_confirmation(text):
+            return text
+        last = getattr(ctx, "last_assistant", "") or ""
+        if not last:
+            return text
+        return last + "\n" + text
 
     @staticmethod
     def _user_requested_write(text: str | None) -> bool:

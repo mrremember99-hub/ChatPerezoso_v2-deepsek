@@ -374,3 +374,89 @@ def test_has_code_block_con_tildes():
     body = "\n".join(f"linea {i}" for i in range(12))
     text = "~~~\n" + body + "\n~~~\n"
     assert OllamaClient._has_code_block(text, 10)
+
+
+# -- Confirmacion corta hereda verbo del assistant (bug 2026-09-26) ----
+
+def _make_ctx(auth_text: str, last_assistant: str = ""):
+    """Helper para construir un ctx minimo para _effective_auth_text."""
+    class _Ctx:
+        pass
+    c = _Ctx()
+    c.authorization_text = auth_text
+    c.last_assistant = last_assistant
+    return c
+
+
+def test_effective_auth_text_normal_pasa_tal_cual():
+    from core.ollama import OllamaClient
+    ctx = _make_ctx("crea un archivo x.py", last_assistant="...")
+    assert OllamaClient._effective_auth_text(ctx) == "crea un archivo x.py"
+
+
+def test_effective_auth_text_confirmacion_hereda_assistant():
+    from core.ollama import OllamaClient
+    ctx = _make_ctx(
+        "si",
+        last_assistant="¿Quieres que realice esta corrección?",
+    )
+    result = OllamaClient._effective_auth_text(ctx)
+    assert "corrección" in result or "correccion" in result.lower()
+    assert "si" in result.lower()
+
+
+def test_effective_auth_text_sin_assistant_devuelve_solo_confirmacion():
+    from core.ollama import OllamaClient
+    ctx = _make_ctx("si", last_assistant="")
+    assert OllamaClient._effective_auth_text(ctx) == "si"
+
+
+def test_effective_auth_text_vacio():
+    from core.ollama import OllamaClient
+    ctx = _make_ctx("", last_assistant="algo")
+    assert OllamaClient._effective_auth_text(ctx) == ""
+
+
+def test_nudge_dispara_tras_confirmacion_corta():
+    """Caso real: assistant pregunta, usuario dice 'si', assistant
+    dice 'He corregido el error' sin tool_call. Con el fix, el texto
+    efectivo de autorizacion incluye la pregunta del assistant y
+    contiene 'corrige' (verbo de escritura) → nudge listo para
+    disparar."""
+    from core.ollama import OllamaClient
+    ctx = _make_ctx(
+        "si",
+        last_assistant="¿Quieres que realice esta corrección?",
+    )
+    effective = OllamaClient._effective_auth_text(ctx)
+    # El verbo "corrige" (o "corrección") esta en el texto efectivo.
+    assert OllamaClient._user_requested_write(effective)
+    # Y el texto final del assistant matchea falso completado.
+    assert OllamaClient._looks_like_false_completion(
+        "He corregido el error en alpha.py."
+    )
+
+
+def test_sustantivo_correccion_autoriza():
+    """Caso real: assistant pregunta '¿Quieres que realice esta
+    corrección?', usuario confirma. El sustantivo 'corrección' debe
+    autorizar escritura."""
+    from core.ollama import OllamaClient
+    assert OllamaClient._user_requested_write("correccion")
+    assert OllamaClient._user_requested_write(
+        "¿Quieres que realice esta corrección?"
+    )
+    assert OllamaClient._user_requested_write(
+        "necesita una reparacion urgente"
+    )
+
+
+def test_confirmacion_corta_hereda_sustantivo_correccion():
+    """Pipeline completo: confirmacion + sustantivo del assistant."""
+    from core.ollama import OllamaClient
+    ctx = _make_ctx(
+        "si",
+        last_assistant="¿Quieres que realice esta corrección?",
+    )
+    effective = OllamaClient._effective_auth_text(ctx)
+    assert OllamaClient._user_requested_write(effective)
