@@ -523,52 +523,6 @@ class ChatController(QObject):
                 return content if isinstance(content, str) else ""
         return ""
 
-    def _maybe_update_summary(self) -> None:
-        """Regenera el resumen rolling si toca (Hueco 2).
-
-        Se llama al inicio de send(). Best-effort: si el modelo
-        pequeno falla, la conversacion sigue sin resumen.
-        """
-        summary = getattr(self, "_session_summary", None)
-        if summary is None:
-            return
-        if not summary.should_update(
-            len(self.messages)
-        ):
-            return
-        prompt = build_summary_prompt(
-            self.messages,
-            previous_summary=summary.text,
-            since_index=summary.last_message_count,
-        )
-        if not prompt:
-            return
-        self.status.emit("Actualizando resumen de sesion...")
-        try:
-            raw = self.client.chat(
-                self._summary_model,
-                [{"role": "user", "content": prompt}],
-                None,
-                lambda _t: None,
-                lambda *_a: "",
-                max_rounds=1,
-                options={"temperature": 0.3},
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Resumen de sesion fallo (modelo %s): %s",
-                self._summary_model, exc,
-            )
-            return
-        block = format_summary_block(raw)
-        if not block:
-            return
-        self._session_summary.apply(block, len(self.messages))
-        logger.info(
-            "Resumen de sesion actualizado (%d ciclos, %d chars)",
-            self._session_summary.cycles, len(block),
-        )
-
     def send(
         self,
         text: str,
@@ -587,9 +541,24 @@ class ChatController(QObject):
         self.renderer.insert_user_message(text)
         self._append_message({"role": "user", "content": text})
         self.renderer.reset()
-        # Resumen rolling (Hueco 2): puede tardar 1-2s con
-        # qwen3:1.7b. Best-effort, no bloquea si falla.
-        self._maybe_update_summary()
+        # Resumen rolling (Hueco 2) — D1 (auditoria 2026-09-26):
+        # el calculo se movio al ChatWorker. Aqui SOLO se construye
+        # el prompt (puro, sin red) si toca. El worker lo envia al
+        # modelo al terminar el turno y emite summary_ready.
+        summary_prompt = ""
+        summary_new_index = 0
+        _summary = getattr(self, "_session_summary", None)
+        if _summary is not None and _summary.should_update(
+            len(self.messages)
+        ):
+            summary_prompt = build_summary_prompt(
+                self.messages,
+                keep_recent=0,
+                previous_summary=_summary.text,
+                since_index=_summary.last_message_count,
+            )
+            if summary_prompt:
+                summary_new_index = len(self.messages)
         # Trace del turno anterior: leer ANTES de limpiar
         # _current_actions. Los tool_results no van al historial
         # persistente, asi que sin esto el modelo no sabe que
@@ -617,7 +586,13 @@ class ChatController(QObject):
         self._current_actions = []
         self._set_state(ChatState.STREAMING)
         self.status.emit("Generando…")
-        self._spawn_worker(model, self._last_options, effective_system_prompt)
+        self._spawn_worker(
+            model,
+            self._last_options,
+            effective_system_prompt,
+            summary_prompt,
+            summary_new_index,
+        )
 
     def regenerate(self, model: str) -> None:
         if self._state.is_active or not self.messages or not model:
@@ -642,7 +617,14 @@ class ChatController(QObject):
         self.renderer.remove_from_last_user()
         self.send(user_text, model, self._last_options, self._last_system_prompt)
 
-    def _spawn_worker(self, model, options=None, system_prompt=""):
+    def _spawn_worker(
+        self,
+        model,
+        options=None,
+        system_prompt="",
+        summary_prompt="",
+        summary_new_index=0,
+    ):
         self._thread = QThread(self)
         self._worker = ChatWorker(
             self.client,
@@ -655,6 +637,9 @@ class ChatController(QObject):
             auto_approve_shell=self._auto_approve_shell,
             context_window=self._get_context_window(),
             verificador_hook=self._verificador_hook,
+            summary_model=self._summary_model,
+            summary_prompt=summary_prompt,
+            summary_new_index=summary_new_index,
         )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
@@ -664,6 +649,7 @@ class ChatController(QObject):
         self._worker.confirmation_requested.connect(self._on_confirmation)
         self._worker.tool_auto_approved.connect(self._on_tool_auto_approved)
         self._worker.metrics_updated.connect(self._on_worker_metrics)
+        self._worker.summary_ready.connect(self._on_summary_ready)
         self._worker.finished.connect(self._on_done)
         self._worker.error.connect(self._on_error)
         self._worker.cancelled.connect(self._on_cancelled)
@@ -706,6 +692,11 @@ class ChatController(QObject):
         """
         self.messages.clear()
         self._current_actions.clear()
+        # Cada fase es una conversacion independiente: el resumen
+        # de una fase no debe filtrarse a la siguiente.
+        summary = getattr(self, "_session_summary", None)
+        if summary is not None:
+            summary.reset()
         self.conversation_changed.emit()
 
     def shutdown(self, deadline: float | None = None) -> bool:
@@ -981,6 +972,27 @@ class ChatController(QObject):
         """
         self.renderer.insert_narration(
             f"Auto-aprobado: {name}", active=False
+        )
+
+    def _on_summary_ready(self, raw: str, new_index: int) -> None:
+        """Aplica el resumen generado por el ChatWorker (D1).
+
+        Llega en el hilo de UI (Qt queued connection, porque el
+        worker vive en un QThread). `new_index` es el
+        `len(messages)` en el momento del send; el resumen cubre
+        los mensajes desde el ultimo `last_message_count` hasta
+        ahi, sin huecos.
+        """
+        summary = getattr(self, "_session_summary", None)
+        if summary is None:
+            return
+        block = format_summary_block(raw)
+        if not block:
+            return
+        summary.apply(block, new_index)
+        logger.info(
+            "Resumen de sesion actualizado (%d ciclos, %d chars)",
+            summary.cycles, len(block),
         )
 
     def _on_done(self, result: str) -> None:

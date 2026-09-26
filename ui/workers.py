@@ -1,6 +1,7 @@
 """Workers que corren en hilos aparte."""
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Any
@@ -10,6 +11,9 @@ from PySide6.QtCore import QObject, Signal
 from core.ollama import OllamaCancelled, OllamaClient, OllamaError
 from core.tool_result import ToolResult
 from plugins.mcp import MCPError
+
+
+logger = logging.getLogger(__name__)
 
 
 # Tiempo máximo que un worker espera una confirmación del usuario.
@@ -198,6 +202,9 @@ class ChatWorker(QObject):
     finished = Signal(str)
     cancelled = Signal()
     error = Signal(str)
+    # Resumen de sesion generado al final del turno (D1).
+    # raw_text, new_index (len(messages) en el momento del send).
+    summary_ready = Signal(str, int)
 
     def __init__(
         self,
@@ -211,6 +218,9 @@ class ChatWorker(QObject):
         auto_approve_shell: bool = False,
         context_window: Any = None,
         verificador_hook: Any = None,
+        summary_model: str = "",
+        summary_prompt: str = "",
+        summary_new_index: int = 0,
     ):
         super().__init__()
         self.client = client
@@ -240,6 +250,11 @@ class ChatWorker(QObject):
         self._confirmation_name = ""
         self._confirmation_arguments: dict[str, Any] = {}
         self._confirmation_approved = False
+        # Resumen de sesion (D1). Si summary_prompt esta vacio, el
+        # worker no hace nada extra al terminar el turno.
+        self.summary_model = summary_model
+        self.summary_prompt = summary_prompt
+        self.summary_new_index = summary_new_index
 
     def run(self) -> None:
         try:
@@ -255,11 +270,50 @@ class ChatWorker(QObject):
                 context_window=self.context_window,
                 on_metrics=self.metrics_updated.emit,
             )
-            self.finished.emit(result)
         except OllamaCancelled:
             self.cancelled.emit()
+            return
         except Exception as exc:
             self.error.emit(str(exc))
+            return
+        # D1 (auditoria 2026-09-26): resumen al final del turno, en
+        # el hilo del worker. Nunca bloquea la UI. Best-effort.
+        self._maybe_run_summary()
+        self.finished.emit(result)
+
+    def _maybe_run_summary(self) -> None:
+        """Genera el resumen de sesion al final del turno (D1).
+
+        Corre en el mismo hilo que el turno principal, DESPUES de
+        que este termine. Si no hay prompt preparado, o el turno
+        fue cancelado, no hace nada. Los fallos del modelo se
+        registran y se ignoran: el resumen es best-effort.
+        """
+        if not self.summary_prompt or not self.summary_model:
+            return
+        if self._cancel_event.is_set():
+            return
+        try:
+            raw = self.client.chat(
+                self.summary_model,
+                [{"role": "user", "content": self.summary_prompt}],
+                None,
+                lambda _t: None,
+                lambda *_a: "",
+                max_rounds=1,
+                options={"temperature": 0.3},
+            )
+        except OllamaCancelled:
+            return
+        except Exception as exc:
+            logger.warning(
+                "Resumen de sesion fallo (modelo %s): %s",
+                self.summary_model, exc,
+            )
+            return
+        if self._cancel_event.is_set():
+            return
+        self.summary_ready.emit(raw or "", self.summary_new_index)
 
     def _on_model_text(self, text: str) -> None:
         """Callback que el OllamaClient invoca por cada delta de texto.
