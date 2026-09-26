@@ -314,6 +314,15 @@ class ChatController(QObject):
 
         Si no hay fases, delega a ``send()`` normal.
         """
+        # Si hay una cola pausada (por cancelacion de una fase) y
+        # el usuario envia un mensaje nuevo, se cancela la cola:
+        # es lo intuitivo. Sin esto, _queue_active sigue True y el
+        # mensaje se descarta en silencio (bug UX 2026-09-26).
+        if self._queue_active and self._queue_paused:
+            self.cancel_paused_queue()
+            self.status.emit(
+                "Cola pausada cancelada al enviar mensaje nuevo"
+            )
         if self._state.is_active or self._queue_active:
             return False
         if not text or not model:

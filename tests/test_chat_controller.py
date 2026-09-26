@@ -584,3 +584,49 @@ def test_clear_removes_persisted_history(tmp_path, qapp, monkeypatch):
     ctrl.clear()
     assert ctrl.messages == []
     assert store.load() is None
+
+
+# -- Bug UX 2026-09-26: cola pausada bloqueaba send_user_input ----------
+
+def test_send_user_input_cancela_cola_pausada(controller, monkeypatch):
+    """Con cola pausada, enviar un mensaje nuevo la cancela."""
+    ctrl, _ = controller
+    # Estado simulado: cola pausada tras cancelar una fase.
+    ctrl._queue_active = True
+    ctrl._queue_paused = True
+    ctrl._queue = ["pendiente 1", "pendiente 2"]
+    ctrl._queue_total = 3
+    ctrl._state = type(ctrl._state).IDLE  # type: ignore
+
+    called = {"send": 0}
+    def fake_send(*a, **k):
+        called["send"] += 1
+    monkeypatch.setattr(ctrl, "send", fake_send)
+
+    result = ctrl.send_user_input("hola", "test-model")
+
+    assert result is True
+    assert called["send"] == 1, "No delego en send()"
+    assert ctrl._queue_active is False
+    assert ctrl._queue_paused is False
+    assert ctrl._queue == []
+
+
+def test_send_user_input_con_cola_activa_no_pausada_sigue_bloqueado(
+    controller, monkeypatch
+):
+    """Cola activa en curso (no pausada): sigue bloqueado."""
+    ctrl, _ = controller
+    ctrl._queue_active = True
+    ctrl._queue_paused = False
+    ctrl._state = type(ctrl._state).IDLE  # type: ignore
+
+    called = {"send": 0}
+    def fake_send(*a, **k):
+        called["send"] += 1
+    monkeypatch.setattr(ctrl, "send", fake_send)
+
+    result = ctrl.send_user_input("hola", "test-model")
+
+    assert result is False
+    assert called["send"] == 0
