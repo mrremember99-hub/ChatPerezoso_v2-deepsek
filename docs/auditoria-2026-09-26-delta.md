@@ -1,5 +1,7 @@
 # Auditoría delta — ChatPerezoso_v2 (2026-09-26, pasada 4)
 
+**Estado: CERRADA al 100% (D1-D7 + N4) — 2026-09-26 pasada 5.**
+
 Ámbito: cambios reales desde la última pasada registrada en memoria (commits `8d3fd88`..`1e1b1ac`, 29 commits, más cambios sin commitear en `ui/controllers/app_controller.py`). No se repite lo ya auditado en `docs/auditoria-2026-09-26-completa.md`; esta pasada se centra en el delta y confirma/actualiza hallazgos previos donde aplica.
 
 Archivos con cambio sustancial en este delta: `core/ollama.py`, `core/session_summary.py` (nuevo), `core/tools.py`, `core/workspace.py`, `core/model_capabilities.py`, `ui/controllers/app_controller.py`, `ui/controllers/chat_controller.py`, `ui/views/sidebar.py`, más 10 archivos de test nuevos.
@@ -17,8 +19,8 @@ Archivos con cambio sustancial en este delta: `core/ollama.py`, `core/session_su
 | D3 | Coste del resumen crece sin cota con el tamaño total del historial | MEDIO | DEMOSTRADO |
 | D4 | `@Slot` eliminados en conexiones cross-thread (`_on_capabilities_ready`, `_on_mcp_servers_changed`) | MEDIO | DEMOSTRADO (cambio) / POSIBLE (impacto) |
 | D5 | `OllamaClient` accede a un método privado (`_is_short_confirmation`) de `ToolIntentGate` | MEDIO | DEMOSTRADO |
-| D6 | Modelo de resumen (`qwen3:1.7b`) hardcodeado sin comprobar disponibilidad | BAJO/MEDIO | DEMOSTRADO |
-| D7 | Posible pérdida silenciosa de argumento por colisión de alias con mismo nombre canónico en una misma llamada | BAJO | POSIBLE |
+| D6 | Modelo de resumen (`qwen3:1.7b`) hardcodeado sin comprobar disponibilidad | **RESUELTO** | `86ce889` |
+| D7 | Posible pérdida silenciosa de argumento por colisión de alias con mismo nombre canónico en una misma llamada | **RESUELTO** | `fdff32d` |
 | — | `ui/controllers/app_controller.py` tiene cambios sin commitear | INFO | DEMOSTRADO |
 | — | N4 (caché de capabilities sin TTL, pasada anterior) | **RESUELTO** | DEMOSTRADO |
 
@@ -116,6 +118,8 @@ Esto profundiza el hallazgo H1 de la pasada anterior (duplicación de heurístic
 
 ### D6 — Modelo de resumen sin comprobación de disponibilidad (BAJO/MEDIO)
 
+**RESUELTO en `86ce889`.** `AppConfig.summary_model` (default `"qwen3:1.7b"`) configurable y persistido; `core.model_capabilities.is_model_available()` cachea 60s el probe de `/api/show` (`False` solo en 404, `True` en error de red para no deshabilitar por flakiness); `ChatController` recibe el modelo por kwarg opcional y gatea el resumen con un único warning por sesión si no está instalado. El chat sigue funcionando.
+
 `self._summary_model: str = "qwen3:1.7b"` está hardcodeado, sin pasar por el mecanismo de `/api/show`/`model_capabilities` que sí usa el resto de la app para validar modelos. Si el usuario no tiene ese modelo descargado, cada intento de resumen falla (excepción capturada, log de warning) consumiendo igualmente el bloqueo de UI de D1 (timeout de conexión/petición) sin avisar en la interfaz, solo en el log.
 
 **Solución:** exponerlo como opción de configuración, o comprobar su disponibilidad una vez (cacheada) y desactivar la función con aviso visible si no existe.
@@ -123,6 +127,8 @@ Esto profundiza el hallazgo H1 de la pasada anterior (duplicación de heurístic
 ---
 
 ### D7 — Colisión de alias dentro de una misma llamada (BAJO, POSIBLE)
+
+**RESUELTO en `fdff32d`.** `_normalise_args` ahora normaliza tanto alias como canónicos y detecta colisiones: si dos claves resuelven al mismo canónico con el MISMO valor, colapsa sin error; con valores DISTINTOS, devuelve un `str` de error que `_call_tool` propaga tal cual. Cubre el caso `content`+`text` reportado abajo.
 
 **Archivo:** `core/tools.py`, `_normalise_args()`.
 

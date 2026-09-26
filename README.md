@@ -65,7 +65,7 @@ chatperezoso/
 │ ├── verificador/ # Verificación post-escritura
 │ └── mcp/ # Adaptador MCP (server-filesystem)
 ├── scripts/ # Benchmarks y utilidades
-├── tests/ # 1045 passed, 4 skipped
+├── tests/ # 1056 passed, 4 skipped
 └── docs/ # Auditorías y notas técnicas
 
 text
@@ -248,7 +248,7 @@ Estado: fase de diseño. Posponer tras Fase 2.2.
 `PlainTextRenderer` gestiona un único `QTextEdit`. El coste de layout crece con el tamaño total del documento. Arquitectura objetivo: `QScrollArea` + `QVBoxLayout` con un `QTextBrowser` por mensaje. Criterio de éxito: el tiempo de añadir un mensaje nuevo no debe crecer con el número de mensajes previos.
 
 ## Tests
-pytest -q # 1045 passed, 4 skipped
+pytest -q # 1056 passed, 4 skipped
 pytest -q tests/test_X.py # Un archivo
 pytest -x # Parar al primer fallo
 
@@ -304,6 +304,12 @@ Detectado con `mistral-small3.2`: llama a `ejecutar_comando` sin `command` (fall
 
 ## Historial de sesiones recientes
 
+### 2026-09-26 (pasada 5 — cierre auditoría delta)
+- `fdff32d` — fix(tools): rechazar colisión de alias con valores distintos (D7).
+- `4eb64ab` — chore: no versionar scripts apply_*.py de un solo uso.
+- `86ce889` — fix(session-summary): modelo configurable + gate por /api/show (D6).
+- Tests: 1045 → 1056 passed, 4 skipped.
+
 ### 2026-09-26 (pasada 4 — auditoría delta)
 - `39c12f6` — docs(readme): limpieza de duplicados, cifras, P1/P2 hechos.
 - `566fa09` — docs(audit): auditoría delta 2026-09-26 (D1-D7, N4).
@@ -342,8 +348,8 @@ Detectado con `mistral-small3.2`: llama a `ejecutar_comando` sin `command` (fall
 ## Estado del proyecto
 
 - **Rama**: `main`
-- **HEAD**: `96bba92`
-- **Tests**: 1045 passed, 4 skipped
+- **HEAD**: `86ce889`
+- **Tests**: 1056 passed, 4 skipped
 - **Árbol**: limpio
 - **Bundles de seguridad**: ~16 en `../` (conservar `final`, `v10`, `v15`, `v19`; borrar el resto)
 
