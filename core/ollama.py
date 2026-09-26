@@ -1468,7 +1468,19 @@ class OllamaClient:
         # según la capability del modelo.
         override = get_override(model)
         if override.thinking is not None:
-            payload["think"] = override.thinking
+            value = override.thinking
+            # N1 auditoria 2026-09-26: gpt-oss espera "low"/
+            # "medium"/"high"; un bool se ignora silenciosamente.
+            # Mapeamos bool->nivel SOLO para esa familia; el resto
+            # de modelos sigue enviando el bool tal cual.
+            if isinstance(value, bool) and model.split(":", 1)[0].startswith("gpt-oss"):
+                value = "high" if value else "low"
+                logger.info(
+                    "Modelo %s: thinking=%s mapeado a %r "
+                    "(gpt-oss exige low/medium/high)",
+                    model, override.thinking, value,
+                )
+            payload["think"] = value
 
         message: dict[str, Any] = {}
         metrics: dict[str, int] = {}

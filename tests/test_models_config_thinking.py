@@ -46,15 +46,49 @@ def test_load_absent_thinking_is_none(tmp_path):
     assert cfg.get("llama3.1").thinking is None
 
 
-def test_load_ignores_non_bool_thinking(tmp_path):
+def test_load_ignores_invalid_thinking_string(tmp_path):
     path = tmp_path / "models.json"
     path.write_text(json.dumps({
         "overrides": {
             "raro": {"mode": "auto", "thinking": "sí"},
+            "otro": {"mode": "auto", "thinking": "yes"},
         }
     }), encoding="utf-8")
     cfg = ModelsConfig(path)
     assert cfg.get("raro").thinking is None
+    assert cfg.get("otro").thinking is None
+
+
+def test_load_acepta_thinking_levels(tmp_path):
+    """low/medium/high se aceptan tal cual (para gpt-oss)."""
+    path = tmp_path / "models.json"
+    path.write_text(json.dumps({
+        "overrides": {
+            "a": {"mode": "auto", "thinking": "low"},
+            "b": {"mode": "auto", "thinking": "MEDIUM"},
+            "c": {"mode": "auto", "thinking": "High"},
+        }
+    }), encoding="utf-8")
+    cfg = ModelsConfig(path)
+    assert cfg.get("a").thinking == "low"
+    assert cfg.get("b").thinking == "medium"
+    assert cfg.get("c").thinking == "high"
+
+
+def test_set_acepta_thinking_level(tmp_path):
+    path = tmp_path / "models.json"
+    cfg = ModelsConfig(path)
+    cfg.set("gpt-oss:20b", "auto", thinking="high")
+    cfg2 = ModelsConfig(path)
+    assert cfg2.get("gpt-oss:20b").thinking == "high"
+
+
+def test_set_rechaza_thinking_invalido(tmp_path):
+    import pytest
+    path = tmp_path / "models.json"
+    cfg = ModelsConfig(path)
+    with pytest.raises(ValueError):
+        cfg.set("x", "auto", thinking="turbo")
 
 
 def test_set_persists_thinking(tmp_path):

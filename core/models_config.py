@@ -50,6 +50,11 @@ MODELS_FILE = BASE_DIR / "models.json"
 
 VALID_MODES = frozenset({"native", "xml", "auto"})
 
+# Niveles válidos de thinking para modelos que los exigen
+# (gpt-oss: "Passing true/false is ignored for that model").
+# Los modelos que aceptan bool se siguen controlando con true/false.
+THINKING_LEVELS: frozenset[str] = frozenset({"low", "medium", "high"})
+
 # Modelos verificados con tool calling nativo en la app.
 # Verificados manualmente con el prompt OVERPAPER de 9 fases.
 VERIFIED_TOOL_MODELS: frozenset[str] = frozenset({
@@ -75,10 +80,11 @@ def is_verified_tool_model(name: str) -> bool:
 class ModelOverride:
     mode: str  # "native" | "xml" | "auto"
     note: str = ""
-    # None = auto (Ollama decide). True/False fuerza el parámetro
-    # `think` en el payload de /api/chat. Solo aplica a modelos con
-    # capability "thinking" (qwen3, north-mini-code, muse-glimmer...).
-    thinking: bool | None = None
+    # None = auto (Ollama decide). bool fuerza el parámetro `think`
+    # en el payload de /api/chat (True/False). str debe ser uno de
+    # THINKING_LEVELS = ("low", "medium", "high") y se envía
+    # literal: lo exige gpt-oss (Ollama ignora bool para ese modelo).
+    thinking: bool | str | None = None
     # Texto corto que se muestra en la sidebar debajo del badge de
     # capabilities. Si está vacío, se genera uno automáticamente a
     # partir de las capabilities del modelo.
@@ -105,13 +111,23 @@ class ModelsConfig:
         model: str,
         mode: str,
         note: str = "",
-        thinking: bool | None = None,
+        thinking: bool | str | None = None,
         recommendation: str = "",
     ) -> None:
         if mode not in VALID_MODES:
             raise ValueError(
                 f"Modo inválido: {mode!r}. Debe ser uno de {sorted(VALID_MODES)}"
             )
+        if thinking is not None and not isinstance(thinking, bool):
+            if not (
+                isinstance(thinking, str)
+                and thinking.lower() in THINKING_LEVELS
+            ):
+                raise ValueError(
+                    f"thinking inválido: {thinking!r}. Debe ser bool, "
+                    f"None, o uno de {sorted(THINKING_LEVELS)}"
+                )
+            thinking = thinking.lower()
         self._ensure_loaded()
         # "auto" sin ningún extra es el default puro: no guardamos nada,
         # así el archivo solo contiene lo que difiere de la detección.
@@ -175,9 +191,14 @@ class ModelsConfig:
                 continue
             note = str(spec.get("note", ""))
             raw_thinking = spec.get("thinking")
-            thinking: bool | None
+            thinking: bool | str | None
             if isinstance(raw_thinking, bool):
                 thinking = raw_thinking
+            elif (
+                isinstance(raw_thinking, str)
+                and raw_thinking.lower() in THINKING_LEVELS
+            ):
+                thinking = raw_thinking.lower()
             else:
                 thinking = None
             raw_rec = spec.get("recommendation", "")
