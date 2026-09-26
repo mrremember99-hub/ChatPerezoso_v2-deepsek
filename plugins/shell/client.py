@@ -224,7 +224,7 @@ class ShellClient:
         except psutil.NoSuchProcess:
             pass
         try:
-            proc.communicate(timeout=2)
+            proc.wait(timeout=2)
         except Exception:
             pass
 

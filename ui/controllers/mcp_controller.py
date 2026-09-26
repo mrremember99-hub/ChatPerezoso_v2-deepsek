@@ -4,7 +4,7 @@ import logging
 import shlex
 from typing import Any
 
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QObject, QThread, Signal, Slot
 from PySide6.QtWidgets import QWidget
 
 from core.mcp_servers import MCPServerEntry, MCPServerStore
@@ -236,6 +236,7 @@ class MCPController(QObject):
         thread.start()
         self._emit_changed()
 
+    @Slot(str, object, list)
     def _on_loaded(self, server_id, client, tools):
         try:
             self.bridge.activate(server_id, client, tools)
@@ -252,6 +253,7 @@ class MCPController(QObject):
             self.error.emit(f"«{server_id}»: {exc}")
         self._emit_changed()
 
+    @Slot(str, str)
     def _on_error(self, server_id, message):
         self.bridge.deactivate(server_id)
         self._dead.add(server_id)

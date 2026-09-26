@@ -176,7 +176,3 @@ class DiagnosticsController(QObject):
             self.stats.responses,
             self.stats.average_response_seconds,
         )
-
-    def _refresh_context(self) -> None:
-        self.stats.update_context(self.chat.messages)
-        self.panel.set_context_tokens(self.stats.context_tokens)
