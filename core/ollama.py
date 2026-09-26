@@ -212,6 +212,11 @@ _FALSE_COMPLETION_MARKERS: tuple[str, ...] = (
 # Ampliacion de vocabulario (H1 auditoria 2026-09-26).
 # Los tests demuestran que estas variantes se pierden hoy.
 _WRITE_VERBS = _WRITE_VERBS + (
+    "edicion", "ediciones",
+    "modificacion", "modificaciones",
+    "creacion", "creaciones",
+    "actualizacion", "actualizaciones",
+    "implementacion", "implementaciones",
     "corrige", "corregir", "arregla", "arreglar",
     "soluciona", "solucionar", "refactoriza", "refactorizar",
 )

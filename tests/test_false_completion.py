@@ -267,3 +267,30 @@ def test_word_boundary_no_matchea_subcadenas():
     # "ejecutiva" contiene "ejecut" pero no es "ejecuta".
     # Nota: con conjugaciones, "ejecutar" genera "ejecuta", no "ejecutiva".
     assert not OllamaClient._user_requested_verification("una decisión ejecutiva")
+
+
+# -- Sustantivos de accion (auditoria 2026-09-26) -----------------------
+
+def test_sustantivos_de_accion_autorizan_escritura():
+    """Prompts con 'EDICION' o 'MODIFICACION' (sustantivo) autorizan.
+
+    Caso real: OVERPAPER Fase 8 usaba 'EDICION' como instruccion.
+    El modelo devolvia FASE VERIFICADA sin escribir nada, y el
+    nudge de falso completado no disparaba porque _WRITE_VERBS solo
+    tenia verbos conjugados.
+    """
+    from core.ollama import OllamaClient
+
+    assert OllamaClient._user_requested_write(
+        "Lee gui.py. EDICION. NO toques core_processor.py."
+    )
+    assert OllamaClient._user_requested_write("modificacion del archivo")
+    assert OllamaClient._user_requested_write("creacion de un modulo")
+    assert OllamaClient._user_requested_write("actualizacion urgente")
+    assert OllamaClient._user_requested_write("implementacion completa")
+
+
+def test_sustantivos_no_autorizan_prosa():
+    from core.ollama import OllamaClient
+    assert not OllamaClient._user_requested_write("lee el archivo")
+    assert not OllamaClient._user_requested_write("que es python")
