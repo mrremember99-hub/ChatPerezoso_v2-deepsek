@@ -323,4 +323,44 @@ borran, hacerlo a mano con `pytest -q` entre medias.
 
 Herramienta usada: `vulture core/ ui/ plugins/ scripts/ tests/ --min-confidence 60`.
 
-*Última actualización: 2026-09-25. Documento unificado.*
+## Bugs identificados en el test OVERPAPER (2026-09-26)
+
+Del test end-to-end con prompt OVERPAPER 9 fases + gpt-oss:20b:
+
+### P1 — Gate bloquea confirmaciones conversacionales
+
+`ToolIntentGate` no reconoce "sí", "vale", "ok", "adelante", "hazlo"
+como respuestas afirmativas a una pregunta del modelo. Si el modelo
+pregunta "¿puedo leer gui.py?" y el usuario responde "sí", el gate
+no autoriza `leer_archivo` y el modelo repite la pregunta.
+
+**Fix propuesto**: en `ToolIntentGate.tool_is_requested()`, si el
+último mensaje del modelo (no solo el del usuario) menciona una tool
+concreta y el mensaje actual del usuario es una confirmación corta
+("sí", "vale", "ok", "adelante", "hazlo", "confirma"), autorizar esa
+tool. Requiere que el gate tenga acceso al último assistant message.
+
+**Test**: modelo pregunta "¿leo x.py?", usuario responde "sí", se
+autoriza `leer_archivo("x.py")`.
+
+### P2 — Orquestación no resetea historial entre fases
+
+`_advance_queue()` regenera el prompt de la fase con snapshot fresco,
+pero NO limpia `self.messages`. Cada fase arrastra el historial
+completo de las anteriores (user + assistant + tool_results). Fase 8
+recibía ~14000 tokens de prompt cuando solo necesitaba ~2000.
+
+**Fix propuesto**: en `_advance_queue()`, guardar referencia al
+historial antes de la primera fase, y en cada avance hacer
+`self.messages = []` + reinsertar el `user` de la fase actual.
+Mantener aparte el render visual (las fases anteriores se ven en
+el chat, pero no se reenvían al modelo).
+
+**Test**: prompt de 3 fases, verificar que `len(self.messages)` al
+inicio de la fase 2 es 1 (solo el user actual).
+
+### Mitigación aplicada (no fix de fondo)
+
+`core/ollama.py::_stream_async` topa `num_ctx` a 32k para no forzar
+KV cache gigante en modelos con context_length alto (gpt-oss:
+131072 → ~26 GB KV, no cabe en M4 Air).
