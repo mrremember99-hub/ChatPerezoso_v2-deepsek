@@ -517,15 +517,19 @@ class OllamaClient:
             context_window is not None
             and context_window.limit_tokens > 0
         ):
+            # Tope de 32k para no forzar KV cache gigante en modelos
+            # con context_length alto (gpt-oss: 131072 -> ~26 GB KV).
+            # Sin este tope, Ollama aborta el prefill en equipos con
+            # poca RAM unificada.
+            _NUM_CTX_SAFE_MAX = 32_768
+            num_ctx_value = min(
+                context_window.limit_tokens, _NUM_CTX_SAFE_MAX
+            )
             if options is None:
-                effective_options = {
-                    "num_ctx": context_window.limit_tokens
-                }
+                effective_options = {"num_ctx": num_ctx_value}
             elif "num_ctx" not in options:
                 effective_options = dict(options)
-                effective_options["num_ctx"] = (
-                    context_window.limit_tokens
-                )
+                effective_options["num_ctx"] = num_ctx_value
 
         for _ in range(max_rounds):
             # Diagnostico: loggear el snapshot si DEBUG.
