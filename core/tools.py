@@ -50,6 +50,14 @@ _SPECS: tuple[dict[str, Any], ...] = (
                 "type": "integer",
                 "description": "Última línea a leer (inclusive). Opcional.",
             },
+            "numbered": {
+                "type": "boolean",
+                "description": (
+                    "Si true, prefija cada linea con su numero "
+                    "(formato '1| texto'). Util antes de usar "
+                    "insertar_en_archivo o editar_archivo."
+                ),
+            },
         },
         "required": ["path"],
     },
@@ -124,6 +132,38 @@ _SPECS: tuple[dict[str, Any], ...] = (
             },
         },
         "required": ["path", "old_string", "new_string"],
+    },
+    {
+        "name": "insertar_en_archivo",
+        "description": (
+            "Inserta texto tras una linea concreta del archivo. "
+            "No requiere old_string: util para anadir al final "
+            "(insert_line=total) o tras una linea especifica. "
+            "Usa leer_archivo(numbered=True) para saber que hay "
+            "en cada linea."
+        ),
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Ruta relativa del archivo.",
+            },
+            "insert_line": {
+                "type": "integer",
+                "description": (
+                    "Linea tras la que insertar (1-based). "
+                    "0 = al inicio; N = tras la linea N; "
+                    "total = al final del archivo."
+                ),
+            },
+            "text": {
+                "type": "string",
+                "description": (
+                    "Texto a insertar. Se anade un salto de "
+                    "linea al final si falta."
+                ),
+            },
+        },
+        "required": ["path", "insert_line", "text"],
     },
     {
         "name": "borrar_archivo",
@@ -313,10 +353,12 @@ class ToolRegistry:
             path = arguments["path"]
             start = arguments.get("start_line")
             end = arguments.get("end_line")
+            numbered = bool(arguments.get("numbered", False))
             return self.workspace.read_file(
                 path,
                 start_line=start if start is not None else None,
                 end_line=end if end is not None else None,
+                numbered=numbered,
             )
         if name == "crear_archivo":
             # content es obligatorio (el schema lo declara). Sin
@@ -339,6 +381,15 @@ class ToolRegistry:
                 arguments["old_string"],
                 arguments["new_string"],
                 bool(arguments.get("replace_all", False)),
+            )
+            return self._with_verification(
+                result, arguments["path"]
+            )
+        if name == "insertar_en_archivo":
+            result = self.workspace.insert_in_file(
+                arguments["path"],
+                arguments["insert_line"],
+                arguments["text"],
             )
             return self._with_verification(
                 result, arguments["path"]
@@ -412,6 +463,15 @@ _ALIASES: dict[str, tuple[str, ...]] = {
         "commit_hash", "commitHash", "refname",
     ),
     "limit": ("max", "n", "count", "max_count", "maxCount"),
+    "insert_line": (
+        "line", "line_number", "lineNumber", "after_line",
+        "afterLine", "position", "line_no", "lineNo",
+        "insert_at", "insertAt", "at_line", "atLine",
+    ),
+    "text": (
+        "insert_text", "insertText", "body", "content",
+        "contenido", "line_text", "lineText",
+    ),
 }
 
 

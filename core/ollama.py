@@ -209,6 +209,7 @@ _MAX_STALL_RETRIES = 1
 _WRITE_TOOLS: frozenset[str] = frozenset({
     "escribir_archivo",
     "editar_archivo",
+    "insertar_en_archivo",
     "crear_archivo",
     "crear_carpeta",
 })

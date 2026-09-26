@@ -128,6 +128,7 @@ class Workspace:
         path: str,
         start_line: int | None = None,
         end_line: int | None = None,
+        numbered: bool = False,
     ) -> str:
         file = self._path(path)
         if not file.is_file():
@@ -142,9 +143,43 @@ class Workspace:
             raise WorkspaceError("El archivo no parece ser texto UTF-8.") from exc
 
         if start_line is None and end_line is None:
-            return text
+            sliced = text
+            # Numeracion: si empezamos desde el principio, 1-based.
+            first_line_no = 1
+        else:
+            sliced = self._slice_lines(text, start_line, end_line)
+            # El header [lineas N-M de T] tiene la info; si no,
+            # calculamos first_line_no desde start_line.
+            first_line_no = max(1, int(start_line or 1))
 
-        return self._slice_lines(text, start_line, end_line)
+        if not numbered:
+            return sliced
+        return self._number_lines(sliced, first_line_no)
+
+    @staticmethod
+    def _number_lines(text: str, first_line_no: int = 1) -> str:
+        """Prefija cada linea con su numero (formato ``N| texto``).
+
+        Patron Anthropic/Cursor/DeepSeek. Necesario para que el
+        modelo pueda referenciar lineas concretas al usar
+        insertar_en_archivo.
+
+        Si la primera linea es el header de `_slice_lines`
+        (\"[lineas N-M de T]\"), se deja SIN numerar y se empieza
+        la numeracion desde la siguiente linea con first_line_no.
+        """
+        if not text:
+            return text
+        lines = text.splitlines(keepends=True)
+        out: list[str] = []
+        start_idx = 0
+        if lines and lines[0].lstrip().startswith("[líneas"):
+            out.append(lines[0])
+            start_idx = 1
+        for i, raw in enumerate(lines[start_idx:]):
+            n = first_line_no + i
+            out.append(f"{n}| {raw}")
+        return "".join(out)
 
     @staticmethod
     def _slice_lines(
@@ -167,6 +202,84 @@ class Workspace:
         return header + "".join(selected)
 
     # -- escribir ------------------------------------------------------------
+
+    def insert_in_file(
+        self,
+        path: str,
+        insert_line: int,
+        text: str,
+    ) -> str:
+        """Inserta `text` tras la linea `insert_line` (1-based).
+
+        insert_line=0 -> al inicio del archivo.
+        insert_line=N -> tras la linea N (1-indexada).
+        insert_line=len(lines) -> al final.
+
+        Patron Anthropic text editor `insert`. Desbloquea
+        inserciones puntuales sin leer el archivo entero.
+        """
+        if not isinstance(text, str):
+            raise WorkspaceError("text debe ser texto.")
+        try:
+            line_no = int(insert_line)
+        except (TypeError, ValueError) as exc:
+            raise WorkspaceError(
+                "insert_line debe ser un numero entero."
+            ) from exc
+        if line_no < 0:
+            raise WorkspaceError(
+                "insert_line no puede ser negativo."
+            )
+
+        file = self._path(path)
+        if not file.is_file():
+            raise WorkspaceError(f"No es un archivo: {path}")
+        if file.stat().st_size > MAX_READ_BYTES:
+            raise WorkspaceError(
+                f"Archivo demasiado grande para insertar "
+                f"({MAX_READ_BYTES} bytes maximo)."
+            )
+        try:
+            original = file.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise WorkspaceError(
+                "El archivo no parece ser texto UTF-8."
+            ) from exc
+
+        # Partimos respetando el final de linea original.
+        lines = original.splitlines(keepends=True)
+        total = len(lines)
+        if line_no > total:
+            raise WorkspaceError(
+                f"insert_line={line_no} fuera de rango "
+                f"(archivo tiene {total} lineas; usa {total} para "
+                "insertar al final)."
+            )
+
+        # Normalizar texto: siempre con salto de linea final.
+        # Evita crear lineas pegadas sin querer.
+        fragment = text if text.endswith("\n") else text + "\n"
+        # Si el archivo no termina en salto, la linea N no lo tiene.
+        # En ese caso metemos un \n extra antes para no concatenar.
+        if line_no > 0 and line_no <= total:
+            last = lines[line_no - 1]
+            if not last.endswith("\n"):
+                fragment = "\n" + fragment
+
+        new_lines = (
+            lines[:line_no] + [fragment] + lines[line_no:]
+        )
+        new_text = "".join(new_lines)
+        data = new_text.encode("utf-8")
+        if len(data) > MAX_WRITE_BYTES:
+            raise WorkspaceError(
+                "Resultado demasiado grande tras la insercion."
+            )
+        file.write_bytes(data)
+        return (
+            f"Texto insertado tras linea {line_no} en "
+            f"{file.relative_to(self.root)}"
+        )
 
     def create_file(self, path: str, content: str = "") -> str:
         file = self._path(path)

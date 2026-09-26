@@ -973,7 +973,8 @@ class ChatController(QObject):
     # cabecera). El modelo sabe que escribio por su respuesta
     # final del turno anterior.
     _TOOL_TRACE_WRITE_TOOLS = frozenset({
-        "escribir_archivo", "editar_archivo", "crear_archivo",
+        "escribir_archivo", "editar_archivo",
+        "insertar_en_archivo", "crear_archivo",
         "crear_carpeta", "borrar_archivo",
     })
     # Herramientas de lectura/inspeccion: contenido completo si

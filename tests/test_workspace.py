@@ -343,3 +343,91 @@ def test_edit_file_permite_borrar_fragmento(tmp_path):
     ws = Workspace(tmp_path)
     ws.edit_file("a.py", "linea2\n", "")
     assert (tmp_path / "a.py").read_text(encoding="utf-8") == "linea1\nlinea3\n"
+
+
+# -- insert_in_file (feature 2026-09-26) --------------------------------
+
+def test_insert_in_file_al_final(tmp_path):
+    (tmp_path / "a.py").write_text("uno\ndos\n", encoding="utf-8")
+    ws = Workspace(tmp_path)
+    result = ws.insert_in_file("a.py", 2, "tres")
+    assert "insertado" in result.lower()
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == (
+        "uno\ndos\ntres\n"
+    )
+
+
+def test_insert_in_file_al_inicio(tmp_path):
+    (tmp_path / "a.py").write_text("original\n", encoding="utf-8")
+    ws = Workspace(tmp_path)
+    ws.insert_in_file("a.py", 0, "# header")
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == (
+        "# header\noriginal\n"
+    )
+
+
+def test_insert_in_file_tras_linea_media(tmp_path):
+    (tmp_path / "a.py").write_text("1\n2\n3\n4\n", encoding="utf-8")
+    ws = Workspace(tmp_path)
+    ws.insert_in_file("a.py", 2, "X")
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == (
+        "1\n2\nX\n3\n4\n"
+    )
+
+
+def test_insert_in_file_fuera_de_rango(tmp_path):
+    (tmp_path / "a.py").write_text("uno\ndos\n", encoding="utf-8")
+    ws = Workspace(tmp_path)
+    import pytest
+    with pytest.raises(WorkspaceError, match="fuera de rango"):
+        ws.insert_in_file("a.py", 99, "x")
+
+
+def test_insert_in_file_negativo(tmp_path):
+    (tmp_path / "a.py").write_text("uno\n", encoding="utf-8")
+    ws = Workspace(tmp_path)
+    import pytest
+    with pytest.raises(WorkspaceError):
+        ws.insert_in_file("a.py", -1, "x")
+
+
+def test_insert_in_file_archivo_sin_salto_final(tmp_path):
+    # Archivo no termina en \n: la insercion debe anadir uno.
+    (tmp_path / "a.py").write_text("uno\ndos", encoding="utf-8")
+    ws = Workspace(tmp_path)
+    ws.insert_in_file("a.py", 2, "tres")
+    text = (tmp_path / "a.py").read_text(encoding="utf-8")
+    assert "tres" in text
+    # No debe quedar "dostres" pegado.
+    assert "dostres" not in text
+
+
+# -- read_file numbered -------------------------------------------------
+
+def test_read_file_numbered(tmp_path):
+    (tmp_path / "a.txt").write_text("uno\ndos\ntres\n", encoding="utf-8")
+    ws = Workspace(tmp_path)
+    result = ws.read_file("a.txt", numbered=True)
+    assert "1| uno" in result
+    assert "2| dos" in result
+    assert "3| tres" in result
+
+
+def test_read_file_numbered_con_rango(tmp_path):
+    (tmp_path / "a.txt").write_text(
+        "uno\ndos\ntres\ncuatro\n", encoding="utf-8"
+    )
+    ws = Workspace(tmp_path)
+    result = ws.read_file("a.txt", start_line=2, end_line=3, numbered=True)
+    # Los numeros coinciden con las lineas reales.
+    assert "2| dos" in result
+    assert "3| tres" in result
+    assert "1| " not in result
+    assert "4| " not in result
+
+
+def test_read_file_numbered_por_defecto_false(tmp_path):
+    (tmp_path / "a.txt").write_text("uno\n", encoding="utf-8")
+    ws = Workspace(tmp_path)
+    result = ws.read_file("a.txt")
+    assert result == "uno\n"

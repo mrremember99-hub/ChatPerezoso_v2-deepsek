@@ -7,7 +7,8 @@ def test_registry_definitions(tmp_path):
     names = {item["function"]["name"] for item in tools}
     assert names == {
         "listar_carpeta", "leer_archivo", "crear_archivo", "crear_carpeta",
-        "escribir_archivo", "editar_archivo", "borrar_archivo",
+        "escribir_archivo", "editar_archivo", "insertar_en_archivo",
+        "borrar_archivo",
     }
 
 
@@ -231,3 +232,40 @@ def test_editar_archivo_via_registry(tmp_path):
 def test_editar_archivo_no_requiere_confirmacion(tmp_path):
     tools = ToolRegistry(Workspace(tmp_path))
     assert not tools.requires_confirmation("editar_archivo")
+
+
+# -- insertar_en_archivo (feature 2026-09-26) ---------------------------
+
+def test_insertar_en_archivo_en_catalogo(tmp_path):
+    tools = ToolRegistry(Workspace(tmp_path))
+    names = {t["function"]["name"] for t in tools.definitions()}
+    assert "insertar_en_archivo" in names
+
+
+def test_insertar_en_archivo_via_registry(tmp_path):
+    (tmp_path / "a.py").write_text("uno\n", encoding="utf-8")
+    tools = ToolRegistry(Workspace(tmp_path))
+    result = tools.call(
+        "insertar_en_archivo",
+        {"path": "a.py", "insert_line": 1, "text": "dos"},
+    )
+    assert "ERROR" not in result
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "uno\ndos\n"
+
+
+def test_insertar_en_archivo_acepta_aliases(tmp_path):
+    (tmp_path / "a.py").write_text("uno\n", encoding="utf-8")
+    tools = ToolRegistry(Workspace(tmp_path))
+    tools.call(
+        "insertar_en_archivo",
+        {"file_path": "a.py", "line": 1, "body": "dos"},
+    )
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "uno\ndos\n"
+
+
+def test_leer_archivo_numbered_via_registry(tmp_path):
+    (tmp_path / "a.txt").write_text("uno\ndos\n", encoding="utf-8")
+    tools = ToolRegistry(Workspace(tmp_path))
+    result = tools.call("leer_archivo", {"path": "a.txt", "numbered": True})
+    assert "1| uno" in result
+    assert "2| dos" in result
