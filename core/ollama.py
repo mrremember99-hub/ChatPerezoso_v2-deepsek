@@ -193,12 +193,12 @@ _VERIFICATION_VERBS: tuple[str, ...] = (
 
 _STALL_NUDGE_MESSAGE = (
     "REGLA DE HIERRO: has respondido sin emitir ninguna tool call. "
-    "El usuario pidio una operacion que requiere herramientas (leer, "
-    "escribir, ejecutar, buscar...). NO puedes cerrar el turno sin "
-    "emitir la tool call correspondiente. Tu siguiente mensaje DEBE "
-    "contener una llamada nativa a alguna de las herramientas "
-    "disponibles. No respondas con texto hasta haber recibido su "
-    "resultado."
+    "El usuario pidio una operacion que requiere herramientas "
+    "(crear, modificar, ejecutar, verificar). NO puedes cerrar el "
+    "turno sin emitir la tool call correspondiente. Tu siguiente "
+    "mensaje DEBE contener una llamada nativa a alguna de las "
+    "herramientas disponibles. No respondas con texto hasta haber "
+    "recibido su resultado."
 )
 
 # Maximo de reintentos tras detectar un stall. Con 1 basta: si el
@@ -794,27 +794,30 @@ class OllamaClient:
                         "content": _FALSE_COMPLETION_NUDGE,
                     })
                     continue
-                # Stall guard generico (P1 2026-09-26). El gate
-                # autorizo tools para esta peticion (ctx.tool_names
-                # no vacio), pero el modelo respondio sin emitir
-                # ninguna. Es stall, sea el verbo leer/escribir/
-                # verificar/listar/buscar. Sin listas de verbos:
-                # la senal es que el gate autorizo tools.
+                # Stall guard: el usuario pidio explicitamente
+                # escribir o verificar, y el modelo no emitio tool
+                # call. Ver P1 (2026-09-26): NO usar el gate como
+                # senal — el gate autoriza tools cuando PODRIAN
+                # ser utiles, no cuando DEBEN usarse. Forzar tool
+                # en todos esos casos dispara falsos positivos.
                 #
-                # Se exige que el texto del usuario no sea pregunta
-                # para evitar disparar en 'explica como crear un
-                # archivo' (donde el modelo puede responder texto
-                # sin usar tools). Y se exige que el assistant cierre
-                # el turno (no pregunte de vuelta).
+                # Se exige que el assistant cierre el turno (no
+                # pregunte de vuelta) para no forzar cuando pide
+                # confirmacion al usuario.
                 if (
                     state.stall_retries_used < _MAX_STALL_RETRIES
                     and not state.any_tool_call_emitted
                     and ctx.tool_names
-                    and not self._user_asked_question(
-                        ctx.authorization_text
-                    )
                     and self._assistant_closes_turn(
                         result.final_text
+                    )
+                    and (
+                        self._user_requested_verification(
+                            ctx.authorization_text
+                        )
+                        or self._user_requested_write(
+                            self._effective_auth_text(ctx)
+                        )
                     )
                 ):
                     state.stall_retries_used += 1
