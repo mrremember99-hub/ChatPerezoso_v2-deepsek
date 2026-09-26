@@ -48,6 +48,8 @@ La prioridad #1 del protocolo (calidad de respuesta) se ve afectada directamente
 
 ### D2 — El resumen "rolling" no es rolling (ALTO)
 
+**RESUELTO en `520b723`.** `should_update` sin `max_cycles`; `build_summary_prompt` con `since_index` + `previous_summary` (incremental). 6 tests nuevos.
+
 **Archivo:** `core/session_summary.py`.
 
 **Evidencia:**
@@ -67,6 +69,8 @@ La prioridad #1 del protocolo (calidad de respuesta) se ve afectada directamente
 
 ### D3 — Coste del resumen sin cota (MEDIO)
 
+**RESUELTO en `520b723`.** Consecuencia directa de D2: `since_index` acota el transcript a lo nuevo desde el último resumen.
+
 Consecuencia directa de D2: al no acotar el transcript a "lo nuevo desde el último resumen" sino a "todo menos los últimos 6 mensajes", el prompt enviado al modelo de resumen crece con el tamaño total de la conversación, no con el incremento. Esto agrava D1 (más tokens = más latencia bloqueando la UI) cuanto más larga es la conversación.
 
 **Solución:** acotar el transcript a una ventana desde el último resumen (`last_message_count`) en vez de "todo menos los últimos 6".
@@ -74,6 +78,8 @@ Consecuencia directa de D2: al no acotar el transcript a "lo nuevo desde el últ
 ---
 
 ### D4 — `@Slot` eliminados en conexiones cross-thread (MEDIO)
+
+**RESUELTO en `e6baf23`.** Decoradores restaurados con firma exacta (`@Slot(str, object, int)` y `@Slot(list, list, list, list)`).
 
 **Archivo:** `ui/controllers/app_controller.py`.
 
@@ -88,6 +94,8 @@ Sin `@Slot`, PySide6 puede seguir conectando el método (duck-typing), pero se p
 ---
 
 ### D5 — Acceso a método privado de otra clase (MEDIO)
+
+**RESUELTO en `e6baf23`.** `_is_short_confirmation` → `is_short_confirmation` (público). Sin cambios en `intent.py` internos ni en los tests.
 
 **Archivo:** `core/ollama.py`, `OllamaClient._effective_auth_text()`.
 
