@@ -7,7 +7,7 @@ def test_registry_definitions(tmp_path):
     names = {item["function"]["name"] for item in tools}
     assert names == {
         "listar_carpeta", "leer_archivo", "crear_archivo", "crear_carpeta",
-        "escribir_archivo", "borrar_archivo",
+        "escribir_archivo", "editar_archivo", "borrar_archivo",
     }
 
 
@@ -207,3 +207,27 @@ def test_crear_archivo_sin_content_no_crea_archivo_vacio(tmp_path):
     assert not (tmp_path / "sin_content.txt").exists(), (
         "crear_archivo sin content creo un archivo vacio"
     )
+
+
+# -- editar_archivo (feature 2026-09-26) --------------------------------
+
+def test_editar_archivo_en_catalogo(tmp_path):
+    tools = ToolRegistry(Workspace(tmp_path))
+    names = {t["function"]["name"] for t in tools.definitions()}
+    assert "editar_archivo" in names
+
+
+def test_editar_archivo_via_registry(tmp_path):
+    (tmp_path / "a.py").write_text("hola", encoding="utf-8")
+    tools = ToolRegistry(Workspace(tmp_path))
+    result = tools.call(
+        "editar_archivo",
+        {"path": "a.py", "old_string": "hola", "new_string": "adios"},
+    )
+    assert "ERROR" not in result
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "adios"
+
+
+def test_editar_archivo_no_requiere_confirmacion(tmp_path):
+    tools = ToolRegistry(Workspace(tmp_path))
+    assert not tools.requires_confirmation("editar_archivo")

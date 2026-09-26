@@ -122,3 +122,46 @@ def test_schema_solo_declara_canonicos(tmp_path):
     assert 'path' in leer
     assert 'archivo' not in leer
     assert 'line_start' not in leer
+
+
+# -- Aliases ampliados (feature 2026-09-26) -----------------------------
+
+def test_alias_file_path_normaliza_a_path(tmp_path):
+    (tmp_path / "a.txt").write_text("hola", encoding="utf-8")
+    tools = _tools(tmp_path)
+    assert "hola" in tools.call("leer_archivo", {"file_path": "a.txt"})
+
+
+def test_alias_body_normaliza_a_content(tmp_path):
+    tools = _tools(tmp_path)
+    tools.call(
+        "crear_archivo",
+        {"path": "x.txt", "body": "cuerpo"},
+        allow_destructive=True,
+    )
+    assert (tmp_path / "x.txt").read_text(encoding="utf-8") == "cuerpo"
+
+
+def test_alias_old_str_normaliza_a_old_string(tmp_path):
+    (tmp_path / "a.py").write_text("foo bar baz", encoding="utf-8")
+    tools = _tools(tmp_path)
+    result = tools.call(
+        "editar_archivo",
+        {"path": "a.py", "old_str": "bar", "new_str": "QUX"},
+    )
+    assert "editado" in result.lower()
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "foo QUX baz"
+
+
+def test_editar_archivo_acepta_aliases_completos(tmp_path):
+    (tmp_path / "a.py").write_text("hola mundo", encoding="utf-8")
+    tools = _tools(tmp_path)
+    tools.call(
+        "editar_archivo",
+        {
+            "file_path": "a.py",
+            "oldText": "mundo",
+            "newText": "universo",
+        },
+    )
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "hola universo"

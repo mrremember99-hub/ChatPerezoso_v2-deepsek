@@ -205,6 +205,73 @@ class Workspace:
         file.write_bytes(data)
         return f"Archivo escrito: {file.relative_to(self.root)}"
 
+    def edit_file(
+        self,
+        path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> str:
+        """Reemplaza un fragmento exacto dentro de un archivo.
+
+        `old_string` debe aparecer exactamente una vez, salvo que
+        `replace_all=True`. Falla si no aparece o si aparece varias
+        veces y no se pidio reemplazo global — patron str_replace
+        (Claude Text Editor, Aider, OpenCode).
+        """
+        if not isinstance(old_string, str) or not old_string:
+            raise WorkspaceError("old_string no puede estar vacio.")
+        if not isinstance(new_string, str):
+            raise WorkspaceError("new_string debe ser texto.")
+        if old_string == new_string:
+            raise WorkspaceError(
+                "old_string y new_string son identicos, nada que hacer."
+            )
+        file = self._path(path)
+        if not file.is_file():
+            raise WorkspaceError(f"No es un archivo: {path}")
+        if file.stat().st_size > MAX_READ_BYTES:
+            raise WorkspaceError(
+                f"Archivo demasiado grande para editar "
+                f"({MAX_READ_BYTES} bytes maximo)."
+            )
+        try:
+            text = file.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise WorkspaceError(
+                "El archivo no parece ser texto UTF-8."
+            ) from exc
+
+        count = text.count(old_string)
+        if count == 0:
+            raise WorkspaceError(
+                f"old_string no encontrado en {path}. Copia el "
+                "fragmento exacto (incluye indentacion y saltos "
+                "de linea)."
+            )
+        if count > 1 and not replace_all:
+            raise WorkspaceError(
+                f"old_string aparece {count} veces en {path}. "
+                "Amplia el contexto para que sea unico, o pasa "
+                "replace_all=True para reemplazar todas."
+            )
+
+        if replace_all:
+            new_text = text.replace(old_string, new_string)
+        else:
+            new_text = text.replace(old_string, new_string, 1)
+
+        data = new_text.encode("utf-8")
+        if len(data) > MAX_WRITE_BYTES:
+            raise WorkspaceError(
+                "Resultado demasiado grande tras la edicion."
+            )
+        file.write_bytes(data)
+        return (
+            f"Archivo editado: {file.relative_to(self.root)} "
+            f"({count} reemplazo(s))"
+        )
+
     def delete_file(self, path: str) -> str:
         file = self._path(path)
         if not file.is_file():

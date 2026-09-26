@@ -208,6 +208,7 @@ _MAX_STALL_RETRIES = 1
 # devuelve exito en el turno, el modelo ha hecho su trabajo.
 _WRITE_TOOLS: frozenset[str] = frozenset({
     "escribir_archivo",
+    "editar_archivo",
     "crear_archivo",
     "crear_carpeta",
 })

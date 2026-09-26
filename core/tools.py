@@ -86,6 +86,46 @@ _SPECS: tuple[dict[str, Any], ...] = (
         "required": ["path", "content"],
     },
     {
+        "name": "editar_archivo",
+        "description": (
+            "Reemplaza un fragmento exacto dentro de un archivo "
+            "existente. Mucho mas eficiente que escribir_archivo "
+            "para cambios puntuales: no hay que reescribir el "
+            "archivo completo. Falla si old_string no aparece o "
+            "si aparece varias veces sin replace_all."
+        ),
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Ruta relativa del archivo.",
+            },
+            "old_string": {
+                "type": "string",
+                "description": (
+                    "Fragmento EXACTO a reemplazar, con "
+                    "indentacion y saltos de linea tal cual "
+                    "aparecen en el archivo."
+                ),
+            },
+            "new_string": {
+                "type": "string",
+                "description": (
+                    "Texto que sustituye a old_string. Puede ser "
+                    "cadena vacia para borrar el fragmento."
+                ),
+            },
+            "replace_all": {
+                "type": "boolean",
+                "description": (
+                    "Si es true, reemplaza TODAS las "
+                    "ocurrencias. Por defecto false (falla si "
+                    "old_string no es unico)."
+                ),
+            },
+        },
+        "required": ["path", "old_string", "new_string"],
+    },
+    {
         "name": "borrar_archivo",
         "description": (
             "Borra un archivo del workspace. La aplicación solicitará confirmación explícita "
@@ -293,6 +333,16 @@ class ToolRegistry:
                 arguments["path"], arguments["content"]
             )
             return self._with_verification(result, arguments["path"])
+        if name == "editar_archivo":
+            result = self.workspace.edit_file(
+                arguments["path"],
+                arguments["old_string"],
+                arguments["new_string"],
+                bool(arguments.get("replace_all", False)),
+            )
+            return self._with_verification(
+                result, arguments["path"]
+            )
         if name == "borrar_archivo":
             return self.workspace.delete_file(arguments["path"])
         return f"ERROR: herramienta desconocida: {name}"
@@ -323,14 +373,45 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "path": (
         "archivo", "nombre", "file", "filename", "ruta",
         "folder", "dir", "carpeta",
+        "file_path", "filePath", "filepath", "target",
+        "target_file", "targetFile", "pathname",
     ),
-    "content": ("contenido", "text", "body", "data"),
-    "start_line": ("line_start", "from_line", "desde_linea"),
-    "end_line": ("line_end", "to_line", "hasta_linea"),
-    "query": ("q", "search", "term", "regex", "pattern", "patron"),
-    "command": ("cmd", "comando", "shell"),
-    "ref": ("reference", "commit", "revision"),
-    "limit": ("max", "n", "count"),
+    "content": (
+        "contenido", "text", "body", "data",
+        "code", "contents", "fileContent", "file_content",
+    ),
+    "old_string": (
+        "old_str", "oldText", "old_text", "old_content",
+        "oldContent", "original", "search", "find", "old",
+        "search_string", "searchString", "target_text",
+    ),
+    "new_string": (
+        "new_str", "newText", "new_text", "new_content",
+        "newContent", "replacement", "replace", "new",
+        "replacement_text", "replace_string", "replaceString",
+    ),
+    "start_line": (
+        "line_start", "from_line", "desde_linea",
+        "start", "startLine", "startline", "from",
+    ),
+    "end_line": (
+        "line_end", "to_line", "hasta_linea",
+        "end", "endLine", "endline", "to",
+    ),
+    "query": (
+        "q", "search", "term", "regex", "pattern", "patron",
+        "query_string", "queryString", "needle",
+    ),
+    "command": (
+        "cmd", "comando", "shell", "script",
+        "shellCommand", "shell_command", "terminalCommand",
+        "terminal_command", "command_line", "commandLine",
+    ),
+    "ref": (
+        "reference", "commit", "revision",
+        "commit_hash", "commitHash", "refname",
+    ),
+    "limit": ("max", "n", "count", "max_count", "maxCount"),
 }
 
 

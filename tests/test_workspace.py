@@ -283,3 +283,63 @@ def test_slash_solo_se_reinterpreta_si_no_escapa(tmp_path):
         ws.read_file("../../etc/passwd")
     with pytest.raises(WorkspaceError):
         ws.read_file("/../etc/passwd")
+
+
+# -- edit_file (feature 2026-09-26) -------------------------------------
+
+def test_edit_file_reemplaza_fragmento(tmp_path):
+    (tmp_path / "a.py").write_text(
+        "def foo():\n    return 1\n", encoding="utf-8"
+    )
+    ws = Workspace(tmp_path)
+    result = ws.edit_file("a.py", "return 1", "return 2")
+    assert "editado" in result.lower()
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == (
+        "def foo():\n    return 2\n"
+    )
+
+
+def test_edit_file_falla_si_no_aparece(tmp_path):
+    (tmp_path / "a.py").write_text("hola", encoding="utf-8")
+    ws = Workspace(tmp_path)
+    import pytest
+    with pytest.raises(WorkspaceError):
+        ws.edit_file("a.py", "no existe", "x")
+
+
+def test_edit_file_falla_si_es_ambiguo(tmp_path):
+    (tmp_path / "a.py").write_text("foo foo foo", encoding="utf-8")
+    ws = Workspace(tmp_path)
+    import pytest
+    with pytest.raises(WorkspaceError, match="3 veces"):
+        ws.edit_file("a.py", "foo", "bar")
+
+
+def test_edit_file_replace_all(tmp_path):
+    (tmp_path / "a.py").write_text("foo foo foo", encoding="utf-8")
+    ws = Workspace(tmp_path)
+    ws.edit_file("a.py", "foo", "bar", replace_all=True)
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "bar bar bar"
+
+
+def test_edit_file_rechaza_old_string_vacio(tmp_path):
+    (tmp_path / "a.py").write_text("hola", encoding="utf-8")
+    ws = Workspace(tmp_path)
+    import pytest
+    with pytest.raises(WorkspaceError):
+        ws.edit_file("a.py", "", "x")
+
+
+def test_edit_file_rechaza_identicos(tmp_path):
+    (tmp_path / "a.py").write_text("hola", encoding="utf-8")
+    ws = Workspace(tmp_path)
+    import pytest
+    with pytest.raises(WorkspaceError):
+        ws.edit_file("a.py", "hola", "hola")
+
+
+def test_edit_file_permite_borrar_fragmento(tmp_path):
+    (tmp_path / "a.py").write_text("linea1\nlinea2\nlinea3\n", encoding="utf-8")
+    ws = Workspace(tmp_path)
+    ws.edit_file("a.py", "linea2\n", "")
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "linea1\nlinea3\n"
