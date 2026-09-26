@@ -239,3 +239,47 @@ def test_symlink_inside_workspace_is_allowed(tmp_path):
     ws = Workspace(workspace_dir)
     content = ws.read_file("atajo.txt")
     assert "contenido" in content
+
+
+# -- N2 (auditoría 2026-09-26): rutas absolutas se reinterpretan --------
+
+def test_list_dir_acepta_slash_como_raiz(tmp_path):
+    """/ debe reinterpretarse como la raíz del workspace, no error."""
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "a.txt").write_text("hola", encoding="utf-8")
+    (root / "sub").mkdir()
+    ws = Workspace(root)
+
+    # Antes: WorkspaceError("Ruta fuera del workspace.")
+    # Ahora: listado normal de la raíz.
+    listing = ws.list_dir("/")
+    assert "a.txt" in listing
+    assert "sub" in listing
+
+
+def test_read_file_acepta_slash_como_raiz(tmp_path):
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "x.txt").write_text("hola", encoding="utf-8")
+    ws = Workspace(root)
+
+    assert ws.read_file("/x.txt") == "hola"
+
+
+def test_slash_solo_se_reinterpreta_si_no_escapa(tmp_path):
+    """Un "/" absoluto se acepta; "../../etc/passwd" sigue bloqueado."""
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "a.txt").write_text("ok", encoding="utf-8")
+    ws = Workspace(root)
+
+    # Ruta absoluta reinterpretable: OK.
+    assert "a.txt" in ws.list_dir("/")
+
+    # Escape real: sigue bloqueado.
+    import pytest
+    with pytest.raises(WorkspaceError):
+        ws.read_file("../../etc/passwd")
+    with pytest.raises(WorkspaceError):
+        ws.read_file("/../etc/passwd")

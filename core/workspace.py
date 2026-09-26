@@ -34,6 +34,16 @@ class Workspace:
             )
 
     def _path(self, relative: str) -> Path:
+        # Modelos pequeños/medianos interpretan con frecuencia la raíz
+        # del workspace como "/" del sistema de archivos (demostrado:
+        # 5/7 modelos en docs/benchmark-2026-09-25.md devolvían path="/"
+        # en listar_carpeta). Reinterpretar una ruta absoluta como
+        # relativa a la raíz del workspace evita una ronda de tool
+        # calling desperdiciada en el camino más común, sin relajar la
+        # protección contra escapes reales: "../../etc/passwd" no
+        # empieza por "/", así que sigue bloqueado por relative_to().
+        if relative.startswith("/"):
+            relative = relative.lstrip("/") or "."
         candidate = (self.root / relative).resolve()
         try:
             candidate.relative_to(self.root)
