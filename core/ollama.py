@@ -193,10 +193,12 @@ _VERIFICATION_VERBS: tuple[str, ...] = (
 
 _STALL_NUDGE_MESSAGE = (
     "REGLA DE HIERRO: has respondido sin emitir ninguna tool call. "
-    "El usuario pidio una verificacion explicita. NO puedes cerrar "
-    "la fase sin ejecutar el comando. Tu siguiente mensaje DEBE "
-    "contener una llamada a la herramienta ejecutar_comando. No "
-    "respondas con texto hasta haber recibido el output del comando."
+    "El usuario pidio una operacion que requiere herramientas (leer, "
+    "escribir, ejecutar, buscar...). NO puedes cerrar el turno sin "
+    "emitir la tool call correspondiente. Tu siguiente mensaje DEBE "
+    "contener una llamada nativa a alguna de las herramientas "
+    "disponibles. No respondas con texto hasta haber recibido su "
+    "resultado."
 )
 
 # Maximo de reintentos tras detectar un stall. Con 1 basta: si el
@@ -792,25 +794,35 @@ class OllamaClient:
                         "content": _FALSE_COMPLETION_NUDGE,
                     })
                     continue
-                # Stall guard: si el usuario pidio verificacion
-                # explicita y el modelo NO ha emitido ninguna tool
-                # call en todo el chat(), no aceptamos la respuesta
-                # como "verificada". Inyectamos un nudge y repetimos
-                # la ronda (una sola vez).
+                # Stall guard generico (P1 2026-09-26). El gate
+                # autorizo tools para esta peticion (ctx.tool_names
+                # no vacio), pero el modelo respondio sin emitir
+                # ninguna. Es stall, sea el verbo leer/escribir/
+                # verificar/listar/buscar. Sin listas de verbos:
+                # la senal es que el gate autorizo tools.
+                #
+                # Se exige que el texto del usuario no sea pregunta
+                # para evitar disparar en 'explica como crear un
+                # archivo' (donde el modelo puede responder texto
+                # sin usar tools). Y se exige que el assistant cierre
+                # el turno (no pregunte de vuelta).
                 if (
                     state.stall_retries_used < _MAX_STALL_RETRIES
                     and not state.any_tool_call_emitted
                     and ctx.tool_names
-                    and self._user_requested_verification(
+                    and not self._user_asked_question(
                         ctx.authorization_text
+                    )
+                    and self._assistant_closes_turn(
+                        result.final_text
                     )
                 ):
                     state.stall_retries_used += 1
                     logger.info(
-                        "Stall detectado (modelo %s): respuesta sin "
-                        "tool calls tras peticion de verificacion. "
+                        "Stall generico (modelo %s): gate autorizo "
+                        "%d tool(s), modelo no emitio ninguna. "
                         "Inyectando nudge y repitiendo ronda.",
-                        ctx.model,
+                        ctx.model, len(ctx.tool_names),
                     )
                     ctx.history.append({
                         "role": "user",
