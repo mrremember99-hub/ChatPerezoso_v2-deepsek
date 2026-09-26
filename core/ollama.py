@@ -488,6 +488,26 @@ class OllamaClient:
             ),
         )
 
+        # Alinear Ollama con el presupuesto que la app ya calcula.
+        # Si el agente fijo num_ctx explicitamente, ese valor gana:
+        # no lo pisamos. Sin esto, Ollama usa su default (4k-32k
+        # segun VRAM) mientras la app poda como si fuera otro
+        # tamano. Fix derivado de la investigacion 2026-09-26.
+        effective_options = options
+        if (
+            context_window is not None
+            and context_window.limit_tokens > 0
+        ):
+            if options is None:
+                effective_options = {
+                    "num_ctx": context_window.limit_tokens
+                }
+            elif "num_ctx" not in options:
+                effective_options = dict(options)
+                effective_options["num_ctx"] = (
+                    context_window.limit_tokens
+                )
+
         for _ in range(max_rounds):
             # Diagnostico: loggear el snapshot si DEBUG.
             if ctx.snapshot is not None:
@@ -515,7 +535,7 @@ class OllamaClient:
                 send_tools,
                 None if buffer_only else on_text,
                 cancel_event=cancel_event,
-                options=options,
+                options=effective_options,
             )
 
             self._emit_round_metrics(ctx, message, state.token_cache)
