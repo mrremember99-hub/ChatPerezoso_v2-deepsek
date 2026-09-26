@@ -8,6 +8,11 @@ from PySide6.QtWidgets import QWidget
 import logging
 
 from core.context_window import ContextWindow
+from core.session_summary import (
+    SessionSummary,
+    build_summary_prompt,
+    format_summary_block,
+)
 from core.history import AsyncHistoryWriter, HistoryStore
 from core.ollama import is_textual_tool_failure
 from core.models_config import is_verified_tool_model
@@ -158,6 +163,13 @@ class ChatController(QObject):
         self._current_prompt: str = ""
         # Reintentos del prompt actual. Solo informativo.
         self._current_retry_count: int = 0
+        # Resumen rolling de la sesion (Hueco 2). Se regenera
+        # cada 20 mensajes, max 2 ciclos. Se inyecta al system
+        # prompt del siguiente turno.
+        self._session_summary = SessionSummary()
+        # Modelo para el resumen. Pequeno y rapido por diseno:
+        # el resumen es una tarea simple y no merece el grande.
+        self._summary_model: str = "qwen3:1.7b"
         self._current_actions: list[ToolResult] = []
         # Fallos consecutivos de tool calling textual. Reset:
         # tras mostrar el dialogo, tras un turno con tool calls
@@ -511,6 +523,48 @@ class ChatController(QObject):
                 return content if isinstance(content, str) else ""
         return ""
 
+    def _maybe_update_summary(self) -> None:
+        """Regenera el resumen rolling si toca (Hueco 2).
+
+        Se llama al inicio de send(). Best-effort: si el modelo
+        pequeno falla, la conversacion sigue sin resumen.
+        """
+        summary = getattr(self, "_session_summary", None)
+        if summary is None:
+            return
+        if not summary.should_update(
+            len(self.messages)
+        ):
+            return
+        prompt = build_summary_prompt(self.messages)
+        if not prompt:
+            return
+        self.status.emit("Actualizando resumen de sesion...")
+        try:
+            raw = self.client.chat(
+                self._summary_model,
+                [{"role": "user", "content": prompt}],
+                None,
+                lambda _t: None,
+                lambda *_a: "",
+                max_rounds=1,
+                options={"temperature": 0.3},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Resumen de sesion fallo (modelo %s): %s",
+                self._summary_model, exc,
+            )
+            return
+        block = format_summary_block(raw)
+        if not block:
+            return
+        self._session_summary.apply(block, len(self.messages))
+        logger.info(
+            "Resumen de sesion actualizado (%d ciclos, %d chars)",
+            self._session_summary.cycles, len(block),
+        )
+
     def send(
         self,
         text: str,
@@ -529,12 +583,27 @@ class ChatController(QObject):
         self.renderer.insert_user_message(text)
         self._append_message({"role": "user", "content": text})
         self.renderer.reset()
+        # Resumen rolling (Hueco 2): puede tardar 1-2s con
+        # qwen3:1.7b. Best-effort, no bloquea si falla.
+        self._maybe_update_summary()
         # Trace del turno anterior: leer ANTES de limpiar
         # _current_actions. Los tool_results no van al historial
         # persistente, asi que sin esto el modelo no sabe que
         # tools se ejecutaron en el turno inmediatamente anterior.
         trace = self._build_tool_trace()
         effective_system_prompt = self._last_system_prompt or ""
+        # Inyectar resumen de sesion ANTES del system base si
+        # existe. Formato: [RESUMEN DE LA SESION]\n...\n\n<base>
+        summary = getattr(self, "_session_summary", None)
+        summary_text = summary.text if summary is not None else ""
+        if summary_text:
+            effective_system_prompt = (
+                summary_text
+                + "\n\n"
+                + effective_system_prompt
+                if effective_system_prompt.strip()
+                else summary_text
+            )
         if trace:
             effective_system_prompt = (
                 effective_system_prompt + "\n\n---\n\n" + trace
@@ -612,6 +681,10 @@ class ChatController(QObject):
         if self._persist_timer.isActive():
             self._persist_timer.stop()
         self.store.clear()
+        # Nueva conversacion: resumen rolling a cero.
+        summary = getattr(self, "_session_summary", None)
+        if summary is not None:
+            summary.reset()
         self.conversation_changed.emit()
 
     def _reset_phase_history(self) -> None:
