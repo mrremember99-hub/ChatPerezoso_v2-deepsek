@@ -30,6 +30,8 @@ La prioridad #1 del protocolo (calidad de respuesta) se ve afectada directamente
 
 ### D1 — UI bloqueada por el resumen de sesión (ALTO)
 
+**RESUELTO en `4462440`.** El cálculo del resumen se movió al `ChatWorker`: se ejecuta al final del turno, en su hilo, y emite `summary_ready(raw, new_index)`. `send()` ya no llama al modelo; solo construye el prompt (puro). Además se cierra el hueco de 6 mensajes entre ciclos (`keep_recent=0` en modo incremental) y `_reset_phase_history` resetea el resumen entre fases.
+
 **Archivo:** `ui/controllers/chat_controller.py`, método `send()` (~línea 583) y `_maybe_update_summary()` (~línea 523).
 
 **Cadena de evidencia:**
