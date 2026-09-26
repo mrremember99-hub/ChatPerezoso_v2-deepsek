@@ -1453,7 +1453,7 @@ class OllamaClient:
         text = getattr(ctx, "authorization_text", "") or ""
         if not text:
             return ""
-        if not ToolIntentGate._is_short_confirmation(text):
+        if not ToolIntentGate.is_short_confirmation(text):
             return text
         last = getattr(ctx, "last_assistant", "") or ""
         if not last:

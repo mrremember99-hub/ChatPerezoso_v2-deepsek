@@ -130,7 +130,7 @@ class ToolIntentGate:
         return tools
 
     @staticmethod
-    def _is_short_confirmation(text: str) -> bool:
+    def is_short_confirmation(text: str) -> bool:
         """True si el texto es una confirmacion corta ("si", "vale"...).
 
         Tolerante a mayusculas, puntuacion final, y frases cortas
@@ -203,7 +203,7 @@ class ToolIntentGate:
         # bloquear un "si, hazlo" por error.
         if (
             last_assistant
-            and self._is_short_confirmation(text)
+            and self.is_short_confirmation(text)
             and self._assistant_mentions_rule_verb(rule, last_assistant)
         ):
             return True

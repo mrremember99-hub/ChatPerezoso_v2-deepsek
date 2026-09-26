@@ -19,24 +19,24 @@ def _gate() -> ToolIntentGate:
     })
 
 
-def test_is_short_confirmation_basicos():
-    assert ToolIntentGate._is_short_confirmation("si")
-    assert ToolIntentGate._is_short_confirmation("sí")
-    assert ToolIntentGate._is_short_confirmation("vale")
-    assert ToolIntentGate._is_short_confirmation("OK")
-    assert ToolIntentGate._is_short_confirmation("ok, adelante")
-    assert ToolIntentGate._is_short_confirmation("si, por favor")
-    assert ToolIntentGate._is_short_confirmation("Vale.")
-    assert ToolIntentGate._is_short_confirmation("hazlo")
+def testis_short_confirmation_basicos():
+    assert ToolIntentGate.is_short_confirmation("si")
+    assert ToolIntentGate.is_short_confirmation("sí")
+    assert ToolIntentGate.is_short_confirmation("vale")
+    assert ToolIntentGate.is_short_confirmation("OK")
+    assert ToolIntentGate.is_short_confirmation("ok, adelante")
+    assert ToolIntentGate.is_short_confirmation("si, por favor")
+    assert ToolIntentGate.is_short_confirmation("Vale.")
+    assert ToolIntentGate.is_short_confirmation("hazlo")
 
 
-def test_is_short_confirmation_rechaza_largos():
-    assert not ToolIntentGate._is_short_confirmation("")
-    assert not ToolIntentGate._is_short_confirmation("   ")
-    assert not ToolIntentGate._is_short_confirmation(
+def testis_short_confirmation_rechaza_largos():
+    assert not ToolIntentGate.is_short_confirmation("")
+    assert not ToolIntentGate.is_short_confirmation("   ")
+    assert not ToolIntentGate.is_short_confirmation(
         "lee el archivo gui.py y luego escribelo"
     )
-    assert not ToolIntentGate._is_short_confirmation("no gracias")
+    assert not ToolIntentGate.is_short_confirmation("no gracias")
 
 
 def test_confirmacion_autoriza_si_assistant_menciona_verbo():

@@ -450,6 +450,7 @@ class AppController(QObject):
         self._caps_thread.finished.connect(self._on_caps_thread_finished)
         self._caps_thread.start()
 
+    @Slot(str, object, int)
     def _on_capabilities_ready(
         self, model: str, caps, generation: int
     ) -> None:
@@ -515,6 +516,7 @@ class AppController(QObject):
         if pending is not None:
             self._start_caps_worker(pending[0], pending[1])
 
+    @Slot(list, list, list, list)
     def _on_mcp_servers_changed(
         self,
         _entries: list,
