@@ -5,6 +5,7 @@ import codecs
 import json
 import logging
 import re
+import shlex
 import threading
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
@@ -251,6 +252,20 @@ _FALSE_COMPLETION_MARKERS = _FALSE_COMPLETION_MARKERS + (
     "resuelto", "solucionado", "arreglado", "corregido",
     "ya esta", "funciona", "funcionando", "operativo",
     "acabado",
+)
+
+# Frases que un modelo puede usar para declarar una escritura
+# inexistente. Caso real: mistral-small3.2 dijo "se ha escrito
+# correctamente" tras emitir solo texto CLI (2026-09-26).
+_FALSE_COMPLETION_MARKERS = _FALSE_COMPLETION_MARKERS + (
+    "se ha escrito", "he escrito",
+    "se ha guardado", "he guardado",
+    "se ha modificado", "he modificado",
+    "se ha creado", "he creado",
+    "se ha actualizado", "he actualizado",
+    "se ha corregido", "he corregido",
+    "archivo escrito", "archivo creado",
+    "archivo modificado", "archivo guardado",
 )
 
 _FALSE_COMPLETION_NUDGE = (
@@ -624,18 +639,20 @@ class OllamaClient:
                 if (
                     state.false_completion_retries_used
                     < _MAX_FALSE_COMPLETION_RETRIES
-                    and state.any_tool_call_emitted
-                    # H7 del out(1): dispara si (a) alguna tool
-                    # fallo (patron mistral: ejecutar_comando sin
-                    # command), o (b) hay una tool de escritura
-                    # disponible que no se uso (patron read-only
-                    # -> 'Hecho.'). Sin (b), el caso 'user pide
-                    # crear + modelo lee + dice Hecho' no se
-                    # detectaba. Sin (a), el test con tools=[leer]
-                    # y 'edita x.txt' disparaba en falso.
+                    # H7 del out(1) + bug 2026-09-26: dispara si
+                    # (a) alguna tool fallo (patron mistral:
+                    # ejecutar_comando sin command), (b) hay una
+                    # tool de escritura disponible que no se uso
+                    # (patron read-only -> 'Hecho.'), o (c) el
+                    # modelo NO emitio NINGUNA tool call y dijo
+                    # haber escrito (mistral-small3.2 diciendo
+                    # 'se ha escrito correctamente' tras emitir
+                    # solo texto CLI). Sin (c), el caso 'modelo
+                    # responde texto sin tools' no se detectaba.
                     and (
                         state.any_tool_failed
                         or bool(_WRITE_TOOLS & ctx.tool_names)
+                        or not state.any_tool_call_emitted
                     )
                     and not state.any_write_executed
                     and ctx.tool_names
@@ -1366,6 +1383,60 @@ class OllamaClient:
 
     @staticmethod
     @staticmethod
+    def _parse_cli_tool_call(
+        content: str, tool_names: set[str]
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Detecta `tool_name --arg1 val1 --arg2 val2` en texto.
+
+        Tercer fallback tras XML y JSON. Caso real: mistral-small3.2
+        emite el tool call como linea de comandos cuando el chat
+        template falla (2026-09-26).
+
+        Reglas estrictas contra falsos positivos:
+          - 1 sola linea significativa (max 3 con basura).
+          - No contiene ``` (bloque de codigo).
+          - Empieza por un nombre de tool conocido.
+          - Tiene al menos un --arg con valor.
+        Los --kebab-case se normalizan a snake_case para casar
+        con el schema (--line-start -> line_start).
+        """
+        if not content or "```" in content:
+            return None
+        lines = [
+            l.rstrip() for l in content.strip().splitlines() if l.strip()
+        ]
+        if not lines or len(lines) > 3:
+            return None
+        first = lines[0].strip()
+        parts = first.split(maxsplit=1)
+        if not parts or parts[0] not in tool_names:
+            return None
+        if "--" not in first:
+            return None
+        try:
+            tokens = shlex.split(first)
+        except ValueError:
+            return None
+        if not tokens or tokens[0] not in tool_names:
+            return None
+        name = tokens[0]
+        args: dict[str, Any] = {}
+        i = 1
+        while i < len(tokens):
+            tok = tokens[i]
+            if tok.startswith("--"):
+                key = tok[2:].replace("-", "_")
+                if i + 1 >= len(tokens):
+                    break
+                args[key] = tokens[i + 1]
+                i += 2
+            else:
+                i += 1
+        if not args:
+            return None
+        return name, args
+
+    @staticmethod
     def _iter_balanced_json(text: str) -> Iterator[str]:
         """Genera substrings balanceados {...} en orden de aparicion.
 
@@ -1799,11 +1870,35 @@ class OllamaClient:
                             }
                         })
                     else:
-                        textual_name = OllamaClient._textual_tool_call_name(
+                        # Tercer fallback: formato CLI textual
+                        # (`tool --k v`). Bug 2026-09-26 con
+                        # mistral-small3.2.
+                        cli_call = self._parse_cli_tool_call(
                             content, tool_names
                         )
-                        if textual_name:
-                            message["_textual_tool_name"] = textual_name
+                        if cli_call is not None:
+                            cname, cargs = cli_call
+                            message["_textual_cli_call"] = (
+                                cname, cargs
+                            )
+                            message.setdefault(
+                                "tool_calls", []
+                            ).append({
+                                "function": {
+                                    "name": cname,
+                                    "arguments": cargs,
+                                }
+                            })
+                        else:
+                            textual_name = (
+                                OllamaClient._textual_tool_call_name(
+                                    content, tool_names
+                                )
+                            )
+                            if textual_name:
+                                message["_textual_tool_name"] = (
+                                    textual_name
+                                )
 
         # Si activamos buffering pero NO resulto ser tool call
         # textual NI hubo tool_calls nativos, el usuario no ha visto

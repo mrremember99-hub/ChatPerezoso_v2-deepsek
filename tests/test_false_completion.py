@@ -294,3 +294,39 @@ def test_sustantivos_no_autorizan_prosa():
     from core.ollama import OllamaClient
     assert not OllamaClient._user_requested_write("lee el archivo")
     assert not OllamaClient._user_requested_write("que es python")
+
+
+# -- Caso real 2026-09-26: modelo solo texto ----------------------------
+
+def test_modelo_solo_texto_sin_tool_calls_dispara_nudge():
+    """Modelo dice "se ha escrito" sin emitir NINGUNA tool.
+
+    Caso real: mistral-small3.2 respondiendo "El archivo alpha.py se
+    ha escrito correctamente" tras emitir solo texto CLI.
+    """
+    from core.ollama import OllamaClient
+
+    # Frases que ahora deben matchear.
+    assert OllamaClient._looks_like_false_completion(
+        "El archivo alpha.py se ha escrito correctamente."
+    )
+    assert OllamaClient._looks_like_false_completion(
+        "He creado el archivo."
+    )
+    assert OllamaClient._looks_like_false_completion(
+        "Se ha modificado exitosamente."
+    )
+    assert OllamaClient._looks_like_false_completion(
+        "Archivo escrito."
+    )
+
+
+def test_marcadores_nuevos_no_disparan_en_prosa_normal():
+    from core.ollama import OllamaClient
+    # Frases que no declaran haber terminado.
+    assert not OllamaClient._looks_like_false_completion(
+        "Voy a escribir el archivo"
+    )
+    assert not OllamaClient._looks_like_false_completion(
+        "Puedo crearlo si quieres"
+    )
