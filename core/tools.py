@@ -224,6 +224,11 @@ class ToolRegistry:
         if not isinstance(arguments, dict):
             return "ERROR: los argumentos de la herramienta deben ser un objeto."
 
+        # Normalizar aliases (line_start -> start_line, archivo ->
+        # path...) antes de validar. Modelos pequeños inventan
+        # nombres; si la intencion es correcta, no rechazamos.
+        arguments = _normalise_args(arguments, spec)
+
         for field in spec["required"]:
             if field not in arguments:
                 return f"ERROR: falta el argumento requerido: {field}"
@@ -307,6 +312,71 @@ class ToolRegistry:
         # contenido claramente equivocado sin inflar el historial.
         preview = actual if len(actual) <= 500 else actual[:500] + "\n…(truncado)"
         return f"{result}\n\nContenido verificado en disco:\n---\n{preview}\n---"
+
+
+# Aliases aceptados por cada argumento canonico. Solo se aplican
+# si el canonico NO esta presente y si la tool declara ese
+# argumento en su schema. Los modelos pequeños inventan nombres
+# (line_start por start_line, archivo por path...) y esta capa
+# evita rechazar llamadas que eran semanticamente correctas.
+_ALIASES: dict[str, tuple[str, ...]] = {
+    "path": (
+        "archivo", "nombre", "file", "filename", "ruta",
+        "folder", "dir", "carpeta",
+    ),
+    "content": ("contenido", "text", "body", "data"),
+    "start_line": ("line_start", "from_line", "desde_linea"),
+    "end_line": ("line_end", "to_line", "hasta_linea"),
+    "query": ("q", "search", "term", "regex", "pattern", "patron"),
+    "command": ("cmd", "comando", "shell"),
+    "ref": ("reference", "commit", "revision"),
+    "limit": ("max", "n", "count"),
+}
+
+
+def _normalise_args(
+    arguments: dict[str, Any], spec: dict[str, Any]
+) -> dict[str, Any]:
+    """Reemplaza aliases por su nombre canonico (si la tool lo usa).
+
+    Reglas:
+      - Solo se remapea si la tool declara el canonico en su schema.
+      - Si el canonico ya viene en `arguments`, gana ese; el alias
+        se descarta sin error (un modelo no deberia mandar ambos,
+        pero no rompemos por eso).
+      - Si el alias no esta en la tabla, se mantiene tal cual
+        (y la validacion posterior lo rechaza si no esta en schema).
+    """
+    if not arguments:
+        return arguments
+    properties = spec.get("properties", {})
+    if not properties:
+        return arguments
+    # Mapa alias -> canonico, solo para canonicos que esta tool usa.
+    alias_to_canonical: dict[str, str] = {}
+    for canonical, aliases in _ALIASES.items():
+        if canonical not in properties:
+            continue
+        for a in aliases:
+            alias_to_canonical[a] = canonical
+    if not alias_to_canonical:
+        return arguments
+
+    out: dict[str, Any] = {}
+    seen_canonical: set[str] = set()
+    for k, v in arguments.items():
+        canonical = alias_to_canonical.get(k)
+        if canonical is None:
+            out[k] = v
+            if k in properties:
+                seen_canonical.add(k)
+            continue
+        if canonical in seen_canonical:
+            # Ya teniamos el canonico: descartar el alias.
+            continue
+        out[canonical] = v
+        seen_canonical.add(canonical)
+    return out
 
 
 def _matches_type(value: Any, declared: str) -> bool:
