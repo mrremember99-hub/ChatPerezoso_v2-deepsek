@@ -122,6 +122,9 @@ class _ChatContext:
     strategy: Any
     history: list[dict[str, Any]]
     authorization_text: str
+    # Ultimo assistant message ANTES del ultimo user. Se usa para
+    # autorizar confirmaciones conversacionales (P1 auditoria).
+    last_assistant: str
     gate: ToolIntentGate
     tool_names: set[str]
     send_tools: list[dict[str, Any]] | None
@@ -785,6 +788,7 @@ class OllamaClient:
 
         definitions = self._extract_definitions(tools)
         authorization_text = self._last_user_text(history)
+        last_assistant = self._last_assistant_before_last_user(history)
         gate = self._build_intent_gate(tools)
         active_tools = gate.tools_for_request(
             definitions, authorization_text
@@ -839,6 +843,7 @@ class OllamaClient:
             strategy=strategy,
             history=history,
             authorization_text=authorization_text,
+            last_assistant=last_assistant,
             gate=gate,
             tool_names=tool_names,
             send_tools=send_tools,
@@ -950,6 +955,7 @@ class OllamaClient:
             text = authorize_and_execute(
                 name, args, ctx.gate,
                 ctx.authorization_text, ctx.on_tool,
+                last_assistant=ctx.last_assistant,
             )
             if text.startswith("OPERACIÓN NO AUTORIZADA"):
                 had_block = True
@@ -1311,6 +1317,28 @@ class OllamaClient:
             else:
                 cleaned.append(m)
         return cleaned
+
+    @staticmethod
+    def _last_assistant_before_last_user(
+        history: list[dict[str, Any]],
+    ) -> str:
+        """Ultimo assistant ANTES del ultimo user.
+
+        Se usa para autorizar confirmaciones conversacionales: el
+        usuario responde "si" a una pregunta del modelo, y el gate
+        necesita saber que pregunto el assistant (P1 auditoria).
+        """
+        last_user_idx: int | None = None
+        for i in range(len(history) - 1, -1, -1):
+            if history[i].get("role") == "user":
+                last_user_idx = i
+                break
+        if last_user_idx is None:
+            return ""
+        for i in range(last_user_idx - 1, -1, -1):
+            if history[i].get("role") == "assistant":
+                return str(history[i].get("content", ""))
+        return ""
 
     @staticmethod
     def _last_user_text(history: list[dict[str, Any]]) -> str:

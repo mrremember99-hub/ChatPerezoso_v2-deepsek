@@ -18,6 +18,19 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
+
+
+# Confirmaciones conversacionales. Cuando el modelo pregunta
+# "¿Puedo leer gui.py?" y el usuario responde "si", el texto del
+# usuario no contiene verbos de la tool. Sin esta lista, el gate
+# bloquea la tool y el modelo repite la pregunta en bucle (P1
+# auditoria 2026-09-26).
+_CONFIRMATIONS: frozenset[str] = frozenset({
+    "si", "sí", "yes",
+    "vale", "ok", "okay", "dale", "claro",
+    "adelante", "hazlo", "hazla", "confirma", "confirmo",
+    "confirmado", "de acuerdo", "por supuesto", "go ahead",
+})
 from typing import Any
 
 
@@ -116,14 +129,84 @@ class ToolIntentGate:
             return None
         return tools
 
-    def tool_is_requested(self, name: str, text: str) -> bool:
-        """Decide si el texto autoriza la herramienta ``name``."""
+    @staticmethod
+    def _is_short_confirmation(text: str) -> bool:
+        """True si el texto es una confirmacion corta ("si", "vale"...).
+
+        Tolerante a mayusculas, puntuacion final, y frases cortas
+        del tipo "si, por favor" o "ok, adelante".
+        """
+        if not text:
+            return False
+        norm = text.strip().lower().rstrip(".!,;:")
+        if not norm:
+            return False
+        if norm in _CONFIRMATIONS:
+            return True
+        tokens = norm.split()
+        if len(tokens) <= 4 and any(
+            t.strip(".!,;:") in _CONFIRMATIONS for t in tokens
+        ):
+            return True
+        return False
+
+    def _assistant_mentions_rule_verb(
+        self, rule: "IntentRule", assistant_text: str
+    ) -> bool:
+        """True si el assistant menciono algun verbo de la regla.
+
+        Usa substring directo, NO word-boundary: los verbos del
+        assistant aparecen conjugados con encliticos ("leerlo",
+        "modificarlo") y \b no matchea. Es intencionalmente mas
+        laxo aqui porque el assistant es el que PREGUNTA, no el
+        que ejecuta: la autorizacion real la da el usuario con la
+        confirmacion (P1 auditoria 2026-09-26).
+        """
+        if not assistant_text:
+            return False
+        all_verbs = rule.verbs + rule.weak_verbs
+        if not all_verbs:
+            return False
+        norm = self._normalise(assistant_text).lower()
+        for v in all_verbs:
+            v_norm = self._normalise(v).lower()
+            if v_norm and v_norm in norm:
+                return True
+        return False
+
+    def tool_is_requested(
+        self,
+        name: str,
+        text: str,
+        *,
+        last_assistant: str | None = None,
+    ) -> bool:
+        """Decide si el texto autoriza la herramienta ``name``.
+
+        Si `last_assistant` se proporciona y el usuario responde con
+        una confirmacion corta ("si", "vale", "ok"...), se autoriza
+        la tool si el assistant anterior menciono algun verbo de la
+        regla. Cubre el caso "modelo pregunta -> usuario confirma"
+        sin tener que reescribir el prompt (P1 auditoria 2026-09-26).
+        """
         rule = self.rules.get(name)
         if rule is None:
             if name.startswith("mcp__"):
                 rule = IntentRule(mcp_explicit_name_required=True)
             else:
                 return False
+
+        # Confirmacion conversacional: el usuario responde con un
+        # texto corto tipo "si" / "vale" a una pregunta del modelo.
+        # Se autoriza si el assistant anterior menciono un verbo de
+        # esta regla. Se comprueba ANTES de la negacion para no
+        # bloquear un "si, hazlo" por error.
+        if (
+            last_assistant
+            and self._is_short_confirmation(text)
+            and self._assistant_mentions_rule_verb(rule, last_assistant)
+        ):
+            return True
 
         all_verbs = rule.verbs + rule.weak_verbs
         if self._is_negated(all_verbs, text):

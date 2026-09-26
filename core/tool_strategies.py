@@ -76,6 +76,7 @@ def authorize_and_execute(
     gate: ToolIntentGate,
     authorization_text: str,
     on_tool,
+    last_assistant: str | None = None,
 ) -> str:
     """Ejecuta una tool SI el gate la autoriza. Único punto de decisión.
 
@@ -83,7 +84,9 @@ def authorize_and_execute(
     duplica: si cambia la política de autorización, cambia aquí y las
     dos estrategias la heredan.
     """
-    if not gate.tool_is_requested(name, authorization_text):
+    if not gate.tool_is_requested(
+        name, authorization_text, last_assistant=last_assistant
+    ):
         logger.warning(
             "Tool call bloqueado por el gate: %s (última petición: %r)",
             name, authorization_text[:80],
