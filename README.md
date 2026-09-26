@@ -65,7 +65,7 @@ chatperezoso/
 │ ├── verificador/ # Verificación post-escritura
 │ └── mcp/ # Adaptador MCP (server-filesystem)
 ├── scripts/ # Benchmarks y utilidades
-├── tests/ # 755 passed, 4 skipped
+├── tests/ # 1033 passed, 4 skipped
 └── docs/ # Auditorías y notas técnicas
 
 text
@@ -226,7 +226,7 @@ Estado: fase de diseño. Posponer tras Fase 2.2.
 `PlainTextRenderer` gestiona un único `QTextEdit`. El coste de layout crece con el tamaño total del documento. Arquitectura objetivo: `QScrollArea` + `QVBoxLayout` con un `QTextBrowser` por mensaje. Criterio de éxito: el tiempo de añadir un mensaje nuevo no debe crecer con el número de mensajes previos.
 
 ## Tests
-pytest -q # 755 passed, 4 skipped
+pytest -q # 1033 passed, 4 skipped
 pytest -q tests/test_X.py # Un archivo
 pytest -x # Parar al primer fallo
 
@@ -280,6 +280,16 @@ Detectado con `mistral-small3.2`: llama a `ejecutar_comando` sin `command` (fall
 
 ## Historial de sesiones recientes
 
+### 2026-09-26
+- `bb62e2f` — fix(intent): autorizar confirmaciones conversacionales (P1).
+- `b9baa91` — fix(chat): resetear historial entre fases de orquestación (P2).
+- `3be5aa8` — fix(app_controller): política latest-wins para probes de capabilities (P3).
+- `1e1b1ac` — perf(capabilities): TTL de 60s en caché de /api/show (N4).
+- `a09c141` — test(session_summary): integración del resumen rolling en ChatController.
+- `f66380d` — fix(chat_controller): guard getattr en _maybe_update_summary, send() y clear().
+- `872fe7c` — test(intent): cobertura de la rama rule=None + mcp__ en tool_is_requested.
+- Tests: 1033 passed, 4 skipped.
+
 ### 2026-09-25
 - `697b4ae` — fix(queue): 'Enviar todo' delega en orquestación determinista.
 - `46ae075` — feat(trace): tool trace persistente en system prompt.
@@ -298,7 +308,7 @@ Detectado con `mistral-small3.2`: llama a `ejecutar_comando` sin `command` (fall
 ## Estado del proyecto
 
 - **Rama**: `main`
-- **Tests**: 755 passed, 4 skipped
+- **Tests**: 1033 passed, 4 skipped
 - **Árbol**: limpio
 - **Bundles de seguridad**: `../chatperezoso-2026-09-25.bundle` (y 23, 24)
 
@@ -329,6 +339,8 @@ Del test end-to-end con prompt OVERPAPER 9 fases + gpt-oss:20b:
 
 ### P1 — Gate bloquea confirmaciones conversacionales
 
+**Estado: ✅ HECHO en `bb62e2f`.** Tests en `tests/test_intent_confirmations.py`.
+
 `ToolIntentGate` no reconoce "sí", "vale", "ok", "adelante", "hazlo"
 como respuestas afirmativas a una pregunta del modelo. Si el modelo
 pregunta "¿puedo leer gui.py?" y el usuario responde "sí", el gate
@@ -344,6 +356,8 @@ tool. Requiere que el gate tenga acceso al último assistant message.
 autoriza `leer_archivo("x.py")`.
 
 ### P2 — Orquestación no resetea historial entre fases
+
+**Estado: ✅ HECHO en `b9baa91`.** Test en `tests/test_orquestacion.py::test_reset_phase_history_limpia_mensajes`.
 
 `_advance_queue()` regenera el prompt de la fase con snapshot fresco,
 pero NO limpia `self.messages`. Cada fase arrastra el historial
@@ -389,36 +403,3 @@ Con la orquestación determinista, el usuario puede querer:
 
 **Test**: mock de cola con 3 items, editar el segundo, verificar
 que `_queue[1]` y `_phase_bodies[1]` cambian coherentemente.
-## Feature pendiente — Editar la cola de mensajes
-
-Con la orquestación determinista, el usuario puede querer:
-
-- **Editar un prompt pendiente** antes de que se envíe.
-- **Eliminar un item** de la cola.
-- **Reordenar** (mover arriba/abajo).
-
-**Diseño propuesto**:
-- Click derecho en un `QueueRow` → menú contextual con Editar /
-  Eliminar / Subir / Bajar.
-- Diálogo modal con `QPlainTextEdit` para editar.
-- `chat_controller` recibe señales: `queue_edit_item(idx, text)`,
-  `queue_remove_item(idx)`, `queue_move_item(idx, delta)`.
-- Mantener sincronizados `_queue`, `_phase_bodies`, `_queue_total`,
-  y `_queue_rows` de la UI.
-
-**Complejidad**: media. Toca `right_panel.py` + `chat_controller.py`
-+ `app_controller.py`.
-
-**Test**: mock de cola con 3 items, editar el segundo, verificar
-coherencia entre `_queue[1]` y `_phase_bodies[1]`.
-
-## Feature pendiente — Editar la cola de mensajes
-
-Con la orquestación determinista, el usuario puede querer editar un
-prompt pendiente, eliminar un item, o reordenar la cola.
-
-**Diseño**: click derecho en un QueueRow → menú contextual con
-Editar / Eliminar / Subir / Bajar. Diálogo modal con QPlainTextEdit.
-Señales nuevas en chat_controller: queue_edit_item,
-queue_remove_item, queue_move_item. Mantener sincronizados _queue,
-_phase_bodies, _queue_total y _queue_rows.
