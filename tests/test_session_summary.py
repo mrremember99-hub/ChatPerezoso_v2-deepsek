@@ -35,12 +35,12 @@ def test_should_update_tras_un_ciclo():
     assert s.should_update(40)
 
 
-def test_should_update_cap_ciclos():
+def test_should_update_sin_tope_de_ciclos():
     s = SessionSummary()
-    s.apply("r1", 20)
-    s.apply("r2", 40)
-    assert s.cycles == 2
-    assert not s.should_update(140)
+    for i in range(1, 6):
+        s.apply(f"r{i}", 20 * i)
+    assert s.cycles == 5
+    assert s.should_update(140)
 
 
 def test_reset_vuelve_a_cero():
@@ -154,3 +154,38 @@ def test_format_no_capa_si_cabe():
     raw = "· Progreso: corto"
     out = format_summary_block(raw)
     assert "truncado" not in out
+
+
+# -- D2/D3: incremental y sin cap ---------------------------------------
+
+
+def test_prompt_incremental_solo_nuevos():
+    msgs = [
+        {"role": "user", "content": "viejo 1"},
+        {"role": "assistant", "content": "respuesta vieja 1"},
+        {"role": "user", "content": "nuevo 1"},
+        {"role": "assistant", "content": "respuesta nueva 1"},
+        {"role": "user", "content": "nuevo 2"},
+    ]
+    prompt = build_summary_prompt(msgs, keep_recent=2, since_index=2)
+    assert "nuevo 1" in prompt
+    assert "viejo 1" not in prompt
+    assert "respuesta vieja 1" not in prompt
+
+
+def test_prompt_con_resumen_previo():
+    msgs = [{"role": "user", "content": "hola"}]
+    prompt = build_summary_prompt(
+        msgs, keep_recent=0, previous_summary="PREVIO: X"
+    )
+    assert "PREVIO: X" in prompt
+
+
+def test_prompt_sin_nuevos_devuelve_vacio():
+    msgs = [{"role": "user", "content": f"m{i}"} for i in range(10)]
+    assert build_summary_prompt(msgs, keep_recent=6, since_index=4) == ""
+
+
+def test_prompt_since_mayor_que_len_no_revienta():
+    msgs = [{"role": "user", "content": "x"}]
+    assert build_summary_prompt(msgs, keep_recent=0, since_index=100) == ""

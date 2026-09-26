@@ -41,10 +41,10 @@ class SessionSummary:
         history_len: int,
         *,
         min_new_messages: int = 20,
-        max_cycles: int = 2,
     ) -> bool:
-        if self.cycles >= max_cycles:
-            return False
+        # Sin cap de ciclos (D2, auditoria 2026-09-26): un tope fijo
+        # de 2 congelaba el resumen a los ~40 mensajes y se seguia
+        # inyectando obsoleto el resto de la sesion.
         new_since = history_len - self.last_message_count
         return new_since >= min_new_messages
 
@@ -58,12 +58,23 @@ def build_summary_prompt(
     messages: list[dict],
     *,
     keep_recent: int = 6,
+    since_index: int = 0,
+    previous_summary: str = "",
 ) -> str:
-    """Construye el prompt para el modelo que hara el resumen."""
+    """Construye el prompt para el modelo que hara el resumen.
+
+    Modo incremental (D2/D3, auditoria 2026-09-26): si se pasa
+    `since_index` y `previous_summary`, el prompt solo incluye los
+    mensajes nuevos desde el ultimo resumen y le pide al modelo
+    ACTUALIZAR el resumen previo en vez de regenerarlo. Sin esos
+    parametros mantiene el comportamiento original (regenerar
+    sobre todo el historial salvo los ultimos `keep_recent`).
+    """
     if not messages:
         return ""
-    slice_end = max(0, len(messages) - max(0, keep_recent))
-    older = messages[:slice_end]
+    start = max(0, min(since_index, len(messages)))
+    slice_end = max(start, len(messages) - max(0, keep_recent))
+    older = messages[start:slice_end]
     transcript_parts: list[str] = []
     for m in older:
         role = m.get("role")
@@ -86,16 +97,33 @@ def build_summary_prompt(
         "- 'Contexto' son preferencias del usuario relevantes.\n"
         "- Se conciso: maximo ~150 palabras en total.\n"
     )
-    intro = (
-        "Vas a resumir una conversacion tecnica entre un usuario "
-        "y un asistente de codigo. Devuelve SOLO el resumen en el "
-        "siguiente formato exacto, sin texto antes ni despues:\n\n"
-    )
+    if previous_summary.strip():
+        intro = (
+            "Tienes un resumen previo de esta conversacion tecnica. "
+            "Actualizalo con los mensajes nuevos que aparecen abajo: "
+            "conserva lo que siga siendo cierto, corrige lo obsoleto "
+            "y anade lo nuevo. Devuelve SOLO el resumen actualizado "
+            "en el siguiente formato exacto, sin texto antes ni "
+            "despues:\n\n"
+        )
+        prev_block = (
+            "--- RESUMEN PREVIO ---\n"
+            + previous_summary.strip()
+            + "\n"
+        )
+    else:
+        intro = (
+            "Vas a resumir una conversacion tecnica entre un usuario "
+            "y un asistente de codigo. Devuelve SOLO el resumen en el "
+            "siguiente formato exacto, sin texto antes ni despues:\n\n"
+        )
+        prev_block = ""
     return (
         intro
         + SUMMARY_HEADER + "\n"
         + sections + "\n\n"
         + reglas
+        + prev_block
         + "\n--- CONVERSACION A RESUMIR ---\n"
         + transcript
         + "\n--- FIN DE LA CONVERSACION ---"

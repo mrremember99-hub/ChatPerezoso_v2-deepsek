@@ -536,7 +536,11 @@ class ChatController(QObject):
             len(self.messages)
         ):
             return
-        prompt = build_summary_prompt(self.messages)
+        prompt = build_summary_prompt(
+            self.messages,
+            previous_summary=summary.text,
+            since_index=summary.last_message_count,
+        )
         if not prompt:
             return
         self.status.emit("Actualizando resumen de sesion...")

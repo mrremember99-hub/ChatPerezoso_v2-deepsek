@@ -34,9 +34,14 @@ def _make_ctrl() -> ChatController:
 
 
 def _fill(ctrl: ChatController, n: int) -> None:
+    # Base absoluta: cada llamada numera desde len(messages), no
+    # desde 0. Sin esto, dos _fill(20) producen "msg 0".."msg 19"
+    # dos veces y los tests de incrementalidad tienen colisiones
+    # de substring (auditoria D3, 2026-09-26).
+    base = len(ctrl.messages)
     for i in range(n):
         role = "user" if i % 2 == 0 else "assistant"
-        ctrl.messages.append({"role": role, "content": f"msg {i}"})
+        ctrl.messages.append({"role": role, "content": f"msg {base + i}"})
 
 
 def test_no_dispara_con_19_mensajes():
@@ -58,16 +63,14 @@ def test_dispara_con_20_mensajes():
     assert ctrl._session_summary.last_message_count == 20
 
 
-def test_cap_dos_ciclos():
+def test_rolling_continua_mas_alla_de_dos_ciclos():
     ctrl = _make_ctrl()
-    _fill(ctrl, 20)
-    ctrl._maybe_update_summary()
-    _fill(ctrl, 20)  # total 40
-    ctrl._maybe_update_summary()
-    _fill(ctrl, 20)  # total 60
-    ctrl._maybe_update_summary()
-    assert ctrl.client.chat.call_count == 2
-    assert ctrl._session_summary.cycles == 2
+    for _ in range(4):
+        _fill(ctrl, 20)
+        ctrl._maybe_update_summary()
+    assert ctrl.client.chat.call_count == 4
+    assert ctrl._session_summary.cycles == 4
+    assert ctrl._session_summary.last_message_count == 80
 
 
 def test_resumen_se_inyecta_antes_del_system_base():
@@ -102,3 +105,29 @@ def test_excepcion_del_modelo_no_revienta():
     ctrl._maybe_update_summary()  # no debe lanzar
     assert ctrl._session_summary.text == ""
     assert ctrl._session_summary.cycles == 0
+
+
+# -- D2/D3: incremental y sin cap ---------------------------------------
+
+
+def test_resumen_incremental_no_reenvia_historial_completo():
+    ctrl = _make_ctrl()
+    _fill(ctrl, 20)
+    ctrl._maybe_update_summary()
+    _fill(ctrl, 20)  # total 40
+    ctrl._maybe_update_summary()
+    second_prompt = ctrl.client.chat.call_args_list[1][0][1][0]["content"]
+    assert "msg 0" not in second_prompt
+    assert "msg 20" in second_prompt
+
+
+def test_segundo_ciclo_pasa_resumen_previo():
+    ctrl = _make_ctrl()
+    _fill(ctrl, 20)
+    ctrl._maybe_update_summary()
+    first_text = ctrl._session_summary.text
+    assert first_text
+    _fill(ctrl, 20)
+    ctrl._maybe_update_summary()
+    second_prompt = ctrl.client.chat.call_args_list[1][0][1][0]["content"]
+    assert first_text in second_prompt
