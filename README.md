@@ -65,7 +65,7 @@ chatperezoso/
 │ ├── verificador/ # Verificación post-escritura
 │ └── mcp/ # Adaptador MCP (server-filesystem)
 ├── scripts/ # Benchmarks y utilidades
-├── tests/ # 1033 passed, 4 skipped
+├── tests/ # 1045 passed, 4 skipped
 └── docs/ # Auditorías y notas técnicas
 
 text
@@ -219,6 +219,28 @@ Documento completo: `docs/audit-2026-09.md`.
 
 **Descartado con datos**: Fase 2.1 (`setLayoutEnabled(False)` + `beginEditBlock`); timeouts adaptativos (`httpx.Timeout(read=300)` es por lectura, no total).
 
+## Auditoría delta 2026-09-26 (pasada 4)
+
+Documento completo: `docs/auditoria-2026-09-26-delta.md`.
+
+**Aplicados en esta sesión:**
+
+| ID | Sev. | Commit | Qué |
+|---|---|---|---|
+| D1 | ALTO | `4462440` | Resumen de sesión movido a `ChatWorker`; no bloquea la UI. |
+| D2 | ALTO | `520b723` | Resumen rolling real; sin cap de ciclos. |
+| D3 | MEDIO | `520b723` | Prompt incremental con `since_index`; sin hueco de 6 mensajes. |
+| D4 | MEDIO | `e6baf23` | `@Slot` restaurados en conexiones cross-thread. |
+| D5 | MEDIO | `e6baf23` | `is_short_confirmation` público. |
+| N4 | — | `1e1b1ac` | TTL de 60s en caché de `/api/show`. |
+
+**Pendientes:**
+
+| ID | Sev. | Qué |
+|---|---|---|
+| D6 | BAJO/MEDIO | `_summary_model` hardcodeado a `qwen3:1.7b`; debería validarse disponibilidad. |
+| D7 | BAJO | Colisión de alias en `_normalise_args()` con dos claves al mismo canónico. |
+
 ## Migración del renderer (posible, no urgente)
 
 Estado: fase de diseño. Posponer tras Fase 2.2.
@@ -226,7 +248,7 @@ Estado: fase de diseño. Posponer tras Fase 2.2.
 `PlainTextRenderer` gestiona un único `QTextEdit`. El coste de layout crece con el tamaño total del documento. Arquitectura objetivo: `QScrollArea` + `QVBoxLayout` con un `QTextBrowser` por mensaje. Criterio de éxito: el tiempo de añadir un mensaje nuevo no debe crecer con el número de mensajes previos.
 
 ## Tests
-pytest -q # 1033 passed, 4 skipped
+pytest -q # 1045 passed, 4 skipped
 pytest -q tests/test_X.py # Un archivo
 pytest -x # Parar al primer fallo
 
@@ -241,6 +263,8 @@ text
 
 ### Prioridad media
 
+- [ ] **D6**: exponer `_summary_model` como config + validar disponibilidad vía `/api/show`.
+- [ ] **D7**: en `_normalise_args()`, error si dos alias normalizan al mismo canónico con valores distintos.
 - [ ] Migrar plugin de búsqueda a google-re2 (1-2 h).
 - [ ] Evaluar Outlines o XGrammar (1-2 días).
 - [ ] Herramientas: `snapshot_workspace`, `ejecutar_pruebas`, `memoria_proyecto`.
@@ -280,6 +304,16 @@ Detectado con `mistral-small3.2`: llama a `ejecutar_comando` sin `command` (fall
 
 ## Historial de sesiones recientes
 
+### 2026-09-26 (pasada 4 — auditoría delta)
+- `39c12f6` — docs(readme): limpieza de duplicados, cifras, P1/P2 hechos.
+- `566fa09` — docs(audit): auditoría delta 2026-09-26 (D1-D7, N4).
+- `520b723` — fix(session-summary): resumen rolling real — incremental sin cap (D2+D3).
+- `e6baf23` — fix(app_controller,intent): restaurar @Slot + exponer is_short_confirmation (D4+D5).
+- `f611bac` — docs(audit): marcar D2/D3/D4/D5 resueltos.
+- `4462440` — fix(session-summary): resumen en ChatWorker, no bloquea UI (D1).
+- `96bba92` — docs(audit): marcar D1 resuelto.
+- Tests: 1033 → 1045 passed, 4 skipped.
+
 ### 2026-09-26
 - `bb62e2f` — fix(intent): autorizar confirmaciones conversacionales (P1).
 - `b9baa91` — fix(chat): resetear historial entre fases de orquestación (P2).
@@ -308,9 +342,10 @@ Detectado con `mistral-small3.2`: llama a `ejecutar_comando` sin `command` (fall
 ## Estado del proyecto
 
 - **Rama**: `main`
-- **Tests**: 1033 passed, 4 skipped
+- **HEAD**: `96bba92`
+- **Tests**: 1045 passed, 4 skipped
 - **Árbol**: limpio
-- **Bundles de seguridad**: `../chatperezoso-2026-09-25.bundle` (y 23, 24)
+- **Bundles de seguridad**: ~16 en `../` (conservar `final`, `v10`, `v15`, `v19`; borrar el resto)
 
 ---
 ## Deuda técnica conocida
