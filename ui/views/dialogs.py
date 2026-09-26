@@ -444,6 +444,18 @@ def edit_agent(
     ctx_spin.setValue(agent.num_ctx)
     params_row.addRow("num_ctx:", ctx_spin)
 
+    predict_spin = QSpinBox()
+    predict_spin.setRange(0, 65_536)
+    predict_spin.setSingleStep(512)
+    predict_spin.setSpecialValueText("(por defecto del modelo)")
+    predict_spin.setValue(agent.num_predict)
+    predict_spin.setToolTip(
+        "Tokens maximos de salida. 0 = default del modelo\n"
+        "(tipicamente 2048). Sube a 4096-8192 para respuestas\n"
+        "largas (reescribir archivos completos)."
+    )
+    params_row.addRow("num_predict:", predict_spin)
+
     # Combo de modelo. "(usar el global)" = sin modelo específico.
     model_combo = QComboBox()
     model_combo.addItem("(usar el global)", "")
@@ -541,4 +553,5 @@ def edit_agent(
         top_p=agent.top_p,
         top_k=agent.top_k,
         repeat_penalty=agent.repeat_penalty,
+        num_predict=predict_spin.value(),
     )

@@ -43,6 +43,11 @@ class Agent:
     top_p: float | None = None
     top_k: int | None = None
     repeat_penalty: float | None = None
+    # Tokens maximos de salida. 0 = no enviar (usa el default del
+    # Modelfile del modelo, tipicamente 2048). Subir a 4096-8192
+    # permite respuestas largas (reescribir archivos completos)
+    # sin truncamiento. Ver hallazgo H1 de la auditoria 2026-09-26.
+    num_predict: int = 0
 
     def options(self) -> dict[str, Any]:
         options: dict[str, Any] = {"temperature": self.temperature}
@@ -54,6 +59,8 @@ class Agent:
             options["top_k"] = self.top_k
         if self.repeat_penalty is not None:
             options["repeat_penalty"] = self.repeat_penalty
+        if self.num_predict > 0:
+            options["num_predict"] = self.num_predict
         return options
 
     def to_dict(self) -> dict[str, Any]:
@@ -70,6 +77,7 @@ class Agent:
             "top_p": self.top_p,
             "top_k": self.top_k,
             "repeat_penalty": self.repeat_penalty,
+            "num_predict": self.num_predict,
         }
 
     @classmethod
@@ -116,6 +124,13 @@ class Agent:
         else:
             top_p = max(0.0, min(float(raw_top_p), 1.0))
 
+        raw_num_predict = data.get("num_predict", 0)
+        if isinstance(raw_num_predict, bool) or not isinstance(raw_num_predict, int):
+            num_predict = 0
+        else:
+            # 0 = no enviar. Rango defensivo 0-65536.
+            num_predict = max(0, min(raw_num_predict, 65_536))
+
         raw_top_k = data.get("top_k")
         if isinstance(raw_top_k, bool) or not isinstance(raw_top_k, int):
             top_k: int | None = None
@@ -143,6 +158,7 @@ class Agent:
             top_p=top_p,
             top_k=top_k,
             repeat_penalty=repeat_penalty,
+            num_predict=num_predict,
         )
 
 

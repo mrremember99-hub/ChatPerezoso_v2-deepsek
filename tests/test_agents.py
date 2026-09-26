@@ -129,3 +129,50 @@ def test_default_agents_analista_is_read_only():
     assert "leer_archivo" in allowed
     assert "escribir_archivo" not in allowed
     assert "ejecutar_comando" not in allowed
+
+
+# -- num_predict (investigacion 2026-09-26) ------------------------------
+
+def test_agent_options_sin_num_predict_por_defecto():
+    agent = Agent(name="A")
+    assert "num_predict" not in agent.options()
+
+
+def test_agent_options_con_num_predict():
+    agent = Agent(name="A", num_predict=4096)
+    assert agent.options().get("num_predict") == 4096
+
+
+def test_agent_options_num_predict_cero_no_envia():
+    agent = Agent(name="A", num_predict=0)
+    assert "num_predict" not in agent.options()
+
+
+def test_agent_to_dict_incluye_num_predict():
+    agent = Agent(name="A", num_predict=8192)
+    assert agent.to_dict()["num_predict"] == 8192
+
+
+def test_agent_from_dict_parsea_num_predict():
+    agent = Agent.from_dict({"name": "A", "num_predict": 4096})
+    assert agent.num_predict == 4096
+
+
+def test_agent_from_dict_default_cero_si_ausente():
+    agent = Agent.from_dict({"name": "A"})
+    assert agent.num_predict == 0
+
+
+def test_agent_from_dict_rechaza_invalidos():
+    # bool, string, negativo: todos caen a 0 o al rango defensivo.
+    assert Agent.from_dict({"name": "A", "num_predict": True}).num_predict == 0
+    assert Agent.from_dict({"name": "A", "num_predict": "alto"}).num_predict == 0
+    assert Agent.from_dict({"name": "A", "num_predict": -1}).num_predict == 0
+    # Valor enorme: clampado a 65536.
+    assert Agent.from_dict({"name": "A", "num_predict": 999_999}).num_predict == 65_536
+
+
+def test_agent_roundtrip_num_predict():
+    a = Agent(name="A", num_predict=4096)
+    b = Agent.from_dict(a.to_dict())
+    assert b.num_predict == 4096
