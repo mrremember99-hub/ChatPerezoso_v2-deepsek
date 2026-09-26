@@ -184,3 +184,52 @@ def _extract_context_length(model_info) -> int:
 def clear_cache():
     with _CACHE_LOCK:
         _CACHE.clear()
+
+# ---------------------------------------------------------------------
+# Disponibilidad de modelo (D6, auditoria 2026-09-26)
+# ---------------------------------------------------------------------
+# Cache propia, separada de _CACHE (que guarda ModelCapabilities).
+# Compartimos TTL para no spamear /api/show, pero la clave y el
+# shape son distintos: aqui solo importa True/False.
+_AVAIL_CACHE: dict[tuple[str, str], tuple[float, bool]] = {}
+_AVAIL_CACHE_LOCK = threading.Lock()
+
+
+def is_model_available(host: str, model: str, *, timeout: float = 2.0) -> bool:
+    """Devuelve True si el modelo esta instalado en Ollama.
+
+    Consulta /api/show y distingue:
+      - 200        -> True (instalado).
+      - 404        -> False (no instalado).
+      - otro error -> True. Deliberado: no deshabilitamos el resumen
+        por un fallo de red o un 5xx puntual. Si Ollama esta caido,
+        el chat principal tambien fallara.
+
+    Cacheado 60s por (host, model).
+    """
+    if not host or not model:
+        return False
+    key = (host.rstrip("/"), model)
+    now = time.monotonic()
+    with _AVAIL_CACHE_LOCK:
+        entry = _AVAIL_CACHE.get(key)
+    if entry is not None:
+        ts, cached = entry
+        if (now - ts) < _CACHE_TTL_S:
+            return cached
+    result = _probe_available(host, model, timeout=timeout)
+    with _AVAIL_CACHE_LOCK:
+        _AVAIL_CACHE[key] = (time.monotonic(), result)
+    return result
+
+
+def _probe_available(host: str, model: str, *, timeout: float) -> bool:
+    url = f"{host.rstrip('/')}/api/show"
+    try:
+        response = httpx.post(url, json={"name": model}, timeout=timeout)
+    except httpx.HTTPError:
+        return True
+    if response.status_code == 404:
+        return False
+    return True
+

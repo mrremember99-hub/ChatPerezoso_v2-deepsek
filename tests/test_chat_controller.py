@@ -630,3 +630,70 @@ def test_send_user_input_con_cola_activa_no_pausada_sigue_bloqueado(
 
     assert result is False
     assert called["send"] == 0
+
+
+# -- D6: gate de modelo de resumen -------------------------------------
+
+def test_summary_prompt_skipped_if_model_missing(controller, monkeypatch):
+    """Si is_model_available() -> False, no se construye summary_prompt
+    y se marca el flag de aviso unico por sesion."""
+    from ui.controllers import chat_controller as cc_mod
+
+    ctrl, _ = controller
+    ctrl.client = type("C", (), {"host": "http://x"})()
+    monkeypatch.setattr(
+        ctrl._session_summary, "should_update", lambda _n: True
+    )
+    monkeypatch.setattr(cc_mod, "is_model_available", lambda *a, **kw: False)
+
+    captured: dict = {}
+
+    def spawn_capture(model, options=None, system_prompt="",
+                      summary_prompt="", summary_new_index=0):
+        captured["summary_prompt"] = summary_prompt
+        captured["summary_new_index"] = summary_new_index
+
+    monkeypatch.setattr(ctrl, "_spawn_worker", spawn_capture)
+    ctrl._summary_model_warned = False
+
+    ctrl.send("hola", "m", None, "")
+    assert captured["summary_prompt"] == ""
+    assert captured["summary_new_index"] == 0
+    assert ctrl._summary_model_warned is True
+
+    # Segunda llamada: no vuelve a marcar como nuevo.
+    ctrl.messages = []
+    ctrl.send("hola2", "m", None, "")
+    assert ctrl._summary_model_warned is True
+
+
+def test_summary_prompt_built_if_model_available(controller, monkeypatch):
+    """Si is_model_available() -> True, se construye summary_prompt."""
+    from ui.controllers import chat_controller as cc_mod
+
+    ctrl, _ = controller
+    ctrl.client = type("C", (), {"host": "http://x"})()
+    monkeypatch.setattr(
+        ctrl._session_summary, "should_update", lambda _n: True
+    )
+    monkeypatch.setattr(cc_mod, "is_model_available", lambda *a, **kw: True)
+
+    captured: dict = {}
+
+    def spawn_capture(model, options=None, system_prompt="",
+                      summary_prompt="", summary_new_index=0):
+        captured["summary_prompt"] = summary_prompt
+        captured["summary_new_index"] = summary_new_index
+
+    monkeypatch.setattr(ctrl, "_spawn_worker", spawn_capture)
+    # El controller debe añadir el mensaje user a self.messages y luego
+    # build_summary_prompt usará el historial. Un solo mensaje no vale:
+    # le metemos un par user/assistant previo.
+    ctrl.messages = [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": "b"},
+    ]
+
+    ctrl.send("hola", "m", None, "")
+    assert captured["summary_prompt"] != ""
+    assert captured["summary_new_index"] > 0

@@ -37,6 +37,11 @@ class AppConfig:
     # ve el modelo. La tool `verificar_sintaxis` sigue disponible
     # siempre, independientemente de este flag.
     verificador_enabled: bool = False
+    # Modelo Ollama que genera el resumen rolling de la sesion.
+    # Pequeno y rapido por diseno: el resumen es una tarea simple.
+    # Si no esta instalado, el resumen se deshabilita (con aviso
+    # en el log) y el chat sigue funcionando normalmente. D6.
+    summary_model: str = "qwen3:1.7b"
 
     @classmethod
     def load(cls) -> "AppConfig":

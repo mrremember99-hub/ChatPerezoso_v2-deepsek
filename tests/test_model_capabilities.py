@@ -230,3 +230,63 @@ def test_override_native_preserva_context_length(monkeypatch, tmp_path):
     assert caps.source == "override"
     assert caps.native_tools is True
     assert caps.context_length == 32768
+
+
+# -- D6: is_model_available -------------------------------------------
+
+def _clear_avail_cache():
+    from core import model_capabilities as mc
+    with mc._AVAIL_CACHE_LOCK:
+        mc._AVAIL_CACHE.clear()
+
+
+def test_is_model_available_true_on_200(monkeypatch):
+    from core import model_capabilities as mc
+    _clear_avail_cache()
+
+    class FakeResp:
+        status_code = 200
+
+    monkeypatch.setattr(mc.httpx, "post", lambda *a, **kw: FakeResp())
+    assert mc.is_model_available("http://x", "m") is True
+
+
+def test_is_model_available_false_on_404(monkeypatch):
+    from core import model_capabilities as mc
+    _clear_avail_cache()
+
+    class FakeResp:
+        status_code = 404
+
+    monkeypatch.setattr(mc.httpx, "post", lambda *a, **kw: FakeResp())
+    assert mc.is_model_available("http://x", "m") is False
+
+
+def test_is_model_available_true_on_network_error(monkeypatch):
+    import httpx as _httpx
+    from core import model_capabilities as mc
+    _clear_avail_cache()
+
+    def boom(*a, **kw):
+        raise _httpx.ConnectError("boom")
+
+    monkeypatch.setattr(mc.httpx, "post", boom)
+    assert mc.is_model_available("http://x", "m") is True
+
+
+def test_is_model_available_uses_cache(monkeypatch):
+    from core import model_capabilities as mc
+    _clear_avail_cache()
+    calls = {"n": 0}
+
+    class FakeResp:
+        status_code = 200
+
+    def fake_post(*a, **kw):
+        calls["n"] += 1
+        return FakeResp()
+
+    monkeypatch.setattr(mc.httpx, "post", fake_post)
+    assert mc.is_model_available("http://x", "m") is True
+    assert mc.is_model_available("http://x", "m") is True
+    assert calls["n"] == 1

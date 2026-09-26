@@ -159,6 +159,7 @@ class AppController(QObject):
             self.view.chat_panel.renderer,
             store=self.history_store,
             initial_messages=initial_messages,
+            summary_model=self.config.summary_model,
         )
         self.chat_ctrl.set_workspace_provider(
             lambda: self.workspace

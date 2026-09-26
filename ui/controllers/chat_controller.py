@@ -16,6 +16,7 @@ from core.session_summary import (
 from core.history import AsyncHistoryWriter, HistoryStore
 from core.ollama import is_textual_tool_failure
 from core.models_config import is_verified_tool_model
+from core.model_capabilities import is_model_available
 from core.tool_provider import ToolProvider
 from core.prompt_phases import (
     DetectedPhases,
@@ -113,6 +114,7 @@ class ChatController(QObject):
         renderer: ChatRenderer,
         store: HistoryStore | None = None,
         initial_messages: list[dict] | None = None,
+        summary_model: str = "",
     ):
         # `client` y `tools` se anotan como Any porque los tests pasan
         # dobles que no cumplen los protocolos completos, y el worker
@@ -169,7 +171,9 @@ class ChatController(QObject):
         self._session_summary = SessionSummary()
         # Modelo para el resumen. Pequeno y rapido por diseno:
         # el resumen es una tarea simple y no merece el grande.
-        self._summary_model: str = "qwen3:1.7b"
+        self._summary_model: str = summary_model or "qwen3:1.7b"
+        # Aviso unico por sesion si el modelo no esta instalado (D6).
+        self._summary_model_warned: bool = False
         self._current_actions: list[ToolResult] = []
         # Fallos consecutivos de tool calling textual. Reset:
         # tras mostrar el dialogo, tras un turno con tool calls
@@ -201,6 +205,27 @@ class ChatController(QObject):
         self._stream_timer.timeout.connect(self._drain_stream)
 
     # -- API pública ---------------------------------------------------------
+    def _summary_model_available(self) -> bool:
+        """Comprueba disponibilidad del modelo de resumen (D6).
+
+        Cacheado 60s via core.model_capabilities.is_model_available.
+        Aviso una sola vez por sesion si no esta: el resumen se
+        deshabilita pero el chat sigue funcionando.
+        """
+        host = getattr(self.client, "host", "")
+        if not host or not self._summary_model:
+            return False
+        ok = is_model_available(host, self._summary_model)
+        if not ok and not self._summary_model_warned:
+            self._summary_model_warned = True
+            logger.warning(
+                "Modelo de resumen %r no disponible en %s; el "
+                "resumen de sesion queda deshabilitado hasta que "
+                "este instalado.",
+                self._summary_model, host,
+            )
+        return ok
+
     @property
     def state(self) -> ChatState:
         """Estado actual del chat."""
@@ -548,8 +573,10 @@ class ChatController(QObject):
         summary_prompt = ""
         summary_new_index = 0
         _summary = getattr(self, "_session_summary", None)
-        if _summary is not None and _summary.should_update(
-            len(self.messages)
+        if (
+            _summary is not None
+            and _summary.should_update(len(self.messages))
+            and self._summary_model_available()
         ):
             summary_prompt = build_summary_prompt(
                 self.messages,
