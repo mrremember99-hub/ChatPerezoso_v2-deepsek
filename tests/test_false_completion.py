@@ -330,3 +330,47 @@ def test_marcadores_nuevos_no_disparan_en_prosa_normal():
     assert not OllamaClient._looks_like_false_completion(
         "Puedo crearlo si quieres"
     )
+
+
+# -- Verbos pon/inserta + code block (bug 2026-09-26) -------------------
+
+def test_write_verbs_incluye_pon_e_inserta():
+    from core.ollama import OllamaClient
+    assert OllamaClient._user_requested_write(
+        "pon un boton pequeño en la columna derecha"
+    )
+    assert OllamaClient._user_requested_write("inserta un print al inicio")
+    assert OllamaClient._user_requested_write("mete un comentario")
+
+
+def test_has_code_block_detecta_bloque_largo():
+    from core.ollama import OllamaClient
+    body = "\n".join(f"    linea_{i} = {i}" for i in range(15))
+    text = "Voy a modificar el archivo:\n```python\n" + body + "\n```\n¿Algo más?"
+    assert OllamaClient._has_code_block(text, 10)
+
+
+def test_has_code_block_no_detecta_ejemplo_corto():
+    from core.ollama import OllamaClient
+    text = (
+        "Ejemplo:\n"
+        "```python\n"
+        "for i in range(3):\n"
+        "    print(i)\n"
+        "```\n"
+    )
+    assert not OllamaClient._has_code_block(text, 10)
+
+
+def test_has_code_block_sin_fence():
+    from core.ollama import OllamaClient
+    assert not OllamaClient._has_code_block("hola mundo", 10)
+    assert not OllamaClient._has_code_block("", 10)
+    assert not OllamaClient._has_code_block(None, 10)
+
+
+def test_has_code_block_con_tildes():
+    from core.ollama import OllamaClient
+    body = "\n".join(f"linea {i}" for i in range(12))
+    text = "~~~\n" + body + "\n~~~\n"
+    assert OllamaClient._has_code_block(text, 10)

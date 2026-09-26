@@ -234,6 +234,13 @@ _FALSE_COMPLETION_MARKERS: tuple[str, ...] = (
 
 # Ampliacion de vocabulario (H1 auditoria 2026-09-26).
 # Los tests demuestran que estas variantes se pierden hoy.
+# Verbos imperativos de colocar-algo que mistral-small3.2 usa
+# sin disparar el gate de escritura (bug 2026-09-26).
+_WRITE_VERBS = _WRITE_VERBS + (
+    "pon", "poner", "ponme",
+    "inserta", "insertar", "insertame",
+    "mete", "meter",
+)
 _WRITE_VERBS = _WRITE_VERBS + (
     "edicion", "ediciones",
     "modificacion", "modificaciones",
@@ -659,8 +666,23 @@ class OllamaClient:
                     and self._user_requested_write(
                         ctx.authorization_text
                     )
-                    and self._looks_like_false_completion(
-                        result.final_text
+                    and (
+                        self._looks_like_false_completion(
+                            result.final_text
+                        )
+                        or (
+                            not state.any_tool_call_emitted
+                            and self._has_code_block(
+                                result.final_text, 10
+                            )
+                        )
+                        or (
+                            state.any_tool_call_emitted
+                            and bool(_WRITE_TOOLS & ctx.tool_names)
+                            and self._has_code_block(
+                                result.final_text, 10
+                            )
+                        )
                     )
                 ):
                     state.false_completion_retries_used += 1
@@ -1265,6 +1287,32 @@ class OllamaClient:
         plano y se perdian variantes ("corrige", "arreglar"...).
         """
         return _mentions_any(text, _WRITE_VERBS)
+
+    @staticmethod
+    def _has_code_block(text: str | None, min_lines: int = 10) -> bool:
+        """True si `text` tiene un bloque ```...``` con N+ lineas.
+
+        Caso real (2026-09-26): mistral-small3.2 responde con el
+        codigo completo en el chat sin llamar a escribir_archivo.
+        El nudge de falso completado no disparaba porque no habia
+        marcador de exito. Con esto, un bloque grande en una
+        peticion de escritura cuenta como falso completado.
+
+        Exigir min_lines>=10 evita falsos positivos con ejemplos
+        cortos de codigo en respuestas explicativas.
+        """
+        if not text:
+            return False
+        import re as _re
+        pattern = _re.compile(
+            r"(?:```|~~~)[^\n]*\n(.*?)(?:```|~~~)",
+            _re.DOTALL,
+        )
+        for match in pattern.finditer(text):
+            body = match.group(1)
+            if body.count("\n") >= min_lines:
+                return True
+        return False
 
     @staticmethod
     def _looks_like_false_completion(text: str | None) -> bool:
