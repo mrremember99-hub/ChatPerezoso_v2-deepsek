@@ -57,3 +57,4 @@ scripts/*_patch2.py
 !workspace/.gitkeep
 models.json
 benchmark_modelos_*.md
+apply_*.py
