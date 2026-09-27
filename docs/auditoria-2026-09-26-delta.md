@@ -163,3 +163,33 @@ No han sido imprescindibles para completar este informe, pero ayudarían a confi
 2. ¿La eliminación de los `@Slot` en D4 fue deliberada (p. ej. por algún problema de tipado con PySide6) o un descuido del refactor?
 
 No se ha modificado nada del proyecto durante esta auditoría.
+
+## 6. Actualización — verificación de fixes + cobertura completa
+
+Desde que se escribió este informe, el proyecto avanzó 8 commits más (`e693d25`, `280810d`, `5bfc44f`, `95407a2`, `0e0939b`, `86ce889`, `4eb64ab`, `fdff32d`, `4e38514`, `96bba92`, `4462440`, `f611bac`, `e6baf23`, `520b723`, `e288643`) resolviendo **D1-D7 y N4 en su totalidad**, más hallazgos adicionales propios (H2, H3, H5, H13, H14, H17, F1, F2).
+
+**Verificación puntual (lectura directa del código actual, no solo del mensaje de commit):**
+- D1/D3 (bloqueo UI + coste sin cota): confirmado resuelto. El resumen ahora se genera en `ChatWorker._maybe_run_summary()`, en el hilo de worker, **después** de `finished.emit(result)` — la UI ya se desbloqueó cuando arranca.
+- D2: confirmado resuelto. `SessionSummary.should_update` ya no tiene `max_cycles`; `build_summary_prompt` acepta `since_index`/`previous_summary` y genera resumen incremental real en vez de releer todo el histórico.
+- D4/D5: confirmado resuelto. `@Slot(str, object, int)` y `@Slot(list, list, list, list)` restaurados en `app_controller.py`; `ToolIntentGate.is_short_confirmation` ahora es público.
+- D6: confirmado resuelto. `AppConfig.summary_model` configurable + `is_model_available()` con caché 60s como gate antes de intentar el resumen.
+- D7: confirmado resuelto. `_normalise_args` ahora distingue colisión con mismo valor (colapsa) de colisión con valores distintos (error explícito devuelto al modelo).
+
+De paso, el commit `95407a2` añadió `@Slot` también en `mcp_controller.py` (`_on_loaded`, `_on_error`) por consistencia — confirma que la ausencia de `@Slot` en D4 era en efecto un descuido puntual del refactor y no el estilo del proyecto.
+
+**Cobertura ampliada en esta pasada** (módulos que quedaban pendientes de pasadas anteriores):
+
+| Módulo | Resultado |
+|---|---|
+| `core/history.py` | Sin hallazgos. Escritura atómica (tmp+replace), executor de 1 worker serializa persistencia, `shutdown()` con timeout real. |
+| `ui/controllers/agent_controller.py` | Sin hallazgos. |
+| `ui/controllers/mcp_controller.py` | Sin hallazgos (y corrobora D4, ver arriba). |
+| `plugins/mcp/client.py`, `bridge.py` | Sin hallazgos. Manejo de subprocesos huérfanos de `npx`/`node` cuidado explícitamente, timeouts y cancelación correctos. |
+| `plugins/shell/client.py` | Sin hallazgos. 8 capas de sanitización sin `shell=True`; `_terminate()` ya corregido en `95407a2` (usaba `communicate()` en carrera con el hilo llamante, ahora usa `wait()`). |
+| `plugins/git/client.py`, `provider.py` | Sin hallazgos. Solo lectura, subprocess con lista de args. |
+| `plugins/search/client.py`, `provider.py` | Sin hallazgos. Usa `re2` cuando está disponible para evitar ReDoS, con fallback a `regex` con timeout por línea. |
+| `plugins/verificador/client.py`, `provider.py` | Sin hallazgos. Filtra ruido de ruff/mypy a códigos que indican error real; detecta el bug real `if __name__ == 'main'` (falta el guion bajo). |
+
+**No revisado en detalle en esta pasada** (por volumen y ausencia de señales de riesgo en el grep dirigido a patrones habituales — `except` desnudos, `shell=True`, `eval`/`exec`, llamadas de red síncronas fuera de worker): `ui/views/dialogs.py`, `ui/views/right_panel.py`, `ui/views/sidebar.py` (contenido completo, más allá del diff ya visto), `ui/views/chat_panel.py`, `ui/widgets.py`, `ui/diagnostics.py`, `ui/controllers/diagnostics_controller.py`, `ui/controllers/model_controller.py`, contenido línea a línea de `tests/*`.
+
+**Estado de la auditoría delta: cerrada.** No quedan hallazgos abiertos de esta pasada. La cobertura pendiente de arriba no mostró señales de riesgo en el escaneo dirigido, pero no ha recibido lectura línea por línea completa.

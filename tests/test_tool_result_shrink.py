@@ -53,21 +53,24 @@ def test_content_una_linea_de_mas():
 
 
 def test_role_tool_se_trunca():
+    # F4 (2026-09-27): leer_archivo ya no se shrinkea. Usamos una
+    # tool no excluida para verificar que el shrink sigue vivo.
     lines = "\n".join(f"linea {i}" for i in range(500))
     messages = [
-        {"role": "tool", "content": lines, "tool_name": "leer_archivo"},
+        {"role": "tool", "content": lines, "tool_name": "ejecutar_comando"},
     ]
     result = _shrink_tool_results(messages)
     assert "omitidas" in result[0]["content"]
-    assert result[0]["tool_name"] == "leer_archivo"  # preserva metadata
+    assert result[0]["tool_name"] == "ejecutar_comando"  # preserva metadata
 
 
 def test_user_con_prefijo_tool_result_se_trunca():
+    # F4: mismo cambio que arriba, tool no excluida.
     lines = "\n".join(f"linea {i}" for i in range(500))
     messages = [
         {
             "role": "user",
-            "content": f"[TOOL_RESULT:leer_archivo]\n{lines}",
+            "content": f"[TOOL_RESULT:ejecutar_comando]\n{lines}",
         },
     ]
     result = _shrink_tool_results(messages)
@@ -105,3 +108,28 @@ def test_content_no_str_se_preserva():
     messages = [{"role": "tool", "content": None}]
     result = _shrink_tool_results(messages)
     assert result[0]["content"] is None
+
+
+# -- F4 (2026-09-27): leer_archivo no se shrinkea ------------------------
+
+def test_leer_archivo_role_tool_no_se_trunca():
+    lines = "\n".join(f"linea {i}" for i in range(500))
+    messages = [
+        {"role": "tool", "content": lines, "tool_name": "leer_archivo"},
+    ]
+    result = _shrink_tool_results(messages)
+    assert result[0]["content"] == lines
+    assert "omitidas" not in result[0]["content"]
+
+
+def test_leer_archivo_xml_no_se_trunca():
+    lines = "\n".join(f"linea {i}" for i in range(500))
+    messages = [
+        {
+            "role": "user",
+            "content": f"[TOOL_RESULT:leer_archivo]\n{lines}",
+        },
+    ]
+    result = _shrink_tool_results(messages)
+    assert result[0]["content"] == f"[TOOL_RESULT:leer_archivo]\n{lines}"
+    assert "omitidas" not in result[0]["content"]

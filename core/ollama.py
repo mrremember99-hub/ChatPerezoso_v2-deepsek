@@ -233,6 +233,12 @@ _TOOL_RESULT_MAX_LINES = 100
 _TOOL_RESULT_KEEP_HEAD = 60
 _TOOL_RESULT_KEEP_TAIL = 20
 
+# F4 (2026-09-27): tools cuyo resultado el modelo puede copiar
+# literalmente al escribir. NO se shrinkean para no colar el
+# marcador de truncado en el archivo destino. Bug real: un
+# leer_archivo con marcador acabó en gui.py y produjo SyntaxError.
+_NO_SHRINK_TOOLS: frozenset[str] = frozenset({"leer_archivo"})
+
 
 # Limite de tamano del thinking reenviado al modelo entre rondas
 # de tool calling. ~4k chars aprox ~1k tokens. Sin esto, un tool
@@ -312,6 +318,18 @@ def _shrink_tool_results(
             role == "user" and content.startswith("[TOOL_RESULT:")
         )
         if not is_tool:
+            out.append(m)
+            continue
+        # F4 (2026-09-27): saltar tools cuyo resultado el modelo
+        # puede copiar literalmente al escribir. Ver _NO_SHRINK_TOOLS.
+        tool_name = m.get("tool_name")
+        if not tool_name and role == "user":
+            prefix = "[TOOL_RESULT:"
+            if content.startswith(prefix):
+                end = content.find("]", len(prefix))
+                if end > 0:
+                    tool_name = content[len(prefix):end]
+        if tool_name in _NO_SHRINK_TOOLS:
             out.append(m)
             continue
         shrunk = _shrink_tool_result_content(content)

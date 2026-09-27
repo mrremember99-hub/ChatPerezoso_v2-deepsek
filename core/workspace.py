@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 MAX_READ_BYTES = 200_000
@@ -21,6 +22,37 @@ _SKIP_DIRS = frozenset({
 
 class WorkspaceError(Exception):
     pass
+
+
+_SHRINK_MARKER_PATTERN = re.compile(
+    r"\[\.\.\.\s*\d+\s+l[ií]neas?\s+omitidas?\s+por\s+tama[nñ]o",
+    re.IGNORECASE,
+)
+
+
+def _reject_shrink_marker(content: str) -> None:
+    """Rechaza contenido con un marcador de truncado de lectura.
+
+    F3 (2026-09-27): el modelo, al escribir un archivo grande, puede
+    copiar literalmente el marcador que ve en un tool result de
+    lectura (``[... 148 lineas omitidas por tamano ...]``). Ese
+    marcador no es parte del archivo: es una anotacion de la app.
+    Copiarlo rompe la sintaxis del archivo (SyntaxError en Python).
+
+    El regex tolera acentos y variantes porque el modelo puede
+    reescribir el texto a mano.
+    """
+    if not isinstance(content, str):
+        return
+    if _SHRINK_MARKER_PATTERN.search(content):
+        raise WorkspaceError(
+            "El contenido contiene un marcador de truncado de lectura "
+            "('[.. N lineas omitidas por tamano]'). Ese marcador NO es "
+            "parte del archivo: es una anotacion de la app. NO lo "
+            "copies. Si el archivo es grande, usa editar_archivo con "
+            "el fragmento exacto, o vuelve a leerlo por rangos con "
+            "start_line/end_line."
+        )
 
 
 class Workspace:
@@ -226,6 +258,7 @@ class Workspace:
         """
         if not isinstance(text, str):
             raise WorkspaceError("text debe ser texto.")
+        _reject_shrink_marker(text)
         try:
             line_no = int(insert_line)
         except (TypeError, ValueError) as exc:
@@ -288,6 +321,7 @@ class Workspace:
         )
 
     def create_file(self, path: str, content: str = "") -> str:
+        _reject_shrink_marker(content)
         file = self._path(path)
         if file.exists():
             # El error es instructivo a propósito: los modelos que
@@ -314,6 +348,7 @@ class Workspace:
         return f"Carpeta creada: {folder.relative_to(self.root)}"
 
     def write_file(self, path: str, content: str) -> str:
+        _reject_shrink_marker(content)
         file = self._path(path)
         if file.is_dir():
             raise WorkspaceError(f"Es una carpeta, no un archivo: {path}")
@@ -342,6 +377,7 @@ class Workspace:
             raise WorkspaceError("old_string no puede estar vacio.")
         if not isinstance(new_string, str):
             raise WorkspaceError("new_string debe ser texto.")
+        _reject_shrink_marker(new_string)
         if old_string == new_string:
             raise WorkspaceError(
                 "old_string y new_string son identicos, nada que hacer."
