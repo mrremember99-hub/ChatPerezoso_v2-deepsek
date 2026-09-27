@@ -449,12 +449,19 @@ _INTERRUPTED_STREAM_MSG = (
     "en el historial. Reintenta la peticion."
 )
 
-# Sufijo visible cuando Ollama corta la generacion por num_predict.
-# La respuesta es valida pero incompleta por limite de tokens.
+# Sufijo visible cuando Ollama corta la generacion con
+# done_reason="length". La respuesta es valida pero incompleta.
+#
+# Auditoria 2026-09-27: Ollama emite el mismo done_reason tanto si
+# se agota num_predict (limite de output) como si se agota num_ctx
+# (contexto total). Antes asumiamos num_predict siempre; el caso
+# OVERPAPER con gpt-oss:20b era num_ctx (agente Programador con
+# num_ctx=16384). El mensaje ahora menciona ambas causas.
 _TRUNCATED_STREAM_SUFFIX = (
-    "\n\n[Respuesta truncada: se alcanzo el limite de tokens "
-    "de generacion (num_predict). Aumenta el limite o divide "
-    "la tarea.]"
+    "\n\n[Respuesta truncada: se alcanzo el limite de tokens. "
+    "Causas posibles: (a) num_predict (output), (b) num_ctx "
+    "(contexto total + output). Revisa AppConfig.num_predict y "
+    "el num_ctx del agente activo en agents.json.]"
 )
 
 
@@ -764,7 +771,9 @@ class OllamaClient:
             # valida pero incompleta. Se marca visualmente.
             if result.is_final and result.done_reason == "length":
                 logger.info(
-                    "Respuesta truncada por num_predict (modelo %s).",
+                    "Respuesta truncada (modelo %s, "
+                    "done_reason=length). Causas posibles: "
+                    "num_predict alcanzado o num_ctx agotado.",
                     ctx.model,
                 )
                 result.final_text = (
