@@ -41,7 +41,6 @@ _MAX_RATIO = 6.0
 class _ModelCalibration:
     chars_per_token: float = _DEFAULT_CHARS_PER_TOKEN
     observations: int = 0
-    last_actual: int = 0
 
 
 class TokenCalibrationStore:
@@ -69,14 +68,12 @@ class TokenCalibrationStore:
                 self._models[model] = _ModelCalibration(
                     chars_per_token=observed,
                     observations=1,
-                    last_actual=actual_tokens,
                 )
                 return
             cal.chars_per_token = (
                 (1.0 - alpha) * cal.chars_per_token + alpha * observed
             )
             cal.observations += 1
-            cal.last_actual = actual_tokens
 
     def has_calibration(self, model: str) -> bool:
         if not model:

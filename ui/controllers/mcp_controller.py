@@ -70,10 +70,6 @@ class MCPController(QObject):
 
     # -- consulta ------------------------------------------------------------
     @property
-    def pending_ids(self) -> list[str]:
-        return list(self._threads)
-
-    @property
     def dead_ids(self) -> list[str]:
         return sorted(self._dead)
 

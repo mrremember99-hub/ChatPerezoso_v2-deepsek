@@ -79,7 +79,6 @@ class ChatController(QObject):
     state_changed = Signal(object)  # ChatState
     status = Signal(str)
     assistant_message = Signal(str)
-    error_message = Signal(str)
     conversation_changed = Signal()
     mcp_error = Signal(str)
     textual_tool_attempt = Signal()
@@ -288,9 +287,6 @@ class ChatController(QObject):
         self._advance_queue()
         return True
 
-    def has_queue(self) -> bool:
-        return self._queue_active
-
     def _stop_queue_with_message(self, message: str) -> None:
         """Detiene la cola y limpia el estado interno.
 
@@ -478,9 +474,6 @@ class ChatController(QObject):
         self.queue_item_status_changed.emit(current, "cancelled")
         self._stop_queue_with_message("Cola cancelada por el usuario")
         return True
-
-    def is_queue_paused(self) -> bool:
-        return self._queue_paused
 
     def set_auto_approve(self, enabled: bool) -> None:
         """Activa o desactiva el piloto automático de confirmaciones.

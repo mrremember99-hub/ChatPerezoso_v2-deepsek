@@ -552,16 +552,6 @@ class OllamaClient:
 
     # -- API pública ---------------------------------------------------------
 
-    def force_close_active(self) -> None:
-        """No-op por compatibilidad.
-
-        Antes cerrábamos la respuesta HTTP desde otro hilo, pero httpx
-        sync no es thread-safe para eso y causaba segfaults. Ahora la
-        cancelación se hace vía future.cancel() en el event loop del
-        AsyncRunner, que interrumpe el await sin tocar el socket.
-        """
-        pass
-
     # -- cliente HTTP persistente -------------------------------------------
 
     async def _get_client(self) -> httpx.AsyncClient:

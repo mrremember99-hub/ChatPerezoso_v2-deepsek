@@ -241,13 +241,3 @@ _default = ModelsConfig()
 
 def get_override(model: str) -> ModelOverride:
     return _default.get(model)
-
-
-def set_override(model: str, mode: str, note: str = "") -> None:
-    _default.set(model, mode, note)
-
-
-def reload() -> None:
-    """Fuerza recargar el archivo desde disco. Útil tras editarlo a mano."""
-    _default._loaded = False
-    _default._ensure_loaded()

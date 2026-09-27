@@ -343,8 +343,3 @@ class AsyncRunner:
 class _CancelledByEvent(Exception):
     """Cancelación solicitada por el usuario (via cancel_event)."""
     pass
-
-
-def is_cancelled_error(exc: BaseException) -> bool:
-    """True si la excepción es una cancelación de asyncio."""
-    return isinstance(exc, (asyncio.CancelledError, _CancelledByEvent))

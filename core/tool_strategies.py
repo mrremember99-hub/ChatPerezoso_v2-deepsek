@@ -97,44 +97,6 @@ def authorize_and_execute(
 
 # ── Interfaz ──────────────────────────────────────────────────────────
 
-@runtime_checkable
-class ToolCallingStrategy(Protocol):
-    """Contrato que deben cumplir NativeToolStrategy y XmlToolStrategy."""
-
-    def prepare_system_prompt(self, active_tools: list[dict[str, Any]]) -> str:
-        """Texto a inyectar en el system prompt para describir las tools."""
-        ...
-
-    def should_send_tools_param(self) -> bool:
-        """True si el payload debe incluir `tools` en la petición HTTP."""
-        ...
-
-    def needs_full_buffer(self, has_active_tools: bool) -> bool:
-        """True si el streaming debe bufferearse entero antes de mostrar.
-
-        En modo XML no sabemos si el modelo va a escribir texto o un
-        bloque <tool_call> hasta que termina. Bufferear evita mostrar
-        el XML crudo al usuario.
-        """
-        ...
-
-    def process_round(
-        self,
-        message: dict[str, Any],
-        tool_names: set[str],
-    ) -> RoundResult:
-        """Interpreta la respuesta del modelo y devuelve qué hacer."""
-        ...
-
-    def format_tool_result(
-        self,
-        name: str,
-        result_text: str,
-    ) -> dict[str, Any]:
-        """Cómo añadir un resultado de tool al historial."""
-        ...
-
-
 # ── Estrategia nativa ─────────────────────────────────────────────────
 
 class NativeToolStrategy:
@@ -220,11 +182,6 @@ class NativeToolStrategy:
 class XmlToolStrategy:
     """Prompt-guided XML: describe las tools en el system prompt y parsea
     bloques <tool_call> del texto."""
-
-    def __init__(self, active_tools: list[dict[str, Any]] | None = None):
-        # Guardamos las tools activas para saber si esta estrategia debe
-        # bufferear el stream (solo si hay tools para parsear).
-        self._has_tools = bool(active_tools)
 
     def prepare_system_prompt(self, active_tools: list[dict[str, Any]]) -> str:
         from .xml_tools import build_tools_prompt

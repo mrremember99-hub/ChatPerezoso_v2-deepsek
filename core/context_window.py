@@ -313,32 +313,6 @@ class ContextWindow:
         estimated_chars = max(1, int(content_budget * 2.8))
         return text[:estimated_chars] + note
 
-    def estimate_request(
-        self,
-        *,
-        system_prompt: str,
-        tool_definitions: list[dict],
-        messages: list[dict],
-    ) -> int:
-        """Estima tokens del prompt completo (system + tools + historial)."""
-        total = self.estimate_tokens(system_prompt)
-        for definition in tool_definitions:
-            # Misma serializacion que fit() (separators compactos).
-            # Antes se usaba la default con espacios, lo que daba
-            # estimaciones ligeramente distintas.
-            total += self.estimate_tokens(
-                json.dumps(
-                    definition,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                )
-            )
-        total += self._estimate_messages(messages)
-        return total
-
-    def _estimate_messages(self, messages: list[dict]) -> int:
-        return sum(self.estimate_message_tokens(m) for m in messages)
-
     # -- poda ----------------------------------------------------------------
 
     def fit(

@@ -160,10 +160,6 @@ class ChatPanel(QWidget):
         """Estado actual del panel."""
         return self._state
 
-    def set_streaming(self, streaming: bool) -> None:
-        """Compatibilidad: convierte bool a ChatState."""
-        self.set_state(ChatState.STREAMING if streaming else ChatState.IDLE)
-
     def set_state(self, state: ChatState) -> None:
         """Refleja el estado del ChatController en la UI.
 

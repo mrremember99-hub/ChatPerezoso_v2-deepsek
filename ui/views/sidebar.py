@@ -370,9 +370,6 @@ class Sidebar(QWidget):
         self.verificador_check.setChecked(bool(enabled))
         self.verificador_check.blockSignals(blocked)
 
-    def is_verificador(self) -> bool:
-        return self.verificador_check.isChecked()
-
     def _on_auto_approve_toggled(self, enabled: bool) -> None:
         """Encadena la extensión de shell al piloto principal.
 

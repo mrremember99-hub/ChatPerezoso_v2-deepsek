@@ -247,8 +247,6 @@ class ChatWorker(QObject):
         # `_confirmation_approved`.
         self._confirmation_lock = threading.Lock()
         self._confirmation_event: threading.Event | None = None
-        self._confirmation_name = ""
-        self._confirmation_arguments: dict[str, Any] = {}
         self._confirmation_approved = False
         # Resumen de sesion (D1). Si summary_prompt esta vacio, el
         # worker no hace nada extra al terminar el turno.
@@ -515,8 +513,6 @@ class ChatWorker(QObject):
         event = threading.Event()
         with self._confirmation_lock:
             self._confirmation_event = event
-            self._confirmation_name = name
-            self._confirmation_arguments = dict(arguments)
             self._confirmation_approved = False
         self.confirmation_requested.emit(name, dict(arguments))
 
@@ -530,8 +526,6 @@ class ChatWorker(QObject):
         with self._confirmation_lock:
             approved = self._confirmation_approved
             self._confirmation_event = None
-            self._confirmation_name = ""
-            self._confirmation_arguments = {}
             self._confirmation_approved = False
 
         if approved and not self._cancel_event.is_set():

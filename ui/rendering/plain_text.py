@@ -35,7 +35,6 @@ class PlainTextRenderer:
         # formato monoespaciado al código mientras llega, sin
         # esperar al cierre del bloque para Pygments.
         self._in_code_fence: bool = False
-        self._code_fence_lang: str = ""
         # Estado del bloque "cola de prompts". Se rellena al encolar
         # y se actualiza in-place cada vez que un prompt avanza.
 
@@ -64,7 +63,6 @@ class PlainTextRenderer:
         self._segment_end = None
         self._segment_chars = 0
         self._in_code_fence = False
-        self._code_fence_lang = ""
         # No limpiamos el todo list aquí: queremos que sobreviva a
         # resets entre turnos de la cola. Solo se limpia al iniciar
 
@@ -239,10 +237,6 @@ class PlainTextRenderer:
                 is_fence = line.lstrip().startswith("```")
                 if is_fence:
                     self._in_code_fence = not self._in_code_fence
-                    if self._in_code_fence:
-                        self._code_fence_lang = line.lstrip()[3:].strip()
-                    else:
-                        self._code_fence_lang = ""
                 if line:
                     if self._in_code_fence or is_fence:
                         # Aplicar formato monoespaciado para código.

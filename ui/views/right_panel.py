@@ -377,9 +377,6 @@ class RightPanel(QWidget):
     def show_queue_paused(self) -> None:
         self.queue_paused_bar.setVisible(True)
 
-    def hide_queue_paused(self) -> None:
-        self.queue_paused_bar.setVisible(False)
-
     def _on_retry_clicked(self) -> None:
         self.queue_paused_bar.setVisible(False)
         self.queue_retry_requested.emit()
