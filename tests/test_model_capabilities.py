@@ -290,3 +290,90 @@ def test_is_model_available_uses_cache(monkeypatch):
     assert mc.is_model_available("http://x", "m") is True
     assert mc.is_model_available("http://x", "m") is True
     assert calls["n"] == 1
+
+
+# -- A: probe cancelable (auditoria 2026-09-27) ------------------------
+
+def test_probe_salta_si_cancel_event_activo(monkeypatch):
+    """Si cancel_event ya esta activo, no abrir socket."""
+    from core import model_capabilities as mc
+    import threading
+
+    calls = {"n": 0}
+
+    def fake_post(*a, **kw):
+        calls["n"] += 1
+        raise AssertionError("no deberia llamar httpx.post")
+
+    monkeypatch.setattr(mc.httpx, "post", fake_post)
+    cancel = threading.Event()
+    cancel.set()
+    caps = mc._probe("http://x", "m", timeout=2.0, cancel_event=cancel)
+    assert calls["n"] == 0
+    assert caps.probed is False
+    assert caps.source == "fallback"
+
+
+def test_probe_no_salta_si_cancel_event_no_activo(monkeypatch):
+    """Sin cancel activo, el probe se ejecuta normal."""
+    from core import model_capabilities as mc
+    import threading
+
+    class FakeResp:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self):
+            return {"capabilities": ["tools"]}
+
+    monkeypatch.setattr(mc.httpx, "post", lambda *a, **kw: FakeResp())
+    cancel = threading.Event()
+    caps = mc._probe("http://x", "m", timeout=2.0, cancel_event=cancel)
+    assert caps.probed is True
+    assert caps.native_tools is True
+
+
+def test_probe_available_salta_si_cancel_event_activo(monkeypatch):
+    from core import model_capabilities as mc
+    import threading
+
+    monkeypatch.setattr(
+        mc.httpx, "post",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("no deberia llamar post")
+        ),
+    )
+    cancel = threading.Event()
+    cancel.set()
+    # Fail-open: cancel no es 404, devuelve True.
+    assert mc._probe_available("http://x", "m", timeout=2.0,
+                                cancel_event=cancel) is True
+
+
+def test_get_capabilities_acepta_cancel_event(monkeypatch):
+    """get_capabilities propaga cancel_event a _probe."""
+    from core import model_capabilities as mc
+    import threading
+
+    called = {"cancel": None}
+
+    def fake_probe(host, model, *, timeout, cancel_event=None):
+        called["cancel"] = cancel_event
+        return mc.ModelCapabilities(
+            name=model, native_tools=True, probed=False, source="fallback",
+        )
+
+    monkeypatch.setattr(mc, "_probe", fake_probe)
+    # Limpiar cache para forzar probe.
+    with mc._CACHE_LOCK:
+        mc._CACHE.clear()
+    cancel = threading.Event()
+    mc.get_capabilities("http://x", "m", cancel_event=cancel)
+    assert called["cancel"] is cancel
+
+
+def test_get_capabilities_timeout_default_2s():
+    """El default de get_capabilities bajó de 5s a 2s."""
+    import inspect
+    from core import model_capabilities as mc
+    sig = inspect.signature(mc.get_capabilities)
+    assert sig.parameters["timeout"].default == 2.0

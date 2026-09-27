@@ -84,7 +84,12 @@ def _with_recommendation(
     return replace(caps, recommendation=rec)
 
 
-def get_capabilities(host, model, *, timeout=5.0, force_refresh=False):
+def get_capabilities(
+    host, model, *,
+    timeout=2.0,
+    force_refresh=False,
+    cancel_event=None,
+):
     if not model:
         return ModelCapabilities(name=model, native_tools=False, probed=False, source="fallback")
 
@@ -104,7 +109,10 @@ def get_capabilities(host, model, *, timeout=5.0, force_refresh=False):
             if (now - ts) < _CACHE_TTL_S:
                 base = cached
     if base is None:
-        base = _probe(host, model, timeout=timeout)
+        base = _probe(
+            host, model, timeout=timeout,
+            cancel_event=cancel_event,
+        )
         with _CACHE_LOCK:
             _CACHE[key] = (time.monotonic(), base)
 
@@ -120,7 +128,19 @@ def get_capabilities(host, model, *, timeout=5.0, force_refresh=False):
     return _with_recommendation(base, override)
 
 
-def _probe(host, model, *, timeout):
+def _probe(host, model, *, timeout, cancel_event=None):
+    # Auditoria 2026-09-27: chequeo temprano del cancel_event. Si el
+    # usuario ya cancelo antes de que arranque el probe, salir sin
+    # abrir socket. El httpx.post() es sincrono y no cancelable a
+    # mitad, pero al menos evitamos empezarlo si ya no hace falta.
+    if cancel_event is not None and cancel_event.is_set():
+        logger.info(
+            "Probe de %s saltado: cancel_event ya activo.", model,
+        )
+        return ModelCapabilities(
+            name=model, native_tools=True,
+            probed=False, source="fallback",
+        )
     url = f"{host.rstrip('/')}/api/show"
     try:
         response = httpx.post(url, json={"name": model}, timeout=timeout)
@@ -223,7 +243,14 @@ def is_model_available(host: str, model: str, *, timeout: float = 2.0) -> bool:
     return result
 
 
-def _probe_available(host: str, model: str, *, timeout: float) -> bool:
+def _probe_available(
+    host: str, model: str, *,
+    timeout: float,
+    cancel_event=None,
+) -> bool:
+    # Auditoria 2026-09-27: early exit si el usuario ya cancelo.
+    if cancel_event is not None and cancel_event.is_set():
+        return True  # fail-open: no deshabilitar resumen por cancel.
     url = f"{host.rstrip('/')}/api/show"
     try:
         response = httpx.post(url, json={"name": model}, timeout=timeout)

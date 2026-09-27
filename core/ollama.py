@@ -968,7 +968,10 @@ class OllamaClient:
         if not model:
             raise OllamaError("No hay un modelo seleccionado.")
 
-        caps = get_capabilities(self.host, model)
+        caps = get_capabilities(
+            self.host, model,
+            cancel_event=cancel_event,
+        )
         logger.debug(
             "Modelo %s: tool_mode=%s (probed=%s)",
             model, caps.tool_mode, caps.probed,
