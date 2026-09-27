@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "description": "Casos de evaluacion end-to-end para ChatPerezoso. Congelados: cambios aqui invalidan comparativas historicas.",
+  "cases": [
+    {
+      "id": "cod_crear_funcion",
+      "category": "codigo",
+      "system_prompt": "Eres un asistente de programacion. Responde en espanol.",
+      "prompt": "Escribe una funcion Python llamada `es_palindromo(s)` que devuelva True si s es palindromo, ignorando espacios y mayusculas. Solo el codigo, sin explicacion.",
+      "min_response_chars": 60,
+      "expects_code_block": true
+    },
+    {
+      "id": "cod_editar_funcion",
+      "category": "codigo",
+      "system_prompt": "Eres un asistente de programacion. Responde en espanol.",
+      "prompt": "Dado este codigo:\n\n```python\ndef suma(a, b):\n    return a - b\n```\n\nCorrige el bug. Devuelve solo el codigo corregido.",
+      "min_response_chars": 30,
+      "expects_code_block": true
+    },
+    {
+      "id": "cod_explicar",
+      "category": "codigo",
+      "system_prompt": "Eres un asistente de programacion. Responde en espanol.",
+      "prompt": "Explica en 3-4 frases que hace esta funcion:\n\n```python\ndef f(xs):\n    return [x for x in xs if x % 2 == 0]\n```",
+      "min_response_chars": 80
+    },
+    {
+      "id": "cod_refactor",
+      "category": "codigo",
+      "system_prompt": "Eres un asistente de programacion. Responde en espanol.",
+      "prompt": "Refactoriza este codigo para que sea mas legible:\n\n```python\ndef p(l):\n    r=[]\n    for i in l:\n        if i>0:\n            r.append(i*2)\n    return r\n```\n\nSolo el codigo, sin explicacion.",
+      "min_response_chars": 40,
+      "expects_code_block": true
+    },
+    {
+      "id": "cod_bug_razonamiento",
+      "category": "codigo",
+      "system_prompt": "Eres un asistente de programacion. Responde en espanol.",
+      "prompt": "Que devuelve `list(range(3, 0, -1))` en Python? Solo el resultado.",
+      "min_response_chars": 5
+    },
+
+    {
+      "id": "tool_leer_archivo",
+      "category": "tool_calling",
+      "system_prompt": "Eres un asistente con acceso a herramientas. Cuando el usuario pide leer un archivo, llama a la herramienta leer_archivo. No inventes el contenido.",
+      "prompt": "Lee el archivo config.json y dime cuantos campos tiene.",
+      "min_response_chars": 5,
+      "expects_tool_call": true
+    },
+    {
+      "id": "tool_buscar",
+      "category": "tool_calling",
+      "system_prompt": "Eres un asistente con acceso a herramientas. Cuando el usuario pide buscar algo, llama a la herramienta correspondiente.",
+      "prompt": "Busca donde esta definida la clase ChatController en el proyecto.",
+      "min_response_chars": 5,
+      "expects_tool_call": true
+    },
+    {
+      "id": "tool_git_status",
+      "category": "tool_calling",
+      "system_prompt": "Eres un asistente con acceso a herramientas de git.",
+      "prompt": "Muestrame el estado actual del repositorio git.",
+      "min_response_chars": 5,
+      "expects_tool_call": true
+    },
+    {
+      "id": "tool_listar",
+      "category": "tool_calling",
+      "system_prompt": "Eres un asistente con acceso a herramientas. Cuando el usuario pide listar, llama a la herramienta correspondiente.",
+      "prompt": "Lista el contenido de la carpeta core.",
+      "min_response_chars": 5,
+      "expects_tool_call": true
+    },
+    {
+      "id": "tool_no_necesaria",
+      "category": "tool_calling",
+      "system_prompt": "Eres un asistente con acceso a herramientas. Usa herramientas solo cuando sea necesario; para preguntas generales responde directamente.",
+      "prompt": "Que es Python?",
+      "min_response_chars": 80
+    },
+
+    {
+      "id": "conv_explicar_concepto",
+      "category": "conversacional",
+      "system_prompt": "Eres un asistente tecnico. Responde en espanol.",
+      "prompt": "Explica la diferencia entre una lista y una tupla en Python en 3 frases.",
+      "min_response_chars": 100
+    },
+    {
+      "id": "conv_razonamiento",
+      "category": "conversacional",
+      "system_prompt": "Eres un asistente tecnico. Responde en espanol.",
+      "prompt": "Si tengo 3 cajas y cada caja tiene 4 bolsas y cada bolsa tiene 5 canicas, cuantas canicas tengo en total? Explica brevemente el calculo.",
+      "min_response_chars": 40
+    },
+    {
+      "id": "conv_instrucciones_estrictas",
+      "category": "conversacional",
+      "system_prompt": "Eres un asistente. Cuando el usuario pide un formato concreto, siguelo exactamente.",
+      "prompt": "Dime SOLO tres colores, uno por linea, sin numeracion ni explicacion.",
+      "min_response_chars": 10,
+      "max_lines": 5
+    },
+    {
+      "id": "conv_resumen",
+      "category": "conversacional",
+      "system_prompt": "Eres un asistente tecnico. Responde en espanol.",
+      "prompt": "Resume en 2 frases que hace un servidor HTTP.",
+      "min_response_chars": 60
+    },
+    {
+      "id": "conv_negacion",
+      "category": "conversacional",
+      "system_prompt": "Eres un asistente tecnico. Responde en espanol.",
+      "prompt": "No me hables de JavaScript. En Python, que hace `with open('x') as f:`?",
+      "min_response_chars": 60,
+      "forbidden_substring": "JavaScript"
+    }
+  ]
+}

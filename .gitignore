@@ -58,3 +58,4 @@ scripts/*_patch2.py
 models.json
 benchmark_modelos_*.md
 apply_*.py
+scripts/eval_results_*.json
