@@ -431,3 +431,64 @@ def test_read_file_numbered_por_defecto_false(tmp_path):
     ws = Workspace(tmp_path)
     result = ws.read_file("a.txt")
     assert result == "uno\n"
+
+
+# -- Escritura atomica (2026-09-27) -------------------------------------
+
+def test_create_file_no_deja_tmp(tmp_path):
+    """Tras escribir, no debe quedar .tmp colgando."""
+    from core.workspace import Workspace
+    ws = Workspace(tmp_path)
+    ws.create_file("a.txt", "hola")
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "hola"
+    assert not (tmp_path / "a.txt.tmp").exists()
+
+
+def test_write_file_no_deja_tmp(tmp_path):
+    from core.workspace import Workspace
+    ws = Workspace(tmp_path)
+    ws.write_file("b.txt", "contenido")
+    assert (tmp_path / "b.txt").read_text(encoding="utf-8") == "contenido"
+    assert not (tmp_path / "b.txt.tmp").exists()
+
+
+def test_edit_file_no_deja_tmp(tmp_path):
+    from core.workspace import Workspace
+    ws = Workspace(tmp_path)
+    (tmp_path / "c.txt").write_text("foo bar", encoding="utf-8")
+    ws.edit_file("c.txt", "bar", "QUX")
+    assert (tmp_path / "c.txt").read_text(encoding="utf-8") == "foo QUX"
+    assert not (tmp_path / "c.txt.tmp").exists()
+
+
+def test_insert_no_deja_tmp(tmp_path):
+    from core.workspace import Workspace
+    ws = Workspace(tmp_path)
+    (tmp_path / "d.txt").write_text("uno\ndos\n", encoding="utf-8")
+    ws.insert_in_file("d.txt", 1, "intercalado\n")
+    assert not (tmp_path / "d.txt.tmp").exists()
+
+
+def test_fallo_de_escritura_no_corrompe_archivo(tmp_path, monkeypatch):
+    """Si tmp.replace falla, el archivo original queda intacto."""
+    import pytest
+    from pathlib import Path as _P
+    from core.workspace import Workspace, WorkspaceError
+
+    ws = Workspace(tmp_path)
+    (tmp_path / "e.txt").write_text("original", encoding="utf-8")
+
+    original_replace = _P.replace
+
+    def fake_replace(self, target):
+        if str(target).endswith("e.txt"):
+            raise OSError("disk full (simulado)")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(_P, "replace", fake_replace)
+
+    with pytest.raises(WorkspaceError):
+        ws.write_file("e.txt", "nuevo")
+
+    assert (tmp_path / "e.txt").read_text(encoding="utf-8") == "original"
+    assert not (tmp_path / "e.txt.tmp").exists()

@@ -83,6 +83,31 @@ class Workspace:
             raise WorkspaceError("Ruta fuera del workspace.") from exc
         return candidate
 
+    @staticmethod
+    def _atomic_write_bytes(path: Path, data: bytes) -> None:
+        """Escritura atomica: escribir a .tmp y renombrar.
+
+        Mismo patron que AgentStore.save y HistoryStore.save. Si el
+        proceso muere a mitad (crash, cancelacion, disco lleno), el
+        archivo viejo queda intacto: el .tmp se ignora y os.replace
+        es atomico en POSIX.
+
+        Levanta WorkspaceError si falla, para que el modelo lo vea
+        como ERROR en el tool result en vez de un fallo silencioso.
+        """
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        try:
+            tmp.write_bytes(data)
+            tmp.replace(path)
+        except OSError as exc:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise WorkspaceError(
+                f"No se pudo escribir {path.name}: {exc}"
+            ) from exc
+
     # -- listar --------------------------------------------------------------
 
     def list_dir(self, path: str = ".", recursive: bool = False) -> str:
@@ -314,7 +339,7 @@ class Workspace:
             raise WorkspaceError(
                 "Resultado demasiado grande tras la insercion."
             )
-        file.write_bytes(data)
+        self._atomic_write_bytes(file, data)
         return (
             f"Texto insertado tras linea {line_no} en "
             f"{file.relative_to(self.root)}"
@@ -337,7 +362,7 @@ class Workspace:
         if len(data) > MAX_WRITE_BYTES:
             raise WorkspaceError("Contenido demasiado grande.")
         file.parent.mkdir(parents=True, exist_ok=True)
-        file.write_bytes(data)
+        self._atomic_write_bytes(file, data)
         return f"Archivo creado: {file.relative_to(self.root)}"
 
     def create_folder(self, path: str) -> str:
@@ -356,7 +381,7 @@ class Workspace:
         if len(data) > MAX_WRITE_BYTES:
             raise WorkspaceError("Contenido demasiado grande.")
         file.parent.mkdir(parents=True, exist_ok=True)
-        file.write_bytes(data)
+        self._atomic_write_bytes(file, data)
         return f"Archivo escrito: {file.relative_to(self.root)}"
 
     def edit_file(
@@ -421,7 +446,7 @@ class Workspace:
             raise WorkspaceError(
                 "Resultado demasiado grande tras la edicion."
             )
-        file.write_bytes(data)
+        self._atomic_write_bytes(file, data)
         return (
             f"Archivo editado: {file.relative_to(self.root)} "
             f"({count} reemplazo(s))"
