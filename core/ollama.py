@@ -957,7 +957,8 @@ class OllamaClient:
         last_assistant = self._last_assistant_before_last_user(history)
         gate = self._build_intent_gate(tools)
         active_tools = gate.tools_for_request(
-            definitions, authorization_text
+            definitions, authorization_text,
+            last_assistant=last_assistant,
         )
         tool_names = {
             str(item.get("function", {}).get("name", ""))
@@ -1487,7 +1488,10 @@ class OllamaClient:
         text = getattr(ctx, "authorization_text", "") or ""
         if not text:
             return ""
-        if not ToolIntentGate.is_short_confirmation(text):
+        if not (
+            ToolIntentGate.is_short_confirmation(text)
+            or ToolIntentGate.is_short_continuation(text)
+        ):
             return text
         last = getattr(ctx, "last_assistant", "") or ""
         if not last:

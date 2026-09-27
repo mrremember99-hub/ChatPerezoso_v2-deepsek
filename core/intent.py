@@ -34,6 +34,18 @@ _CONFIRMATIONS: frozenset[str] = frozenset({
 })
 
 
+# H1 (2026-09-27): continuaciones. El usuario acepta el plan del
+# assistant sin nombrar la accion ("sigue", "procede", "aplicalo").
+# Se combinan con confirmaciones en el gate: basta con que el
+# assistant previo haya mencionado un verbo de la regla.
+_CONTINUATIONS: frozenset[str] = frozenset({
+    "sigue", "siguelo", "siguela", "siguelos", "siguelas",
+    "continua", "continúa", "continualo", "continúalo",
+    "procede", "proceda",
+    "aplica", "aplicalo", "aplícalo", "aplicala", "aplícala",
+})
+
+
 # F6 (2026-09-27): post-procesado sobre simplemma. simplemma no
 # tiene POS tagging, asi que falla con sustantivos verbales,
 # participios irregulares y algunos encliticos.
@@ -54,6 +66,22 @@ _POSTPROC: dict[str, str] = {
     "arreglalo": "arreglar", "corrigelo": "corregir",
     "actualizalo": "actualizar", "modificalo": "modificar",
     "refactorizalo": "refactorizar",
+    # Subjuntivos (presente) comunes en el assistant cuando pregunta
+    # "¿Quieres que escriba...?". simplemma no siempre los reduce.
+    "escriba": "escribir", "escribas": "escribir",
+    "edite": "editar", "edites": "editar",
+    "ejecute": "ejecutar", "ejecutes": "ejecutar",
+    "lea": "leer", "leas": "leer",
+    "vea": "ver", "veas": "ver",
+    "haga": "hacer", "hagas": "hacer",
+    "cree": "crear", "crees": "crear",
+    "modifique": "modificar", "modifiques": "modificar",
+    "actualice": "actualizar", "actualices": "actualizar",
+    "borre": "borrar", "borres": "borrar",
+    "abra": "abrir", "abras": "abrir",
+    "cierre": "cerrar", "cierres": "cerrar",
+    "corrija": "corregir", "corrijas": "corregir",
+    "arregle": "arreglar", "arregles": "arreglar",
     # Formas conjugadas cortas (3a pers. sing. presente, la forma
     # mas comun de imperativo informal en espanol). simplemma las
     # deja sin lematizar porque son ambiguas sin POS tagging.
@@ -174,16 +202,41 @@ class ToolIntentGate:
     # -- API pública ---------------------------------------------------------
 
     def tools_for_request(
-        self, tools: list[dict[str, Any]] | None, text: str
+        self,
+        tools: list[dict[str, Any]] | None,
+        text: str,
+        *,
+        last_assistant: str | None = None,
     ) -> list[dict[str, Any]] | None:
+        """True si hay que exponer las tools al modelo este turno.
+
+        H1 (2026-09-27): acepta `last_assistant` para el flujo
+        multi-turno. Si el usuario responde con confirmacion
+        ("vale") o continuacion ("sigue", "procede") y el assistant
+        previo propuso una accion (mencionando verbos de alguna
+        regla), expone las tools. Antes, esa respuesta corta no
+        matcheaba ningun verbo y el gate bloqueaba todo.
+        """
         if not tools:
             return None
-        if not (
+        if (
             self._mentions_workspace_operation(text)
             or self._mentions_mcp_tool(text, tools)
         ):
-            return None
-        return tools
+            return tools
+        if (
+            last_assistant
+            and (
+                self.is_short_confirmation(text)
+                or self.is_short_continuation(text)
+            )
+        ):
+            for rule in self.rules.values():
+                if rule.mcp_explicit_name_required:
+                    continue
+                if self._assistant_mentions_rule_verb(rule, last_assistant):
+                    return tools
+        return None
 
     @staticmethod
     def is_short_confirmation(text: str) -> bool:
@@ -206,27 +259,55 @@ class ToolIntentGate:
             return True
         return False
 
+    @staticmethod
+    def is_short_continuation(text: str) -> bool:
+        """True si el texto indica continuar con la accion previa.
+
+        H1 (2026-09-27): "sigue", "procede", "aplicalo" aceptan el
+        plan propuesto por el assistant sin repetir el verbo.
+        Misma tolerancia que is_short_confirmation.
+        """
+        if not text:
+            return False
+        norm = text.strip().lower().rstrip(".!,;:")
+        if not norm:
+            return False
+        if norm in _CONTINUATIONS:
+            return True
+        tokens = norm.split()
+        if len(tokens) <= 4 and any(
+            t.strip(".!,;:") in _CONTINUATIONS for t in tokens
+        ):
+            return True
+        return False
+
     def _assistant_mentions_rule_verb(
         self, rule: "IntentRule", assistant_text: str
     ) -> bool:
         """True si el assistant menciono algun verbo de la regla.
 
-        Usa substring directo, NO word-boundary: los verbos del
-        assistant aparecen conjugados con encliticos ("leerlo",
-        "modificarlo") y \b no matchea. Es intencionalmente mas
-        laxo aqui porque el assistant es el que PREGUNTA, no el
-        que ejecuta: la autorizacion real la da el usuario con la
-        confirmacion (P1 auditoria 2026-09-26).
+        H1 (2026-09-27): compara por lemas (simplemma + _POSTPROC).
+        Antes usaba substring directo, que fallaba con conjugaciones
+        ("ejecuto" no contiene "ejecuta" ni "ejecutar"). Los lemas
+        cubren conjugaciones, encliticos y sustantivos verbales.
+
+        Intencionalmente mas laxo que _mentions_any_word: aqui el
+        assistant es el que PREGUNTA, no el que ejecuta; la
+        autorizacion real la da el usuario con la confirmacion o
+        continuacion (P1 auditoria 2026-09-26, H1 2026-09-27).
         """
         if not assistant_text:
             return False
         all_verbs = rule.verbs + rule.weak_verbs
         if not all_verbs:
             return False
+        verb_lemmas = {_lemma(v) for v in all_verbs}
+        verb_lemmas.discard("")
+        if not verb_lemmas:
+            return False
         norm = self._normalise(assistant_text).lower()
-        for v in all_verbs:
-            v_norm = self._normalise(v).lower()
-            if v_norm and v_norm in norm:
+        for token in re.findall(r"\w+", norm, re.UNICODE):
+            if _lemma(token) in verb_lemmas:
                 return True
         return False
 
@@ -259,7 +340,10 @@ class ToolIntentGate:
         # bloquear un "si, hazlo" por error.
         if (
             last_assistant
-            and self.is_short_confirmation(text)
+            and (
+                self.is_short_confirmation(text)
+                or self.is_short_continuation(text)
+            )
             and self._assistant_mentions_rule_verb(rule, last_assistant)
         ):
             return True
