@@ -7,8 +7,26 @@ import time
 from PySide6.QtWidgets import QApplication
 
 from ui.controllers.app_controller import AppController
-from ui.theme import DARK_STYLE
-from ui.views.main_window import MainWindow
+
+# Switch de mascara (auditoria 2026-09-27, rediseno visual v2).
+# Default v1: la app de siempre, cero cambios. v2 se activa con
+# variable de entorno:
+#     CHATPEREZOSO_UI=v2 python bootstrap.py
+# Los paneles v2 exponen la misma interfaz que los v1
+# (sidebar, chat_panel, right_panel, set_status), asi que
+# AppController no necesita cambios.
+_USE_V2 = os.environ.get("CHATPEREZOSO_UI", "").lower() == "v2"
+
+if _USE_V2:
+    from ui.theme_v2 import DARK_STYLE, load_font
+    from ui.views.main_window_v2 import MainWindowV2 as MainWindow
+else:
+    from ui.theme import DARK_STYLE
+    from ui.views.main_window import MainWindow
+
+    def load_font() -> bool:  # noqa: D401
+        """No-op en v1 (la fuente es la del sistema)."""
+        return False
 
 
 # Segundos que esperamos a que el shutdown termine limpiamente antes
@@ -33,6 +51,9 @@ def _force_exit_after(exit_code: int, timeout: float) -> None:
 
 def main() -> int:
     app = QApplication([])
+    # En v2, load_font registra VT323 antes del stylesheet para que
+    # QSS encuentre la fuente por nombre. En v1 es no-op.
+    load_font()
     app.setStyleSheet(DARK_STYLE)
 
     view = MainWindow()
