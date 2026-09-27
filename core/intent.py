@@ -66,6 +66,22 @@ _POSTPROC: dict[str, str] = {
     "arreglalo": "arreglar", "corrigelo": "corregir",
     "actualizalo": "actualizar", "modificalo": "modificar",
     "refactorizalo": "refactorizar",
+    # 1a persona singular del presente (usada en preguntas
+    # "¿como leo X?", "¿como escribo Y?"). simplemma a veces no
+    # reduce estos verbos por colision con nombres propios o
+    # homografos.
+    "leo": "leer", "escribo": "escribir", "edito": "editar",
+    "creo": "crear", "abro": "abrir", "cierro": "cerrar",
+    "ejecuto": "ejecutar", "corro": "correr",
+    "compilo": "compilar", "instalo": "instalar",
+    "busco": "buscar", "encuentro": "encontrar",
+    "muestro": "mostrar", "borro": "borrar",
+    "modifico": "modificar", "actualizo": "actualizar",
+    "arreglo": "arreglar", "corrijo": "corregir",
+    "refactorizo": "refactorizar", "implemento": "implementar",
+    "anado": "anadir", "añado": "anadir",
+    "agrego": "agregar", "incluyo": "incluir",
+    "guardo": "guardar", "testeo": "testear",
     # Subjuntivos (presente) comunes en el assistant cuando pregunta
     # "¿Quieres que escriba...?". simplemma no siempre los reduce.
     "escriba": "escribir", "escribas": "escribir",
@@ -118,6 +134,43 @@ _FILENAME_PATTERN = re.compile(
     r"|xml|yaml|yml|log|pdf|docx?|xlsx?|ini|cfg|conf|sh|png|jpe?g|gif|svg|webp|toml)\b",
     re.IGNORECASE,
 )
+
+
+# H16 (2026-09-27): palabras interrogativas en espanol con tilde.
+# Lista CORTA y estable. Duplicada de core/ollama.py para evitar
+# import circular (ollama importa intent, no al reves).
+_QUESTION_MARKERS: tuple[str, ...] = (
+    "cómo", "qué", "cuál", "cuáles",
+    "cuándo", "dónde", "quién", "quiénes",
+    "por qué", "cuánto", "cuánta", "cuántos", "cuántas",
+)
+
+
+def _looks_like_informative_question(text: str) -> bool:
+    """True si el texto parece una pregunta informativa.
+
+    H16 (2026-09-27): el exposure gate no debe exponer tools cuando
+    el usuario pregunta cosas como "¿como leo un archivo en Python?"
+    — eso es conocimiento general, no una peticion sobre el workspace.
+
+    Excepcion: si el texto contiene un filename explicito
+    ("main.py"), la pregunta se considera peticion real
+    ("¿puedes leer main.py?").
+    """
+    if not text:
+        return False
+    s = text.strip()
+    if not s:
+        return False
+    # Filename explicito -> no es pregunta informativa.
+    if _FILENAME_PATTERN.search(s):
+        return False
+    if s.endswith(("?", "？")):
+        return True
+    if s.startswith("¿"):
+        return True
+    lower = s.lower()
+    return any(m in lower for m in _QUESTION_MARKERS)
 
 
 def _strip_accents(text: str) -> str:
@@ -219,11 +272,8 @@ class ToolIntentGate:
         """
         if not tools:
             return None
-        if (
-            self._mentions_workspace_operation(text)
-            or self._mentions_mcp_tool(text, tools)
-        ):
-            return tools
+        # 1. H1: confirmacion/continuacion con assistant previo.
+        # Va primero para que "sigue" gane aunque parezca pregunta.
         if (
             last_assistant
             and (
@@ -236,6 +286,17 @@ class ToolIntentGate:
                     continue
                 if self._assistant_mentions_rule_verb(rule, last_assistant):
                     return tools
+        # 2. H16: pregunta informativa sin filename -> no exponer.
+        # Ahorra ~1000 tokens de tool_prompt en preguntas generales
+        # ("¿como leo un archivo?") que no son peticiones.
+        if _looks_like_informative_question(text):
+            return None
+        # 3. Camino normal: menciones directas al workspace o MCP.
+        if (
+            self._mentions_workspace_operation(text)
+            or self._mentions_mcp_tool(text, tools)
+        ):
+            return tools
         return None
 
     @staticmethod
