@@ -119,6 +119,83 @@ _MYPY_RELEVANT_CODES: frozenset[str] = frozenset({
 })
 
 
+# ─────────────────────────────────────────────────────────────────────
+# F6-bis (2026-09-27): sugerencias accionables por codigo.
+#
+# El modelo ve "[F821] Undefined name exc" pero no siempre sabe COMO
+# arreglarlo. Bug real Fase 8/9 OVERPAPER: reescribia el archivo con
+# el mismo error dos veces y entraba en bucle. Con la sugerencia, el
+# modelo tiene la pista concreta y puede corregir en una ronda.
+#
+# Cada sugerencia es corta (~150 chars max) para no inflar el prompt.
+# ─────────────────────────────────────────────────────────────────────
+
+_RUFF_SUGGESTIONS: dict[str, str] = {
+    "F821": (
+        "Sugerencia: causas comunes: (1) 'except ... as X' borra X al "
+        "salir del bloque (Python 3), y un lambda posterior falla — "
+        "captura el valor antes: 'msg = str(X); lambda: f(msg)'; "
+        "(2) import olvidado; (3) typo."
+    ),
+    "F811": (
+        "Sugerencia: renombra la definicion o elimina la anterior."
+    ),
+    "F823": (
+        "Sugerencia: mueve la asignacion arriba del uso."
+    ),
+    "F501": (
+        "Sugerencia: revisa los especificadores (%s, %d) contra los "
+        "argumentos del operador %."
+    ),
+    "E999": (
+        "Sugerencia: corrige primero el error de sintaxis; otros "
+        "avisos pueden ser cascada."
+    ),
+    "invalid-syntax": (
+        "Sugerencia: corrige primero el error de sintaxis; otros "
+        "avisos pueden ser cascada."
+    ),
+}
+
+_MYPY_SUGGESTIONS: dict[str, str] = {
+    "name-defined": (
+        "Sugerencia: revisa imports, typo, o variables borradas al "
+        "salir de un 'except ... as X'."
+    ),
+    "attr-defined": (
+        "Sugerencia: verifica el nombre del atributo o anade la "
+        "anotacion correcta al tipo."
+    ),
+    "import-not-found": (
+        "Sugerencia: instala el paquete o corrige el nombre del "
+        "modulo."
+    ),
+    "arg-type": (
+        "Sugerencia: revisa la anotacion de la funcion o el valor "
+        "pasado."
+    ),
+    "call-arg": (
+        "Sugerencia: compara la llamada con la firma (args faltantes "
+        "o extra)."
+    ),
+    "call-overload": (
+        "Sugerencia: ninguna sobrecarga coincide; revisa tipos y "
+        "numero de args."
+    ),
+    "return-value": (
+        "Sugerencia: revisa el tipo declarado en el return."
+    ),
+    "valid-type": (
+        "Sugerencia: en Python <3.9 usa 'List[int]' en vez de "
+        "'list[int]'."
+    ),
+    "syntax": (
+        "Sugerencia: corrige primero el error de sintaxis; otros "
+        "avisos pueden ser cascada."
+    ),
+}
+
+
 def _check_main_guard(source: str) -> list[SyntaxIssue]:
     """Detecta ``if __name__ == "main":`` (falta un guion bajo).
 
@@ -276,11 +353,15 @@ def _run_ruff(path: Path) -> list[QualityIssue]:
             # Cosmetica (I001, RUF*, UP*, BLE*, S110, F401...):
             # se descarta. Consume rondas del modelo sin aportar.
             continue
+        msg = m.group("msg").strip()
+        sug = _RUFF_SUGGESTIONS.get(code)
+        if sug:
+            msg = f"{msg}. {sug}"
         out.append(QualityIssue(
             line=int(m.group("line")),
             column=int(m.group("col")),
             code=code,
-            message=m.group("msg").strip(),
+            message=msg,
         ))
     return out
 
@@ -308,11 +389,19 @@ def _run_mypy(path: Path) -> list[QualityIssue]:
         code = m.group("code")
         if code is None or code not in _MYPY_RELEVANT_CODES:
             continue
+        msg = m.group("msg").strip()
+        # El codigo mypy real (attr-defined, arg-type...) viaja en
+        # `code`; el campo `.code` del QualityIssue se pone a "mypy"
+        # para uniformidad con el formato del output. Para buscar la
+        # sugerencia usamos el codigo real.
+        sug = _MYPY_SUGGESTIONS.get(code or "")
+        if sug:
+            msg = f"{msg}. {sug}"
         out.append(QualityIssue(
             line=int(m.group("line")),
             column=int(m.group("col") or 0),
             code="mypy",
-            message=m.group("msg").strip(),
+            message=msg,
         ))
     return out
 
