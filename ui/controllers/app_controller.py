@@ -333,6 +333,25 @@ class AppController(QObject):
         self.config.current_agent = agent.name
         self.config.save()
 
+    def _effective_options(self, agent: Agent) -> dict:
+        """Devuelve agent.options() con num_ctx_override aplicado.
+
+        Auditoria 2026-09-27: el num_ctx del agente (p.ej. 16384 en
+        Programador) limita el contexto total con gpt-oss:20b (que
+        soporta 131k). Si AppConfig.num_ctx_override > 0, gana.
+        """
+        options = agent.options()
+        # getattr defensivo: los tests crean AppController sin
+        # __init__, asi que self.config puede no existir.
+        config = getattr(self, "config", None)
+        override = (
+            int(getattr(config, "num_ctx_override", 0) or 0)
+            if config is not None else 0
+        )
+        if override > 0:
+            options["num_ctx"] = override
+        return options
+
     def _apply_agent(self, agent: Agent, *, apply_model: bool = False) -> None:
         if agent.allowed_tools is None:
             self.chat_ctrl.rebind_tools(self.composite)
@@ -340,7 +359,7 @@ class AppController(QObject):
             allowed = set(agent.allowed_tools)
             self.chat_ctrl.rebind_tools(FilteredToolProvider(self.composite, allowed))
 
-        self.chat_ctrl.set_current_options(agent.options())
+        self.chat_ctrl.set_current_options(self._effective_options(agent))
         self.chat_ctrl.set_current_system_prompt(agent.system_prompt)
 
         # Solo cambiar el modelo si:
@@ -593,7 +612,7 @@ class AppController(QObject):
         self.chat_ctrl.send_user_input(
             text,
             model,
-            agent.options(),
+            self._effective_options(agent),
             agent.system_prompt,
         )
 
@@ -616,7 +635,8 @@ class AppController(QObject):
         if detect_phases(text) is not None:
             agent = self.agent_ctrl.active_agent()
             self.chat_ctrl.send_user_input(
-                text, model, agent.options(), agent.system_prompt,
+                text, model, self._effective_options(agent),
+                agent.system_prompt,
             )
             return
         prompts = split_prompts(text)
@@ -631,12 +651,14 @@ class AppController(QObject):
             # Sin separadores: tratar como un mensaje normal, sin cola.
             agent = self.agent_ctrl.active_agent()
             self.chat_ctrl.send(
-                prompts[0], model, agent.options(), agent.system_prompt,
+                prompts[0], model, self._effective_options(agent),
+                agent.system_prompt,
             )
             return
         agent = self.agent_ctrl.active_agent()
         ok = self.chat_ctrl.enqueue(
-            prompts, model, agent.options(), agent.system_prompt,
+            prompts, model, self._effective_options(agent),
+            agent.system_prompt,
         )
         if not ok:
             self.view.set_status("Ya hay un turno o una cola en curso")

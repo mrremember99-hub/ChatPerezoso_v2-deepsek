@@ -3,5 +3,6 @@
   "model": "",
   "workspace": "workspace",
   "width": 1100,
-  "height": 720
+  "height": 720,
+  "num_ctx_override": 0
 }

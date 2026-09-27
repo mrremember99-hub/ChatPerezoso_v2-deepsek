@@ -58,6 +58,14 @@ class AppConfig:
     # usuario subirlo (-1 o un valor alto) cuando su hardware lo
     # permita.
     num_predict: int = 0
+    # Override global de num_ctx. Si > 0, gana sobre el num_ctx del
+    # agente activo y sobre el limite del modelo detectado. 0 = no
+    # override (comportamiento original: num_ctx del agente manda).
+    # Auditoria 2026-09-27: causa real del truncamiento OVERPAPER
+    # era el num_ctx=16384 del agente Programador. Con override a
+    # 32768 o 65536 se aprovecha mejor el contexto de gpt-oss:20b
+    # sin editar agents.json.
+    num_ctx_override: int = 0
 
     @classmethod
     def load(cls) -> "AppConfig":

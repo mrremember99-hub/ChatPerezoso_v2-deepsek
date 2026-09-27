@@ -614,16 +614,37 @@ class OllamaClient:
         return self._async_runner.close(timeout)
 
     def list_models(self) -> list[str]:
+        """Lista los modelos instalados en Ollama.
+
+        Auditoria 2026-09-27: antes abria un httpx.get() sincrono
+        independiente, sin reutilizar el AsyncClient persistente.
+        Ahora usa _get_client() via AsyncRunner, coherente con
+        _stream_async. Beneficio: connection pooling compartido,
+        sin crear socket por llamada.
+        """
         try:
-            response = httpx.get(f"{self.host}/api/tags", timeout=10)
-            response.raise_for_status()
-            return [
-                item.get("name", "")
-                for item in response.json().get("models", [])
-                if item.get("name")
-            ]
-        except (httpx.HTTPError, ValueError) as exc:
-            raise OllamaError(f"No se pudo consultar Ollama: {exc}") from exc
+            return self._async_runner.submit(self._list_models_async())
+        except httpx.HTTPError as exc:
+            raise OllamaError(
+                f"No se pudo consultar Ollama: {exc}"
+            ) from exc
+        except TimeoutError as exc:
+            raise OllamaError(
+                "Ollama dejo de responder al listar modelos."
+            ) from exc
+
+    async def _list_models_async(self) -> list[str]:
+        client = await self._get_client()
+        response = await client.get(
+            f"{self.host}/api/tags", timeout=10.0,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return [
+            item.get("name", "")
+            for item in data.get("models", [])
+            if item.get("name")
+        ]
 
     def chat(
         self,
