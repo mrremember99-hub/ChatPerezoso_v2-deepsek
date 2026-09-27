@@ -55,6 +55,45 @@ def _reject_shrink_marker(content: str) -> None:
         )
 
 
+# F3-bis (2026-09-27): el modelo puede copiar el output numerado de
+# leer_archivo(numbered=True) literalmente al escribir_archivo. Bug
+# real fase 20 OVERPAPER: escribio un gui.py con lineas tipo
+# "1| import tkinter as tk" / "2|" / "3| from tkinter..." y rompio
+# la sintaxis (220 errores).
+_NUMBERED_LINE_PATTERN = re.compile(r"^\s*\d+\|", re.MULTILINE)
+
+
+def _reject_numbered_output(content: str) -> None:
+    """Rechaza contenido que parece ser el output numerado de
+    leer_archivo(numbered=True) copiado tal cual.
+
+    Heuristica: >=80% de las primeras 30 lineas no vacias empiezan
+    con el prefijo "N|" (numero + pipe). Con menos de 3 coincidencias
+    no se considera (evita falsos positivos en archivos con pocas
+    lineas tipo tabla).
+
+    El prefijo "N|" es producido por Workspace._number_lines cuando
+    leer_archivo recibe numbered=True. NO es parte del archivo
+    original.
+    """
+    if not isinstance(content, str):
+        return
+    lines = [l for l in content.splitlines() if l.strip()][:30]
+    if len(lines) < 3:
+        return
+    matches = sum(1 for l in lines if _NUMBERED_LINE_PATTERN.match(l))
+    if matches >= max(3, int(len(lines) * 0.8)):
+        raise WorkspaceError(
+            "El contenido a escribir parece ser el output NUMERADO "
+            "de leer_archivo (lineas con prefijo '1|', '2|', ...). "
+            "Esos prefijos NO forman parte del archivo original. "
+            "Opciones: (a) si querias editar un fragmento, usa "
+            "editar_archivo con old_string/new_string; (b) si querias "
+            "reescribir, vuelve a leer con numbered=False (por "
+            "defecto) y usa ese contenido limpio."
+        )
+
+
 class Workspace:
     def __init__(self, root: str | Path):
         self.root = Path(root).expanduser().resolve()
@@ -284,6 +323,7 @@ class Workspace:
         if not isinstance(text, str):
             raise WorkspaceError("text debe ser texto.")
         _reject_shrink_marker(text)
+        _reject_numbered_output(text)
         try:
             line_no = int(insert_line)
         except (TypeError, ValueError) as exc:
@@ -347,6 +387,7 @@ class Workspace:
 
     def create_file(self, path: str, content: str = "") -> str:
         _reject_shrink_marker(content)
+        _reject_numbered_output(content)
         file = self._path(path)
         if file.exists():
             # El error es instructivo a propósito: los modelos que
@@ -374,6 +415,7 @@ class Workspace:
 
     def write_file(self, path: str, content: str) -> str:
         _reject_shrink_marker(content)
+        _reject_numbered_output(content)
         file = self._path(path)
         if file.is_dir():
             raise WorkspaceError(f"Es una carpeta, no un archivo: {path}")
@@ -403,6 +445,7 @@ class Workspace:
         if not isinstance(new_string, str):
             raise WorkspaceError("new_string debe ser texto.")
         _reject_shrink_marker(new_string)
+        _reject_numbered_output(new_string)
         if old_string == new_string:
             raise WorkspaceError(
                 "old_string y new_string son identicos, nada que hacer."

@@ -492,3 +492,90 @@ def test_fallo_de_escritura_no_corrompe_archivo(tmp_path, monkeypatch):
 
     assert (tmp_path / "e.txt").read_text(encoding="utf-8") == "original"
     assert not (tmp_path / "e.txt.tmp").exists()
+
+
+# -- F3-bis (2026-09-27): rechazar output numerado de leer_archivo ------
+
+def test_write_rejects_numbered_output(tmp_path):
+    """El modelo copio el output de leer_archivo(numbered=True)
+    literalmente en un escribir_archivo. Bug real fase 20 OVERPAPER."""
+    import pytest
+    from core.workspace import Workspace, WorkspaceError
+
+    contenido = """1| import tkinter as tk
+2|
+3| from tkinter import font, ttk, filedialog, messagebox
+4| import os
+5| from PIL import Image, ImageTk
+"""
+    ws = Workspace(tmp_path)
+    with pytest.raises(WorkspaceError) as exc_info:
+        ws.write_file("x.py", contenido)
+    assert "NUMERADO" in str(exc_info.value)
+    assert "1|" in str(exc_info.value)
+
+
+def test_create_rejects_numbered_output(tmp_path):
+    import pytest
+    from core.workspace import Workspace, WorkspaceError
+    contenido = "\n".join(f"{i}| linea {i}" for i in range(1, 20))
+    ws = Workspace(tmp_path)
+    with pytest.raises(WorkspaceError):
+        ws.create_file("x.py", contenido)
+
+
+def test_edit_rejects_numbered_output_in_new_string(tmp_path):
+    import pytest
+    from core.workspace import Workspace, WorkspaceError
+    ws = Workspace(tmp_path)
+    (tmp_path / "x.py").write_text("foo\n", encoding="utf-8")
+    nuevo = "\n".join(f"{i}| linea" for i in range(1, 20))
+    with pytest.raises(WorkspaceError):
+        ws.edit_file("x.py", "foo", nuevo)
+
+
+def test_insert_rejects_numbered_output(tmp_path):
+    import pytest
+    from core.workspace import Workspace, WorkspaceError
+    ws = Workspace(tmp_path)
+    (tmp_path / "x.py").write_text("foo\n", encoding="utf-8")
+    texto = "\n".join(f"{i}| linea" for i in range(1, 20))
+    with pytest.raises(WorkspaceError):
+        ws.insert_in_file("x.py", 1, texto)
+
+
+def test_numbered_output_no_se_rechaza_con_pocas_lineas(tmp_path):
+    """Falso positivo: menos de 3 lineas con prefijo no dispara."""
+    from core.workspace import Workspace
+    ws = Workspace(tmp_path)
+    # Solo 2 lineas con prefijo, el resto normal.
+    contenido = "1| primera\n2| segunda\nmas texto suelto\n"
+    ws.write_file("x.txt", contenido)  # no debe lanzar
+
+
+def test_numero_pipe_suelto_no_dispara(tmp_path):
+    """`1| algo` aislado entre muchas lineas normales no dispara."""
+    from core.workspace import Workspace
+    ws = Workspace(tmp_path)
+    contenido = "\n".join([
+        "def foo():",
+        "    # 1| ejemplo en comentario",
+        "    pass",
+        "",
+        "def bar():",
+        "    return 42",
+    ])
+    ws.write_file("x.py", contenido)  # no debe lanzar
+
+
+def test_numero_porcentaje_80_no_dispara_con_50_50(tmp_path):
+    """50% de lineas numeradas no alcanza el 80% -> pasa."""
+    from core.workspace import Workspace
+    ws = Workspace(tmp_path)
+    contenido = "\n".join([
+        "1| linea uno",
+        "2| linea dos",
+        "linea normal tres",
+        "linea normal cuatro",
+    ])
+    ws.write_file("x.txt", contenido)  # no debe lanzar
