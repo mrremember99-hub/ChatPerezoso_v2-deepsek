@@ -155,9 +155,12 @@ def test_flujo_multi_turno_lee_arregla_sigue(gate):
         "lee gui.py",
     ) is not None
 
-    # Turno 2: edicion directa con target explicito
+    # Turno 2: edicion con anafora pura ("edítalo" sin target).
+    # H1-bis: el filename "gui.py" esta en el assistant previo.
+    last_read = "Aqui tienes el contenido de gui.py."
     assert gate.tool_is_requested(
-        "editar_archivo", "ahora edita el archivo gui.py",
+        "editar_archivo", "ahora edítalo",
+        last_assistant=last_read,
     )
 
     # Turno 3: assistant propone, usuario "sigue"
@@ -166,3 +169,53 @@ def test_flujo_multi_turno_lee_arregla_sigue(gate):
         [{"type": "function", "function": {"name": "editar_archivo"}}],
         "sigue", last_assistant=last,
     ) is not None
+
+
+# -- H1-bis (2026-09-27): anafora pura ----------------------------------
+
+def test_anafora_pura_edita_con_filename_en_assistant(gate):
+    """'ahora edítalo' sin target, con filename en el assistant previo."""
+    last = "Aqui tienes el contenido de gui.py. ¿Lo editamos?"
+    assert gate.tool_is_requested(
+        "editar_archivo", "ahora edítalo", last_assistant=last,
+    )
+
+
+def test_anafora_pura_sin_last_no_autoriza(gate):
+    """Sin assistant previo, 'edítalo' sin target no autoriza."""
+    assert not gate.tool_is_requested("editar_archivo", "ahora edítalo")
+
+
+def test_anafora_pura_last_sin_filename_no_autoriza(gate):
+    """Assistant sin filename: no autoriza."""
+    assert not gate.tool_is_requested(
+        "editar_archivo", "ahora edítalo",
+        last_assistant="¿Que quieres hacer ahora?",
+    )
+
+
+def test_anafora_pura_exposure(gate):
+    """Exposure tambien se autoriza con anafora pura."""
+    last = "He leido main.py. ¿Lo arreglo?"
+    tools = [{"type": "function", "function": {"name": "editar_archivo"}}]
+    assert gate.tools_for_request(
+        tools, "hazlo", last_assistant=last,
+    ) is not None
+
+
+def test_anafora_pura_no_autoriza_tool_sin_verbo(gate):
+    """'ahora edítalo' con last que menciona 'borrar' no autoriza editar."""
+    last = "¿Borro el archivo gui.py?"
+    # El assistant propone borrar, no editar. La regla de editar no
+    # matchea los verbos del assistant.
+    assert not gate.tool_is_requested(
+        "editar_archivo", "vale", last_assistant=last,
+    )
+
+
+def test_anafora_pura_target_word_en_assistant(gate):
+    """Target word ("archivo") en el assistant tambien sirve."""
+    last = "He abierto el archivo. ¿Quieres que lo modifique?"
+    assert gate.tool_is_requested(
+        "editar_archivo", "sí, adelante", last_assistant=last,
+    )

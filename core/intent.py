@@ -292,8 +292,11 @@ class ToolIntentGate:
         if _looks_like_informative_question(text):
             return None
         # 3. Camino normal: menciones directas al workspace o MCP.
+        #    H1-bis: pasa last_assistant para anafora pura.
         if (
-            self._mentions_workspace_operation(text)
+            self._mentions_workspace_operation(
+                text, last_assistant=last_assistant,
+            )
             or self._mentions_mcp_tool(text, tools)
         ):
             return tools
@@ -423,17 +426,19 @@ class ToolIntentGate:
         if rule.weak_verbs and self._mentions_any_word(
             normalised, rule.weak_verbs
         ):
-            if self._mentions_target(
+            if self._mentions_target_ext(
                 rule.target_words, text, normalised,
                 rule.accepts_filename,
+                last_assistant=last_assistant,
             ):
                 return True
             # Verbo débil sin target: no autoriza por esta vía. Pero
             # podría autorizar por verbo fuerte. Caer al chequeo
             # final.
 
-        if rule.requires_target and not self._mentions_target(
-            rule.target_words, text, normalised, rule.accepts_filename
+        if rule.requires_target and not self._mentions_target_ext(
+            rule.target_words, text, normalised, rule.accepts_filename,
+            last_assistant=last_assistant,
         ):
             return False
 
@@ -547,14 +552,53 @@ class ToolIntentGate:
             return True
         return False
 
+    @classmethod
+    def _mentions_target_ext(
+        cls,
+        words: tuple[str, ...],
+        text: str,
+        normalised: str,
+        accepts_filename: bool,
+        *,
+        last_assistant: str | None = None,
+    ) -> bool:
+        """H1-bis (2026-09-27): target en el texto o en el assistant
+        previo. Cubre la anafora pura:
+
+            user: "lee gui.py"
+            assistant: "Aqui tienes el contenido de gui.py..."
+            user: "ahora edítalo"     <- sin target, pero el filename
+                                        esta en el assistant previo.
+
+        En ese flujo, `_mentions_target` falla porque "ahora edítalo"
+        no menciona ni target_words ni filename. Con _ext, se mira
+        tambien `last_assistant` para encontrar el target.
+        """
+        if cls._mentions_target(words, text, normalised, accepts_filename):
+            return True
+        if not last_assistant:
+            return False
+        return cls._mentions_target(
+            words, last_assistant,
+            cls._normalise(last_assistant), accepts_filename,
+        )
+
     # -- operaciones de workspace -------------------------------------------
 
-    def _mentions_workspace_operation(self, text: str) -> bool:
+    def _mentions_workspace_operation(
+        self,
+        text: str,
+        *,
+        last_assistant: str | None = None,
+    ) -> bool:
         """True si el texto sugiere alguna operación sobre el workspace.
 
         Usa las reglas de la instancia (las del provider que construyó
         el gate), no un registro global. Así dos gates con reglas
         distintas no se contaminan mutuamente.
+
+        H1-bis (2026-09-27): acepta `last_assistant` para la anafora
+        pura ("ahora edítalo" con filename en el assistant previo).
         """
         normalised = self._normalise(text)
         for rule in self.rules.values():
@@ -566,16 +610,18 @@ class ToolIntentGate:
             # "verbo débil sin target" → no (pero sigue probando
             # los verbs fuertes).
             if rule.weak_verbs:
-                has_target = self._mentions_target(
+                has_target = self._mentions_target_ext(
                     rule.target_words, text, normalised,
                     rule.accepts_filename,
+                    last_assistant=last_assistant,
                 )
                 if has_target and self._mentions_any_word(
                     normalised, rule.weak_verbs
                 ):
                     return True
-            if rule.requires_target and not self._mentions_target(
-                rule.target_words, text, normalised, rule.accepts_filename
+            if rule.requires_target and not self._mentions_target_ext(
+                rule.target_words, text, normalised, rule.accepts_filename,
+                last_assistant=last_assistant,
             ):
                 continue
             if self._mentions_any_word(normalised, rule.verbs):
