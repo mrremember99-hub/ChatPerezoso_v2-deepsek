@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import re
 import unicodedata
+
+import simplemma
 from dataclasses import dataclass
-from functools import lru_cache
 
 
 # Confirmaciones conversacionales. Cuando el modelo pregunta
@@ -31,39 +32,50 @@ _CONFIRMATIONS: frozenset[str] = frozenset({
     "adelante", "hazlo", "hazla", "confirma", "confirmo",
     "confirmado", "de acuerdo", "por supuesto", "go ahead",
 })
-from typing import Any
 
 
-# H13 (auditoria 2026-09-26): sufijos encliticos del imperativo
-# espanol ("ejecutalo", "leelo", "borrala").  no matchea el
-# verbo base contra la forma con enclitico porque la letra que
-# sigue crea continuidad, no frontera.
-_ENCLITIC_SUFFIXES: tuple[str, ...] = (
-    "lo", "la", "los", "las", "le", "les",
-    "me", "te", "se", "nos",
-)
-
-
-_CONJUGATION_SUFFIXES: tuple[str, ...] = (
-    "o", "as", "a", "amos", "áis", "an",
-    "o", "es", "e", "emos", "éis", "en",
-    "o", "es", "e", "imos", "ís", "en",
-    "é", "aste", "ó", "amos", "asteis", "aron",
-    "í", "iste", "ió", "imos", "isteis", "ieron",
-    "e", "es", "e", "emos", "éis", "en",
-    "a", "as", "a", "amos", "áis", "an",
-)
-
-
-_IRREGULAR_FORMS: dict[str, tuple[str, ...]] = {
-    "encontrar": ("encontro", "encontraron", "encontrado", "encontrando"),
-    "buscar": ("buscando", "buscado"),
-    "correr": ("corrio", "corrieron", "corrido", "corriendo"),
-    "ejecutar": ("ejecutando", "ejecutado"),
-    "escribir": ("escribio", "escribieron", "escrito", "escribiendo"),
-    "leer": ("leyo", "leyeron", "leido", "leyendo"),
-    "editar": ("editando", "editado"),
+# F6 (2026-09-27): post-procesado sobre simplemma. simplemma no
+# tiene POS tagging, asi que falla con sustantivos verbales,
+# participios irregulares y algunos encliticos.
+_POSTPROC: dict[str, str] = {
+    "creacion": "crear", "edicion": "editar",
+    "actualizacion": "actualizar", "modificacion": "modificar",
+    "refactorizacion": "refactorizar", "correccion": "corregir",
+    "escritura": "escribir", "implementacion": "implementar",
+    "programacion": "programar", "instalacion": "instalar",
+    "ejecucion": "ejecutar", "compilacion": "compilar",
+    "escrito": "escribir", "hecho": "hacer", "dicho": "decir",
+    "visto": "ver", "puesto": "poner", "vuelto": "volver",
+    "abierto": "abrir", "cubierto": "cubrir", "muerto": "morir",
+    "lanzalo": "lanzar", "buscalo": "buscar",
+    "muestralo": "mostrar", "borralo": "borrar",
+    "leelo": "leer", "abrelo": "abrir",
+    "cierralo": "cerrar", "guardalo": "guardar",
+    "arreglalo": "arreglar", "corrigelo": "corregir",
+    "actualizalo": "actualizar", "modificalo": "modificar",
+    "refactorizalo": "refactorizar",
+    # Formas conjugadas cortas (3a pers. sing. presente, la forma
+    # mas comun de imperativo informal en espanol). simplemma las
+    # deja sin lematizar porque son ambiguas sin POS tagging.
+    "busca": "buscar", "muestra": "mostrar",
+    "borra": "borrar", "corre": "correr",
+    "lanza": "lanzar", "compila": "compilar",
+    "instala": "instalar", "testea": "testear",
+    "ejecuta": "ejecutar", "edita": "editar",
+    "crea": "crear", "escribe": "escribir",
+    "lee": "leer", "abre": "abrir",
+    "cierra": "cerrar", "guarda": "guardar",
+    "arregla": "arreglar", "corrige": "corregir",
+    "actualiza": "actualizar", "modifica": "modificar",
+    "refactoriza": "refactorizar", "completa": "completar",
+    "implementa": "implementar", "programa": "programar",
+    "anade": "anadir", "agrega": "agregar",
+    "incluye": "incluir", "desarrolla": "desarrollar",
+    # Irregulares sin tilde
+    "corrio": "correr", "leyo": "leer",
+    "escribio": "escribir", "encontro": "encontrar",
 }
+from typing import Any
 
 
 MCP_ACTION_VERBS: tuple[str, ...] = (
@@ -85,6 +97,29 @@ def _strip_accents(text: str) -> str:
         char for char in unicodedata.normalize("NFD", text.lower())
         if unicodedata.category(char) != "Mn"
     )
+
+
+def _lemma(word: str) -> str:
+    """Lematiza una palabra al espanol, sin acentos.
+
+    F6 (2026-09-27): sustituye al stemmer propio. Aplica simplemma
+    + post-procesado (_POSTPROC).
+    """
+    if not word:
+        return ""
+    norm = _strip_accents(word.strip())
+    if not norm:
+        return ""
+    if norm in _POSTPROC:
+        return _POSTPROC[norm]
+    try:
+        lemma = simplemma.lemmatize(word.lower().strip(), lang="es")
+    except Exception:
+        return norm
+    norm_lemma = _strip_accents(lemma.strip())
+    if not norm_lemma:
+        return norm
+    return _POSTPROC.get(norm_lemma, norm_lemma)
 
 
 @dataclass(frozen=True)
@@ -289,46 +324,34 @@ class ToolIntentGate:
         if not verbs:
             return False
         normalised = cls._normalise(text)
-
-        # Paso 1: ¿hay alguna forma afirmativa de algún verbo?
-        has_any_affirmative = False
-        for verb in verbs:
-            v = cls._normalise(verb)
-            if not v:
-                continue
-            for form in _cached_verb_forms(v):
-                for match in re.finditer(
-                    rf"\b{re.escape(form)}\b", normalised, re.IGNORECASE
-                ):
-                    start = match.start()
-                    # Miramos hacia atrás: si el "no" (posiblemente con
-                    # hasta 3 palabras en medio) llega justo hasta aquí,
-                    # este match es negado, no afirmativo.
-                    prefix = normalised[max(0, start - 40):start]
-                    if not re.search(
-                        r"\bno\b(?:\s+\w+){0,3}\s+$", prefix
-                    ):
-                        has_any_affirmative = True
-                        break
-                if has_any_affirmative:
-                    break
-            if has_any_affirmative:
-                break
-
-        if has_any_affirmative:
+        verb_lemmas = {_lemma(cls._normalise(v)) for v in verbs}
+        verb_lemmas.discard("")
+        if not verb_lemmas:
             return False
 
-        # Paso 2: sin formas afirmativas, comprobar si hay negación.
-        for verb in verbs:
-            v = cls._normalise(verb)
-            if not v:
-                continue
-            for form in _cached_verb_forms(v):
-                pattern = (
-                    rf"\bno\b(?:\s+\w+){{0,3}}\s+{re.escape(form)}\b"
-                )
-                if re.search(pattern, normalised, re.IGNORECASE):
+        tokens = re.findall(r"\w+", normalised, re.UNICODE)
+        if not tokens:
+            return False
+        lemmas = [_lemma(t) for t in tokens]
+
+        def has_no_before(idx: int, max_gap: int = 4) -> bool:
+            for gap in range(1, max_gap + 1):
+                j = idx - gap
+                if j < 0:
+                    return False
+                if tokens[j] == "no":
                     return True
+            return False
+
+        # Paso 1: hay alguna forma afirmativa?
+        for i, lm in enumerate(lemmas):
+            if lm in verb_lemmas and not has_no_before(i):
+                return False
+
+        # Paso 2: sin afirmativa, hay negacion?
+        for i, lm in enumerate(lemmas):
+            if lm in verb_lemmas and has_no_before(i):
+                return True
         return False
 
     @classmethod
@@ -352,30 +375,17 @@ class ToolIntentGate:
         ("¿", ",", "?") y una letra, así que "¿dónde" y "dónde?" matchean
         la palabra normalizada "donde".
         """
+        # F6 (2026-09-27): comparacion por lemas.
+        text_lemmas = {
+            _lemma(t)
+            for t in re.findall(r"\w+", normalised, re.UNICODE)
+        }
+        if not text_lemmas:
+            return False
         for word in words:
-            w = cls._normalise(word)
-            if not w:
-                continue
-            if re.search(rf"\b{re.escape(w)}\b", normalised):
+            w_lemma = _lemma(cls._normalise(word))
+            if w_lemma and w_lemma in text_lemmas:
                 return True
-            # H13: aceptar imperativo + enclitico ("ejecutalo" ->
-            # "ejecuta"+"lo"). Solo si el verbo termina en vocal
-            # (imperativo afirmativo: "lee"->"leelo", "borra"->"borralo").
-            if w[-1:] in "aeiou":
-                for suf in _ENCLITIC_SUFFIXES:
-                    if re.search(
-                        rf"\b{re.escape(w + suf)}\b", normalised
-                    ):
-                        return True
-            # H14 (auditoria 2026-09-26): formas irregulares de
-            # participio/gerundio/pret. 3a persona que el stemmer
-            # regular no genera ("buscando", "encontro", "escrito").
-            # Solo irregulares explicitos — NO formas regulares
-            # conjugadas, para no colisionar con sustantivos
-            # ("lista" no debe matchear "listar").
-            for irr in _IRREGULAR_FORMS.get(w, ()):
-                if re.search(rf"\b{re.escape(irr)}\b", normalised):
-                    return True
         return False
 
     @classmethod
@@ -469,20 +479,3 @@ class ToolIntentGate:
     @staticmethod
     def _normalise(text: str) -> str:
         return _strip_accents(text)
-
-
-@lru_cache(maxsize=None)
-def _cached_verb_forms(verb: str) -> tuple[str, ...]:
-    """Formas conjugadas a partir de un verbo ya normalizado (sin acentos)."""
-    forms: set[str] = {verb}
-    stem = ""
-    if verb.endswith(("ar", "er", "ir")) and len(verb) > 3:
-        stem = verb[:-2]
-    elif verb and verb[-1] in "aeo" and len(verb) > 3:
-        stem = verb[:-1]
-    if len(stem) >= 2:
-        forms.update(f"{stem}{suffix}" for suffix in _CONJUGATION_SUFFIXES)
-    irregular = _IRREGULAR_FORMS.get(verb)
-    if irregular:
-        forms.update(irregular)
-    return tuple(forms)

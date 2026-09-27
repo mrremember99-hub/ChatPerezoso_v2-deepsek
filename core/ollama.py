@@ -20,7 +20,7 @@ from .stream_events import (
     TextDelta,
     ToolCallsDelta,
 )
-from .intent import ToolIntentGate, _cached_verb_forms
+from .intent import ToolIntentGate, _lemma
 from .context_window import ContextWindow, RequestTokenCache
 from . import token_calibration
 from .model_capabilities import get_capabilities
@@ -459,48 +459,30 @@ _TRUNCATED_STREAM_SUFFIX = (
 
 
 
-# ── Helpers de matching normalizado (H1) ──────────────────────
-
-_MENTIONS_PATTERN_CACHE: dict[tuple[str, ...], "re.Pattern[str]"] = {}
-
-
-def _mentions_pattern(verbs: tuple[str, ...]) -> "re.Pattern[str]":
-    """Regex (word-boundary) que matchea cualquier forma conjugada.
-
-    Cachea el patron por tupla: mismo conjunto de verbos =
-    mismo regex. Reutiliza _cached_verb_forms de intent.py.
-    """
-    pat = _MENTIONS_PATTERN_CACHE.get(verbs)
-    if pat is not None:
-        return pat
-    forms: set[str] = set()
-    for v in verbs:
-        norm = ToolIntentGate._normalise(v).lower()
-        conjugated = _cached_verb_forms(norm)
-        forms.update(conjugated)
-        # Encliticos: "escribe" + "lo" -> "escribelo".
-        # Solo aplica a formas que terminan en vocal (imperativos).
-        for form in conjugated:
-            if form and form[-1] in "aeiouáéíóú":
-                for suf in (
-                    "lo", "la", "los", "las",
-                    "le", "les", "me", "te", "se", "nos",
-                ):
-                    forms.add(form + suf)
-    alt = "|".join(
-        re.escape(f) for f in sorted(forms, key=len, reverse=True)
-    )
-    pat = re.compile(rf"(?<!\w)(?:{alt})(?!\w)")
-    _MENTIONS_PATTERN_CACHE[verbs] = pat
-    return pat
+# ── Helpers de matching por lemas (F6, 2026-09-27) ─────────────
+#
+# F6 sustituyo el stemmer propio por simplemma. En vez de construir
+# un regex con todas las formas conjugadas + encliticos, comparamos
+# lemas token por token. Cubre cualquier conjugacion, enclitico y
+# sustantivo verbal sin listas ni expansion manual.
 
 
 def _mentions_any(text: str | None, verbs: tuple[str, ...]) -> bool:
-    """True si el texto menciona alguna forma de algun verbo."""
-    if not text:
+    """True si el texto menciona alguna forma de algun verbo.
+
+    Compara por lemas (simplemma + postprocesado de intent._lemma).
+    """
+    if not text or not verbs:
+        return False
+    verb_lemmas = {_lemma(v) for v in verbs}
+    verb_lemmas.discard("")
+    if not verb_lemmas:
         return False
     norm = ToolIntentGate._normalise(text).lower()
-    return bool(_mentions_pattern(verbs).search(norm))
+    for token in re.findall(r"\w+", norm, re.UNICODE):
+        if _lemma(token) in verb_lemmas:
+            return True
+    return False
 
 
 def _mentions_marker(text: str | None, markers: tuple[str, ...]) -> bool:
@@ -1516,9 +1498,9 @@ class OllamaClient:
     def _user_requested_write(text: str | None) -> bool:
         """True si el usuario pidio escribir/modificar algo.
 
-        Normaliza acentos y expande conjugaciones via
-        intent._cached_verb_forms. Antes era substring match
-        plano y se perdian variantes ("corrige", "arreglar"...).
+        Normaliza acentos y compara por lemas via intent._lemma.
+        Cubre cualquier conjugacion, enclitico y sustantivo verbal.
+        Antes era substring match plano y se perdian variantes.
         """
         return _mentions_any(text, _WRITE_VERBS)
 
