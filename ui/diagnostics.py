@@ -55,8 +55,24 @@ class SessionStats:
 
     # -- contexto ------------------------------------------------------------
 
-    def update_context(self, messages: list[dict]) -> None:
-        """Recalcula los tokens estimados del contexto actual."""
+    def update_context(
+        self,
+        messages: list[dict],
+        *,
+        estimator=None,
+    ) -> None:
+        """Recalcula los tokens estimados del contexto actual.
+
+        Auditoria 2026-09-27: antes usaba chars/4 fijo, distinto al
+        estimador del ContextWindow (que incluye tool_calls y
+        calibracion por modelo). Los dos numeros se contradedian.
+        Ahora acepta un `estimator` (callable message -> int) para
+        usar el mismo que ContextWindow. Sin estimator, cae al
+        fallback legacy para compatibilidad con tests.
+        """
+        if estimator is not None:
+            self.context_tokens = sum(estimator(m) for m in messages)
+            return
         total_chars = 0
         for message in messages:
             content = message.get("content")

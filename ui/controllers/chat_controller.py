@@ -534,6 +534,15 @@ class ChatController(QObject):
         """
         self._context_limit = max(0, int(tokens))
 
+    def estimate_message_tokens(self, message: dict) -> int:
+        """Estima tokens de un mensaje con el ContextWindow activo.
+
+        Expuesto publico para que DiagnosticsController use el MISMO
+        estimador que el presupuesto real (auditoria 2026-09-27).
+        Incluye tool_calls y calibracion por modelo.
+        """
+        return self._get_context_window().estimate_message_tokens(message)
+
     def last_assistant_text(self) -> str:
         for message in reversed(self.messages):
             if message.get("role") == "assistant":

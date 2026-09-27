@@ -218,3 +218,66 @@ def test_refresh_context_public(full):
     chat.messages = [{"role": "user", "content": "x" * 100}]
     ctrl.refresh_context()
     assert ctrl.stats.context_tokens > 0
+
+
+# -- P2.1 (auditoria 2026-09-27): metrica unificada ---------------------
+
+def test_diagnostics_usa_estimator_de_chat(qapp):
+    """El badge usa el mismo estimador que ContextWindow.
+
+    Fake minimo con el `estimate_message_tokens` que ChatController
+    expone publico (auditoria 2026-09-27). El mensaje con tool_calls
+    suma mas que el legacy (que solo cuenta content).
+    """
+    from ui.controllers.diagnostics_controller import (
+        DiagnosticsController,
+    )
+    from ui.views.diagnostics_panel import DiagnosticsPanel
+
+    class _FakeChat(QObject):
+        state_changed = Signal(object)
+        conversation_changed = Signal()
+        textual_tool_attempt = Signal()
+
+        def __init__(self):
+            super().__init__()
+            self.messages = [
+                {"role": "user", "content": "x" * 400},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "leer_archivo",
+                                "arguments": {"path": "a.py"},
+                            }
+                        }
+                    ],
+                },
+            ]
+
+        def estimate_message_tokens(self, message):
+            # Simula ContextWindow: suma content + tool_calls.
+            total = 0
+            content = message.get("content")
+            if isinstance(content, str):
+                total += len(content) // 4
+            tcs = message.get("tool_calls")
+            if tcs:
+                # 100 tokens "extra" por tool_call para el test.
+                total += 100 * len(tcs)
+            return total
+
+        def last_assistant_text(self):
+            return ""
+
+    chat = _FakeChat()
+    panel = DiagnosticsPanel()
+    ctrl = DiagnosticsController(parent=None, chat=chat, panel=panel)
+    ctrl._owner = chat
+    ctrl.refresh_context()
+
+    # Legacy daria 400/4 = 100. Con estimator real, +100 por
+    # tool_call. Debe ser > 100.
+    assert ctrl.stats.context_tokens > 100

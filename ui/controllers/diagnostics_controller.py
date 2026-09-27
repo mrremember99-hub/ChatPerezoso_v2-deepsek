@@ -153,7 +153,13 @@ class DiagnosticsController(QObject):
         operaciones que cambian el historial sin pasar por el
         conversation_changed del ChatController (restauración).
         """
-        self.stats.update_context(self.chat.messages)
+        # Auditoria 2026-09-27: usar el mismo estimador que
+        # ContextWindow para que el badge no contradiga el
+        # presupuesto real.
+        estimator = getattr(self.chat, "estimate_message_tokens", None)
+        self.stats.update_context(
+            self.chat.messages, estimator=estimator,
+        )
         self.panel.set_context_tokens(self.stats.context_tokens)
 
     # -- refresco ------------------------------------------------------------
