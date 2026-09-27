@@ -102,6 +102,9 @@ def test_send_justo_en_umbral_prepara_prompt():
 
 def test_on_summary_ready_aplica_bloque():
     ctrl = _make_ctrl()
+    # Auditoria 2026-09-27: el guard de stale exige
+    # new_index <= len(messages). Rellenamos 20 mensajes.
+    _fill(ctrl, 20)
     ctrl._on_summary_ready(_fake_reply(), 20)
     assert ctrl._session_summary.cycles == 1
     assert ctrl._session_summary.text != ""
@@ -117,6 +120,9 @@ def test_on_summary_ready_raw_vacio_no_aplica():
 
 def test_on_summary_ready_rolling_3_ciclos():
     ctrl = _make_ctrl()
+    # Auditoria 2026-09-27: rellenar hasta 60 mensajes para que el
+    # guard de stale acepte los 3 indices (20, 40, 60).
+    _fill(ctrl, 60)
     for i in range(1, 4):
         ctrl._on_summary_ready(_fake_reply(), 20 * i)
     assert ctrl._session_summary.cycles == 3
@@ -175,3 +181,35 @@ def test_resumen_se_inyecta_despues_del_system_base():
     assert "[RESUMEN DE LA SESIÓN]" in sys_prompt
     # Base primero, resumen despues.
     assert sys_prompt.index("SYSTEM BASE") < sys_prompt.index("[RESUMEN DE LA SESIÓN]")
+
+
+# -- Resumen stale (auditoria 2026-09-27) ------------------------------
+
+def test_on_summary_ready_descarta_indice_mayor_que_messages():
+    """Si el historial se trunco/vacio durante el resumen, descartar."""
+    ctrl = _make_ctrl()
+    # messages vacio, new_index=50.
+    ctrl._on_summary_ready(_fake_reply(), 50)
+    assert ctrl._session_summary.cycles == 0
+    assert ctrl._session_summary.text == ""
+    assert ctrl._session_summary.last_message_count == 0
+
+
+def test_on_summary_ready_descarta_retroceso():
+    """new_index <= last_message_count: no aplicar."""
+    ctrl = _make_ctrl()
+    _fill(ctrl, 30)
+    ctrl._session_summary.last_message_count = 25
+    ctrl._session_summary.text = "previo"
+    ctrl._on_summary_ready(_fake_reply(), 20)
+    assert ctrl._session_summary.last_message_count == 25
+    assert ctrl._session_summary.text == "previo"
+
+
+def test_on_summary_ready_acepta_indice_valido():
+    """Camino feliz: new_index > last_message_count y <= len."""
+    ctrl = _make_ctrl()
+    _fill(ctrl, 30)
+    ctrl._on_summary_ready(_fake_reply(), 20)
+    assert ctrl._session_summary.cycles == 1
+    assert ctrl._session_summary.last_message_count == 20

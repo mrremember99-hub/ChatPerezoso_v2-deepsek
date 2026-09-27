@@ -1020,6 +1020,22 @@ class ChatController(QObject):
         summary = getattr(self, "_session_summary", None)
         if summary is None:
             return
+        # Auditoria 2026-09-27: descartar resumen stale. Si el
+        # historial se trunco (regenerate) o vacio (clear)
+        # mientras el worker resumia, `new_index` apunta a un
+        # historial que ya no existe. Aplicarlo congelaria el
+        # resumen para siempre: should_update veria
+        # new_since = len(messages) - last_message_count < 0.
+        if new_index > len(self.messages):
+            logger.info(
+                "Resumen descartado: new_index=%d > len(messages)=%d "
+                "(historial truncado durante la generacion).",
+                new_index, len(self.messages),
+            )
+            return
+        if new_index <= summary.last_message_count:
+            # Retroceso o sin avance: no aplicar.
+            return
         block = format_summary_block(raw)
         if not block:
             return
