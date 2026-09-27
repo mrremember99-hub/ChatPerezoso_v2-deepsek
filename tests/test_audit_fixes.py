@@ -46,3 +46,27 @@ def test_appconfig_load_acepta_keep_alive_custom(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg_mod, "CONFIG_FILE", cfg_file)
     cfg = cfg_mod.AppConfig.load()
     assert cfg.keep_alive == "5m"
+
+
+# -- num_predict configurable (auditoria 2026-09-27, test OVERPAPER) -----
+
+def test_appconfig_tiene_num_predict_default_cero():
+    from core.config import AppConfig
+    assert AppConfig().num_predict == 0
+
+
+def test_ollama_client_acepta_num_predict():
+    from core.ollama import OllamaClient
+    c = OllamaClient("http://x", num_predict=-1)
+    assert c.num_predict == -1
+    c2 = OllamaClient("http://x")
+    assert c2.num_predict == 0
+
+
+def test_appconfig_load_acepta_num_predict_custom(tmp_path, monkeypatch):
+    import core.config as cfg_mod
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text('{"num_predict": -1}', encoding="utf-8")
+    monkeypatch.setattr(cfg_mod, "CONFIG_FILE", cfg_file)
+    cfg = cfg_mod.AppConfig.load()
+    assert cfg.num_predict == -1

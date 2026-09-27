@@ -49,6 +49,15 @@ class AppConfig:
     # hardware limitado (Mac M-series con poca RAM unificada),
     # retener un modelo grande 30 min desplaza otros procesos.
     keep_alive: str = "30m"
+    # Limite de tokens de generacion por ronda. Ollama: -1 =
+    # infinito (default de Ollama), -2 = llenar contexto, N>0 =
+    # limite explicito. 0 = "no enviar el campo" (deja que Ollama
+    # use su default).
+    # Auditoria 2026-09-27 (test OVERPAPER): modelos con archivos
+    # grandes se truncaban por num_predict. Exponerlo permite al
+    # usuario subirlo (-1 o un valor alto) cuando su hardware lo
+    # permita.
+    num_predict: int = 0
 
     @classmethod
     def load(cls) -> "AppConfig":

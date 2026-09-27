@@ -540,11 +540,16 @@ class OllamaClient:
         self,
         host: str = "http://localhost:11434",
         keep_alive: str = "30m",
+        num_predict: int = 0,
     ):
         self.host = host.rstrip("/")
         # Tiempo que Ollama mantiene el modelo cargado tras la
         # ultima peticion. Configurable via AppConfig.keep_alive.
         self.keep_alive = keep_alive
+        # Limite de tokens de generacion. 0 = no enviar el campo
+        # (Ollama decide con su default -1 = infinito). Otros
+        # valores se envian explicitamente en options.
+        self.num_predict = num_predict
         # read=300s: modelos con thinking mode (qwen3, north-mini-code,
         # muse-glimmer) pueden tardar 60-120s en el primer token. Con
         # 60s, httpx cortaba la conexión antes de que el modelo empezara.
@@ -1956,8 +1961,14 @@ class OllamaClient:
         }
         if tools:
             payload["tools"] = tools
-        if options:
-            payload["options"] = options
+        # num_predict configurable (auditoria 2026-09-27). 0 = no
+        # enviar (Ollama usa su default -1 = infinito). -2 = fill
+        # context. N>0 = limite explicito.
+        effective_options = dict(options) if options else {}
+        if self.num_predict != 0:
+            effective_options["num_predict"] = self.num_predict
+        if effective_options:
+            payload["options"] = effective_options
         # Override de thinking por modelo. Solo aplica si el usuario
         # lo ha definido en models.json. Si está ausente, Ollama decide
         # según la capability del modelo.

@@ -118,6 +118,7 @@ class AppController(QObject):
         self.ollama = OllamaClient(
             self.config.ollama_host,
             keep_alive=self.config.keep_alive,
+            num_predict=self.config.num_predict,
         )
         self.workspace = Workspace(self.config.workspace_path())
         self.tools = ToolRegistry(self.workspace)
