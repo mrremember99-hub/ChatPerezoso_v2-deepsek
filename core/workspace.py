@@ -193,8 +193,14 @@ class Workspace:
         start = max(1, int(start_line)) if start_line is not None else 1
         end = min(total, int(end_line)) if end_line is not None else total
         if end < start:
+            # F1 (2026-09-27): incluir `total` en el error. Sin esto,
+            # el modelo veia "Rango invalido: start_line=84" sin saber
+            # que el archivo tiene 83 lineas, e iteraba a ciegas
+            # probando 84, 90, 150... hasta agotar max_rounds.
             raise WorkspaceError(
-                f"Rango inválido: start_line={start_line} end_line={end_line}"
+                f"Rango inválido: start_line={start_line} "
+                f"end_line={end_line}. El archivo tiene {total} "
+                f"línea(s). Usa un rango dentro de [1, {total}]."
             )
 
         selected = lines[start - 1 : end]

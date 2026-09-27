@@ -54,8 +54,22 @@ _BLOCKED_ROUNDS_MSG = (
     "el archivo concreto donde quieres que se guarde el resultado."
 )
 
+# F2 (2026-09-27): el modelo repitio tools que fallan. Se corta
+# antes de agotar max_rounds para dar feedback util al usuario.
+_TOOL_ERRORS_LOOP_MSG = (
+    "El modelo repitio varias veces una operacion que fallaba "
+    "seguida. Se detiene aqui. Revisa el ultimo error en el chat y "
+    "reformula la peticion con instrucciones mas concretas."
+)
+
 _MAX_REPEATED_SIGNATURES = 2
 _MAX_CONSECUTIVE_BLOCKED_ROUNDS = 3
+# F2 (2026-09-27): rondas seguidas con errores de tool. Sin este
+# tope, un modelo que itera a ciegas sobre un tool que siempre falla
+# (p.ej. leer_archivo con start_line fuera de rango) consume las 15
+# rondas y muere con "Se alcanzo el limite de rondas" sin feedback
+# util al usuario.
+_MAX_CONSECUTIVE_TOOL_ERRORS = 3
 
 # Keywords que aparecen en el JSON de una tool call textual. Se usan
 # para decidir si el buffering activado por un `{` es realmente una
@@ -166,6 +180,9 @@ class _LoopState:
     false_completion_retries_used: int = 0
     any_write_executed: bool = False
     any_tool_failed: bool = False
+    # F2 (2026-09-27): rondas SEGUIDAS con fallo de tool. Se
+    # resetea al primer exito o al primer turno sin fallo.
+    consecutive_error_rounds: int = 0
 
 
 
@@ -1171,6 +1188,15 @@ class OllamaClient:
                 return _BLOCKED_ROUNDS_MSG
         else:
             state.consecutive_blocked_rounds = 0
+
+        # F2 (2026-09-27): detener si el modelo repite rondas
+        # fallidas. Coherente con el contador de blocked.
+        if execution.had_failure:
+            state.consecutive_error_rounds += 1
+            if state.consecutive_error_rounds >= _MAX_CONSECUTIVE_TOOL_ERRORS:
+                return _TOOL_ERRORS_LOOP_MSG
+        else:
+            state.consecutive_error_rounds = 0
         return None
 
     @staticmethod
