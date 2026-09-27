@@ -14,6 +14,8 @@ import ast
 import re
 import shutil
 import subprocess
+
+import parso
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -165,24 +167,61 @@ def _check_main_guard(source: str) -> list[SyntaxIssue]:
     return issues
 
 
+def _iter_syntax_errors(source: str) -> list[SyntaxIssue]:
+    """Detecta TODOS los errores de sintaxis con parso.
+
+    ast.parse se detiene en el primer SyntaxError. parso con
+    error_recovery=True devuelve un arbol con error nodes y
+    ``grammar.iter_errors()`` los lista todos. Eso permite que el
+    modelo corrija varios errores en una sola ronda en lugar de
+    recibirlos de uno en uno.
+
+    Devuelve lista vacia si no hay errores o si parso no puede
+    parsear (cae al ``_check_main_guard`` de ``check_python_syntax``).
+    """
+    try:
+        grammar = parso.load_grammar()
+        module = grammar.parse(source, error_recovery=True)
+        issues = list(grammar.iter_errors(module))
+    except Exception:
+        # parso no soporta algo del codigo (sintaxis muy nueva,
+        # version futura). No bloquear el flujo: devolver lista
+        # vacia para que el fallback con ast.parse siga.
+        return []
+    out: list[SyntaxIssue] = []
+    for issue in issues:
+        line, col = issue.start_pos
+        msg = issue.message
+        # parso incluye el prefijo "SyntaxError: ". Lo quitamos
+        # para mantener el formato consistente con ast.parse
+        # (que devuelve solo el mensaje sin prefijo).
+        prefix = "SyntaxError: "
+        if msg.startswith(prefix):
+            msg = msg[len(prefix):]
+        out.append(SyntaxIssue(
+            line=line or 0,
+            column=col or 0,
+            message=msg,
+        ))
+    return out
+
+
 def check_python_syntax(path: Path) -> list[SyntaxIssue]:
     try:
         source = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         return [SyntaxIssue(0, 0, f"no se pudo leer: {exc}")]
-    try:
-        ast.parse(source, filename=str(path))
-    except SyntaxError as exc:
-        return [
-            SyntaxIssue(
-                line=exc.lineno or 0,
-                column=exc.offset or 0,
-                message=exc.msg or "syntax error",
-            )
-        ]
-    except ValueError as exc:
-        return [SyntaxIssue(0, 0, f"parse error: {exc}")]
-    # Compila: buscar patrones que ejecutan silenciosamente mal.
+
+    # Nivel 1: sintaxis con parso (multi-error). ast.parse se
+    # detiene en el primer SyntaxError; parso con error_recovery
+    # devuelve TODOS los errores en una pasada. El modelo ve el
+    # panorama completo y corrige en una ronda en lugar de N.
+    syntax_errors = _iter_syntax_errors(source)
+    if syntax_errors:
+        return syntax_errors
+
+    # Compila: buscar patrones que ejecutan silenciosamente mal
+    # (main guard con "main" en vez de "__main__").
     return _check_main_guard(source)
 
 

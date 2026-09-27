@@ -17,11 +17,20 @@ def test_check_syntax_python_valido(tmp_path):
 
 
 def test_check_syntax_python_roto(tmp_path):
+    """parso con error_recovery puede reportar errores cascada.
+
+    Antes (ast.parse) se detenia en el primero. Ahora parso
+    recupera y sigue, y en "def f(:\n    return 1" detecta:
+      - linea 1: invalid syntax (el "def f(:" real).
+      - linea 2: 'return' outside function (cascada).
+
+    Lo importante es que el primer error (linea 1) este presente.
+    """
     f = tmp_path / "bad.py"
     f.write_text("def f(:\n    return 1\n", encoding="utf-8")
     issues = check_syntax(f)
-    assert len(issues) == 1
-    assert issues[0].line == 1
+    assert len(issues) >= 1
+    assert any(i.line == 1 for i in issues)
 
 
 def test_check_syntax_archivo_inexistente(tmp_path):
