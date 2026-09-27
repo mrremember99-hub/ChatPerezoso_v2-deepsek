@@ -753,3 +753,37 @@ def test_chat_does_not_mutate_caller_messages_list(monkeypatch):
 
     assert len(messages) == original_len
     assert [id(m) for m in messages] == original_ids
+
+
+# -- Prompt de tools: vía intermedia (auditoria 2026-09-27) ------------
+
+def test_tool_system_prompt_no_tiene_bloques_eliminados():
+    """Los bloques eliminados en la vía intermedia no vuelven."""
+    from core.ollama import OllamaClient
+    tools = [{"function": {"name": "leer_archivo"}}]
+    prompt = OllamaClient._tool_system_prompt(tools)
+    assert "## PROHIBICIONES ABSOLUTAS" not in prompt
+    assert "## LLAMADAS NATIVAS" not in prompt
+
+
+def test_tool_system_prompt_mantiene_titulos_criticos():
+    """Los bloques que aportan siguen presentes."""
+    from core.ollama import OllamaClient
+    tools = [{"function": {"name": "leer_archivo"}}]
+    prompt = OllamaClient._tool_system_prompt(tools)
+    assert "## HERRAMIENTAS PERMITIDAS" in prompt
+    assert "## CUÁNDO USAR HERRAMIENTAS" in prompt
+    assert "## RUTAS" in prompt
+    assert "## ORDEN DE OPERACIONES" in prompt
+    assert "leer_archivo" in prompt
+
+
+def test_tool_system_prompt_mantiene_prohibiciones_clave():
+    """Las prohibiciones clave siguen, aunque sin sección propia."""
+    from core.ollama import OllamaClient
+    tools = [{"function": {"name": "leer_archivo"}}]
+    prompt = OllamaClient._tool_system_prompt(tools)
+    assert "CERRADO" in prompt
+    assert "PROHIBIDAS" in prompt
+    assert "Nunca inventes nombres" in prompt
+    assert "JSON de herramientas" in prompt

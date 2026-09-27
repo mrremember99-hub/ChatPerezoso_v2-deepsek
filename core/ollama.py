@@ -1433,21 +1433,13 @@ class OllamaClient:
         ]
         whitelist = "\n".join(f"- {name}" for name in tool_names)
         return (
-            "## REGLAS CRÍTICAS\n"
             "Tienes acceso a un conjunto CERRADO de herramientas. Todas las "
-            "demás están PROHIBIDAS.\n\n"
+            "demás están PROHIBIDAS. Nunca inventes nombres, ni uses "
+            "herramientas para responder preguntas generales o explicar "
+            "conceptos, ni escribas JSON de herramientas como sustituto de "
+            "una llamada nativa.\n\n"
             "## HERRAMIENTAS PERMITIDAS (única lista válida)\n"
             f"{whitelist}\n\n"
-            "## PROHIBICIONES ABSOLUTAS\n"
-            "- NUNCA inventes nombres de herramientas.\n"
-            "- NUNCA uses herramientas para responder preguntas generales, "
-            "explicar conceptos, opinar o redactar texto.\n"
-            "- NUNCA escribas JSON de herramientas, comandos con prefijo $, "
-            "ni bloques de código como sustituto de una llamada nativa.\n"
-            "- NUNCA afirmes que una herramienta se ejecutó si no has recibido "
-            "su resultado.\n"
-            "- NUNCA infieras una acción sobre archivos a partir de una "
-            "pregunta informativa.\n\n"
             "## CUÁNDO USAR HERRAMIENTAS\n"
             "Solo cuando la última petición del usuario solicite EXPLÍCITAMENTE "
             "una operación sobre el workspace. Para crear, escribir o borrar un "
@@ -1464,9 +1456,7 @@ class OllamaClient:
             "Antes de escribir un archivo existente, usa primero la herramienta "
             "de lectura para conocer su contenido completo. El contenido que "
             "envíes a la escritura debe ser el contenido FINAL COMPLETO, nunca "
-            "un resumen ni una descripción de la instrucción.\n\n"
-            "## LLAMADAS NATIVAS\n"
-            "Usa exclusivamente las llamadas de herramienta nativas de Ollama."
+            "un resumen ni una descripción de la instrucción."
         )
 
     @staticmethod
