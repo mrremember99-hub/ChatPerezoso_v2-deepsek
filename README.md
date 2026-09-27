@@ -356,23 +356,22 @@ Detectado con `mistral-small3.2`: llama a `ejecutar_comando` sin `command` (fall
 ---
 ## Deuda técnica conocida
 
-Símbolos detectados como nunca usados por `vulture`, no eliminados por
-relación riesgo/beneficio. Son ~100 líneas cosméticas. Si algún día se
-borran, hacerlo a mano con `pytest -q` entre medias.
+Sin deuda de dead code pendiente. La sección anterior (símbolos
+detectados por `vulture`) se limpió en el commit `54596c2`
+(2026-09-27): **19 símbolos eliminados** (13 métodos/funciones/
+clases + 6 piezas de estado muerto), −130 líneas.
 
-- `core/async_runner.py` — `is_cancelled_error()`
-- `core/context_window.py` — `estimate_request()`
-- `core/ollama.py` — `force_close_active()`
-- `core/tool_strategies.py` — `ToolCallingStrategy` (Protocol huérfano)
-- `core/token_calibration.py` — `last_actual` (asignado, nunca leído)
-- `ui/controllers/chat_controller.py` — `MIN_TURNS_TO_KEEP`, `error_message` (Signal), `has_queue()`, `is_queue_paused()`
-- `ui/controllers/mcp_controller.py` — `pending_ids` (property)
-- `ui/rendering/plain_text.py` — `_code_fence_lang` (asignado, nunca leído)
-- `ui/views/chat_panel.py` — `set_streaming()`
-- `ui/views/right_panel.py` — `hide_queue_paused()`
-- `ui/views/sidebar.py` — `is_auto_approve()`, `is_verificador()`
+Falsos positivos verificados que se mantienen:
+- `filterAcceptsRow` — override de `QSortFilterProxyModel`.
+- Constantes QSS de `ui/design.py` — vulture no parsea f-strings.
+- `_ensure_loop`, `ollama_options`, `saved_at`, `vision`,
+  `register_rules`, `_has_code_block`, `_looks_like_false_completion`,
+  `any_tool_failed`, `misses`, `set_ttl`, `saludar`, `AppController`,
+  `MIN_TURNS_TO_KEEP`, `dead_ids`, `is_auto_approve`,
+  `is_auto_approve_shell`, `pending_chars`, `DARK_STYLE` — todos
+  usados fuera de su módulo o por tests.
 
-Herramienta usada: `vulture core/ ui/ plugins/ scripts/ tests/ --min-confidence 60`.
+Comando: `vulture core/ ui/ plugins/ scripts/ --min-confidence 60`.
 
 ## Bugs identificados en el test OVERPAPER (2026-09-26)
 
