@@ -105,6 +105,32 @@ CASES = [
         ),
         "expected_tool": "leer_archivo",
     },
+    # Auditoria 2026-09-27: casos que distinguen "leer antes de
+    # editar" (bien) de "editar sin leer" (mal).
+    {
+        "id": "editar_sin_leer",
+        "prompt": (
+            "En main.py reemplaza 'foo' por 'bar' directamente. "
+            "No hace falta que lo leas antes."
+        ),
+        "expected_tool": "editar_archivo",
+    },
+    {
+        "id": "editar_con_flujo_natural",
+        "prompt": (
+            "Necesito cambiar el nombre de la funcion foo() a bar() "
+            "en main.py. Hazlo con la herramienta adecuada."
+        ),
+        "expected_tool": "editar_archivo",
+    },
+    {
+        "id": "crear_y_verificar",
+        "prompt": (
+            "Crea un archivo config.py con la constante DEBUG = True. "
+            "Cuando lo tengas, verifica que existe."
+        ),
+        "expected_tool": "crear_archivo",
+    },
 ]
 
 
@@ -202,10 +228,14 @@ def run_case(
     first_call = emitted[0] if emitted else None
 
     # Verdicto:
+    # - expected=None → no debe emitir tool calls.
+    # - expected="X" → X debe estar en `emitted`, no forzosamente
+    #   el primero. El modelo puede leer antes de editar (que es
+    #   comportamiento correcto, no fallo). Auditoria 2026-09-27.
     if expected is None:
         correct = len(emitted) == 0
     else:
-        correct = first_call == expected
+        correct = expected in emitted
 
     return {
         "id": case["id"],
