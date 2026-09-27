@@ -237,3 +237,36 @@ def test_irregular_forms_match(texto, verbo):
     gate = _Gate({"_x": rule})
     assert gate.tool_is_requested("_x", texto), \
         f"no matcheo {verbo!r} en {texto!r}"
+
+
+# -- F5-bis (2026-09-27): editar/insertar tienen regla -------------------
+
+def test_editar_archivo_tiene_regla():
+    from core.tools import _RULES
+    assert "editar_archivo" in _RULES
+
+
+def test_insertar_en_archivo_tiene_regla():
+    from core.tools import _RULES
+    assert "insertar_en_archivo" in _RULES
+
+
+def test_todas_las_specs_tienen_regla():
+    """Red de seguridad: cada tool en _SPECS debe tener IntentRule.
+
+    Sin este test, una tool nueva en _SPECS pasa desapercibida y
+    queda bloqueada siempre por el gate.
+    """
+    from core.tools import _RULES, _SPECS
+    spec_names = {s["name"] for s in _SPECS}
+    missing = spec_names - set(_RULES.keys())
+    assert not missing, f"Tools sin IntentRule: {sorted(missing)}"
+
+
+def test_editar_archivo_autorizado_por_edicion():
+    from core.intent import ToolIntentGate
+    from core.tools import _RULES
+    gate = ToolIntentGate(_RULES)
+    text = "Lee gui.py. EDICIÓN. NO toques core_processor.py."
+    assert gate.tool_is_requested("editar_archivo", text)
+    assert gate.tool_is_requested("insertar_en_archivo", text)

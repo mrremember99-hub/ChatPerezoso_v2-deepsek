@@ -197,6 +197,19 @@ _WRITE_VERBS: tuple[str, ...] = (
     "agrega", "agregar", "incluye", "incluir",
     "refactoriza", "refactorizar", "corrige", "corregir",
     "arregla", "arreglar", "completa", "completar",
+    # F5 (2026-09-27): sustantivos verbales. El prompt puede pedir
+    # "EDICION" en mayusculas (imperativo nominal) y el gate no lo
+    # reconocia porque el stemmer solo genera conjugaciones. Bug real
+    # Fase 8 2026-09-27: "Lee gui.py. EDICION. NO toques..." autorizaba
+    # leer_archivo pero bloqueaba escribir_archivo/editar_archivo.
+    "edición", "edicion",
+    "modificación", "modificacion",
+    "actualización", "actualizacion",
+    "escritura",
+    "creación", "creacion",
+    "reemplazo",
+    "refactorización", "refactorizacion",
+    "corrección", "correccion",
 )
 
 # Palabras-objetivo que indican que la operación de escritura va sobre
@@ -233,6 +246,21 @@ _RULES: dict[str, IntentRule] = {
         target_words=("carpeta", "directorio"),
     ),
     "escribir_archivo": IntentRule(
+        verbs=_WRITE_VERBS,
+        target_words=_CODE_TARGETS,
+        accepts_filename=True,
+    ),
+    # F5-bis (2026-09-27): editar_archivo e insertar_en_archivo estaban
+    # en _SPECS pero SIN regla en _RULES. El gate las bloqueaba siempre
+    # (tool_is_requested -> False), asi que eran inutilizables via el
+    # flujo normal. Bug real Fase 8: el modelo intentaba editar y
+    # recibia _BLOCKED_MESSAGE, muriendo la fase tras 3 rondas.
+    "editar_archivo": IntentRule(
+        verbs=_WRITE_VERBS,
+        target_words=_CODE_TARGETS,
+        accepts_filename=True,
+    ),
+    "insertar_en_archivo": IntentRule(
         verbs=_WRITE_VERBS,
         target_words=_CODE_TARGETS,
         accepts_filename=True,
