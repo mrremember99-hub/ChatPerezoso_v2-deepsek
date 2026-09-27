@@ -213,8 +213,11 @@ def _confirm_generic_with_scroll(
 _WRITE_TOOL_HINTS = (
     "crear_archivo",
     "escribir_archivo",
+    "editar_archivo",
+    "insertar_en_archivo",
     "write_file",
     "edit_file",
+    "insert_in_file",
     "create_file",
 )
 

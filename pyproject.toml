@@ -14,6 +14,11 @@ dependencies = [
     "google-re2>=1.1",
     "markdown>=3.5",
     "pygments>=2.17",
+    # Auditoria 2026-09-27: faltaban en pyproject.toml. Eran
+    # imports de produccion pero solo estaban en requirements.txt.
+    # `pip install .` en venv limpio fallaba.
+    "simplemma>=2.0.0",
+    "parso>=0.8.4",
 ]
 
 [project.optional-dependencies]

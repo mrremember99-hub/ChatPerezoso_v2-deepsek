@@ -42,6 +42,13 @@ class AppConfig:
     # Si no esta instalado, el resumen se deshabilita (con aviso
     # en el log) y el chat sigue funcionando normalmente. D6.
     summary_model: str = "qwen3:1.7b"
+    # Tiempo que Ollama mantiene el modelo en RAM/VRAM tras la
+    # ultima peticion. Formato Ollama ("30m", "5m", "1h", "-1" =
+    # forever, "0" = unload inmediato).
+    # Auditoria 2026-09-27: antes era "30m" hardcodeado. En
+    # hardware limitado (Mac M-series con poca RAM unificada),
+    # retener un modelo grande 30 min desplaza otros procesos.
+    keep_alive: str = "30m"
 
     @classmethod
     def load(cls) -> "AppConfig":

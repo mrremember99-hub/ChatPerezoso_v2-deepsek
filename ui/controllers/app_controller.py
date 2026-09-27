@@ -115,7 +115,10 @@ class AppController(QObject):
         self.view = view
 
         self.config = AppConfig.load()
-        self.ollama = OllamaClient(self.config.ollama_host)
+        self.ollama = OllamaClient(
+            self.config.ollama_host,
+            keep_alive=self.config.keep_alive,
+        )
         self.workspace = Workspace(self.config.workspace_path())
         self.tools = ToolRegistry(self.workspace)
         self.mcp = MCPToolBridge(self.tools)

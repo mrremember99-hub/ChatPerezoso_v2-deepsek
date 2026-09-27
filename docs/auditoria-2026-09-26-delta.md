@@ -193,3 +193,57 @@ De paso, el commit `95407a2` añadió `@Slot` también en `mcp_controller.py` (`
 **No revisado en detalle en esta pasada** (por volumen y ausencia de señales de riesgo en el grep dirigido a patrones habituales — `except` desnudos, `shell=True`, `eval`/`exec`, llamadas de red síncronas fuera de worker): `ui/views/dialogs.py`, `ui/views/right_panel.py`, `ui/views/sidebar.py` (contenido completo, más allá del diff ya visto), `ui/views/chat_panel.py`, `ui/widgets.py`, `ui/diagnostics.py`, `ui/controllers/diagnostics_controller.py`, `ui/controllers/model_controller.py`, contenido línea a línea de `tests/*`.
 
 **Estado de la auditoría delta: cerrada.** No quedan hallazgos abiertos de esta pasada. La cobertura pendiente de arriba no mostró señales de riesgo en el escaneo dirigido, pero no ha recibido lectura línea por línea completa.
+
+## 7. Nuevos hallazgos — cobertura de módulos pendientes (continuación)
+
+### E1 — Dos badges de Contexto en el sidebar, calculados de forma distinta e inconsistente (MEDIO)
+
+**Archivos:** `ui/diagnostics.py` (`SessionStats.update_context`), `ui/views/sidebar.py` (`set_context_usage`), `ui/controllers/app_controller.py` (`_refresh_context_badge`), `core/context_window.py` (`ContextWindow.estimate_message_tokens`).
+
+**Evidencia (DEMOSTRADO):** el sidebar muestra **dos** indicadores de contexto simultáneos:
+
+1. `context_usage_label` (Contexto: X / Y, con color según % de uso — Hueco 4). Se alimenta de `chat_ctrl.context_summary()`, que devuelve `self._last_budget`, calculado por `ContextWindow.fit()` usando `estimate_message_tokens()`: calibración por modelo cuando existe, heurística prosa/código, **y suma explícitamente el JSON de `tool_calls`** (el propio docstring lo justifica: Ignorarlos subestima el consumo... por ejemplo, el `content` de un `escribir_archivo`).
+2. El label de contexto dentro de `DiagnosticsPanel` (Contexto: ~N tokens, sección SESIÓN). Se alimenta de `SessionStats.update_context()`, que solo suma `len(message[content])` con un ratio fijo de 4 caracteres/token — **sin contar `tool_calls` en absoluto** ni usar la calibración por modelo.
+
+**Impacto:** en una conversación con llamadas a herramientas (el caso normal de este asistente de programación, especialmente `escribir_archivo`/`editar_archivo`/`insertar_en_archivo` con contenido grande), los dos números pueden divergir sustancialmente — el de SESIÓN subestimará el uso real, mientras que el de arriba (el correcto) lo reflejará bien. Dos indicadores con el mismo nombre (Contexto) y valores distintos en el mismo panel es confuso para el usuario, y es además duplicación de lógica de estimación de tokens que puede desviarse con el tiempo (ya lo ha hecho).
+
+**Solución propuesta:** eliminar `SessionStats.context_tokens`/`update_context` y que `DiagnosticsPanel` también consuma `context_summary()` (o el dato que ya calcula `ContextWindow`), en vez de mantener un segundo estimador independiente.
+
+**Verificación:** conversación con 2-3 llamadas a `escribir_archivo` de contenido moderado (500+ líneas) y comparar ambos badges.
+
+---
+
+### E2 — `insertar_en_archivo`/`insert_in_file` no está en `_WRITE_TOOL_HINTS` (BAJO)
+
+**Archivo:** `ui/views/dialogs.py`, `_WRITE_TOOL_HINTS` (línea ~213).
+
+**Evidencia (DEMOSTRADO):** la tupla que decide si una tool de escritura recibe el diálogo especializado `_confirm_file_write` (vista de contenido en `QPlainTextEdit` con scroll y encabezado Confirmar escritura) es `(crear_archivo, escribir_archivo, write_file, edit_file, create_file)`. Las tools nuevas de esta pasada, `insertar_en_archivo` e `insert_in_file` (añadidas en `core/workspace.py`/`core/tools.py` en el delta auditado en la sección 2), no aparecen en esa lista. Tampoco `editar_archivo` en su forma en español (solo el alias inglés `edit_file` está cubierto — hay que confirmar si el nombre de tool real es `editar_archivo` o `edit_file`; **NO DETERMINABLE** sin releer el nombre exacto registrado en el schema de `core/tools.py`, no comprobado en esta pasada).
+
+**Impacto:** al confirmar estas tools, el usuario ve el diálogo genérico (JSON de argumentos con altura acotada y scroll — funcional, no es el bug de diálogo que crece más allá de la pantalla que `_confirm_file_write` fue creado para evitar) en vez de la vista limpia de solo-contenido. Es una pérdida de consistencia/UX, no un problema de seguridad: el contenido sigue siendo visible antes de aprobar.
+
+**Solución propuesta:** añadir `insertar_en_archivo`, `insert_in_file` (y `editar_archivo` si ese es el nombre real de la tool) a `_WRITE_TOOL_HINTS`.
+
+---
+
+### Resto de módulos revisados en esta pasada — sin hallazgos
+
+Lectura completa (no solo grep): `ui/controllers/diagnostics_controller.py`, `ui/controllers/model_controller.py`, `ui/widgets.py`, `ui/diagnostics.py`, `ui/views/chat_panel.py`, `ui/views/right_panel.py`, `ui/views/sidebar.py` (completo), parte de `ui/views/dialogs.py` (flujo `confirm_tool`/`_confirm_file_write`).
+
+Código de calidad consistente con el resto del proyecto: manejo de señales con `blockSignals` correcto en los combos, limpieza explícita de widgets con `setParent(None)` + `deleteLater()` antes de reconstruir listas (evita el bug clásico de Qt de widgets fantasma superpuestos), `QFileSystemModel` con su propio watcher (sin polling), filtrado de directorios de sistema coherente con `core/workspace.py::_SKIP_DIRS`.
+
+**Aún sin leer línea por línea:** el resto de `ui/views/dialogs.py` (diálogos de creación/edición de agentes, ~520 líneas totales, solo se ha visto el tramo de confirmación de tools), y el contenido de `tests/*` (solo se confirmó su existencia por nombre de archivo, no su cobertura real).
+
+---
+
+## 8. Cierre de cobertura + verificación del último lote de commits
+
+Desde la sección 7, el proyecto avanzó 25 commits más (H1, H1-bis, H4, H16, H19, F5, F5-bis, F6, F6-bis, M4-M6, limpieza de código muerto vía vulture, escritura atómica). Verificación:
+
+- core/workspace.py: escritura atómica (tmp + replace) implementada en los 4 puntos de escritura (crear_archivo, escribir_archivo, insertar_en_archivo, editar_archivo). Resuelve la observación menor de la sección 4 (no era un hallazgo con severidad propia, pero queda cerrada).
+- core/intent.py (reescrito con simplemma para lematización, 672 líneas): lectura completa línea por línea. Lógica de negación, confirmaciones, continuaciones (H1), anáfora pura (H1-bis) y preguntas informativas (H16) razonablemente sólida. No se ha encontrado un caso DEMOSTRADO de fallo; hay escenarios de negación compuesta (ej. no creo que debas crear X) donde la heurística podría bloquear de más, pero el propio módulo se declara explícitamente NO un mecanismo de seguridad (la aprobación real es la confirmación de UI), así que el impacto de un falso negativo aquí es como mucho una tool no ofrecida (el usuario reformula), no una operación no autorizada. Se deja como POSIBLE, no como hallazgo, por falta de evidencia de que ocurra en la práctica.
+- Suite de tests completa: .venv/bin/python -m pytest -q → 1191 passed, 8 skipped (los 8 skips son legítimos: 4 pruebas de integración que requieren PEREZOSO_REAL_OLLAMA=1, 4 que requieren ruff instalado localmente). Ninguna prueba en rojo.
+- ui/views/dialogs.py: leído completo (557 líneas). Buen manejo de seguridad de UI: escapa HTML en cwd y en argumentos de herramientas MCP antes de insertarlos en QLabel con RichText, para que un modelo no pueda falsificar visualmente el diálogo de confirmación inyectando etiquetas. Confirma el punto exacto de E2: _confirm_generic solo desvía a _confirm_file_write si _is_write_tool(name) es cierto; si no, cae a _confirm_generic_with_scroll (JSON con scroll, funcional pero menos legible) — el código confirma el hallazgo E2 de la sección 7, no lo cambia.
+
+Estado E1/E2 (sección 7): siguen abiertos, no tocados por este lote de commits.
+
+Cobertura de la auditoría: completa. Se ha leído línea por línea (no solo grep) la totalidad de core/*.py, ui/controllers/*.py, ui/views/*.py, ui/widgets.py, ui/diagnostics.py, ui/workers.py (las partes relevantes), y todos los plugins/*/client.py + provider.py. Único resto sin leer línea por línea: contenido de tests/* (1191 tests, confirmados en verde por ejecución real en vez de lectura).

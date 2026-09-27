@@ -536,8 +536,15 @@ class OllamaClient:
     _TEXTUAL_CALL_NAME = re.compile(r'"name"\s*:\s*"([a-zA-Z0-9_]+)"')
     _TEXTUAL_SHELL_CALL = re.compile(r"(?:^|\n)\s*\$\s*([a-zA-Z0-9_]+)(?:\s|$)")
 
-    def __init__(self, host: str = "http://localhost:11434"):
+    def __init__(
+        self,
+        host: str = "http://localhost:11434",
+        keep_alive: str = "30m",
+    ):
         self.host = host.rstrip("/")
+        # Tiempo que Ollama mantiene el modelo cargado tras la
+        # ultima peticion. Configurable via AppConfig.keep_alive.
+        self.keep_alive = keep_alive
         # read=300s: modelos con thinking mode (qwen3, north-mini-code,
         # muse-glimmer) pueden tardar 60-120s en el primer token. Con
         # 60s, httpx cortaba la conexión antes de que el modelo empezara.
@@ -1945,7 +1952,7 @@ class OllamaClient:
             "model": model,
             "messages": messages,
             "stream": True,
-            "keep_alive": "30m",
+            "keep_alive": self.keep_alive,
         }
         if tools:
             payload["tools"] = tools
