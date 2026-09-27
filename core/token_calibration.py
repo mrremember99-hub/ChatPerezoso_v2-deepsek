@@ -20,9 +20,19 @@ import threading
 from dataclasses import dataclass
 
 
-_DEFAULT_CHARS_PER_TOKEN = 3.5
+# H4 (2026-09-27): el default solo aplica si has_calibration() es
+# True (rama no usada en produccion) o si una futura ruta llama
+# directamente. Alineado con _PROSE_CHARS_PER_TOKEN de context_window
+# para coherencia. Medicion empirica con gpt-oss:20b: prosa ES 4.90,
+# prosa EN 5.69, codigo Python 3.40 chars/token. Los 4.2/2.8 de
+# context_window son conservadores por diseno; la calibracion por
+# modelo (EWMA) converge al ratio real tras pocas observaciones.
+_DEFAULT_CHARS_PER_TOKEN = 4.2
 _ALPHA = 0.20
-_MIN_OBSERVATIONS = 3
+# H4: 2 en vez de 3. Con 2 observaciones el ratio ya esta mezclado
+# y es razonablemente estable. Acorta la ventana en que se aplican
+# las constantes conservadoras por defecto.
+_MIN_OBSERVATIONS = 2
 _MIN_RATIO = 2.0
 _MAX_RATIO = 6.0
 
