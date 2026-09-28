@@ -53,6 +53,14 @@ _CACHE: dict[tuple[str, str], tuple[float, "ModelCapabilities"]] = {}
 _CACHE_LOCK = threading.Lock()
 
 
+# D2 (2026-09-28): probe con httpx.Client persistente -> revertido.
+# El cambio rompia 13 archivos de test que monkeypatchean httpx.post
+# directamente para simular /api/show. El beneficio (reusar socket en
+# 2 llamadas no-hot-path) no compensa el coste de mantener los tests.
+# Si en el futuro se migra: actualizar tests a mockear el Client, no
+# la funcion module-level.
+
+
 def _auto_recommendation(caps: ModelCapabilities) -> str:
     """Heurística simple para sugerir un uso al usuario.
 
@@ -254,7 +262,15 @@ def _probe_available(
     url = f"{host.rstrip('/')}/api/show"
     try:
         response = httpx.post(url, json={"name": model}, timeout=timeout)
-    except httpx.HTTPError:
+    except httpx.HTTPError as exc:
+        # D3 (2026-09-28): antes era un return True silencioso. Si
+        # Ollama esta caido, asumiamos "resumen habilitado" sin dejar
+        # rastro. Fallo sigue siendo True (fail-open: no romper el
+        # resumen por un probe fallido), pero ahora queda logueado.
+        logger.warning(
+            "No se pudo comprobar disponibilidad de %s: %s "
+            "(asumiendo disponible)", model, exc,
+        )
         return True
     if response.status_code == 404:
         return False
