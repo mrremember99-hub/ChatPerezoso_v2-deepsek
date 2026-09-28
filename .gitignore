@@ -60,3 +60,4 @@ benchmark_modelos_*.md
 apply_*.py
 scripts/eval_results_*.json
 scripts/eval_tools_*.json
+.vscode/
