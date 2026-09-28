@@ -227,7 +227,18 @@ _CODE_TARGETS: tuple[str, ...] = (
 
 _RULES: dict[str, IntentRule] = {
     "listar_carpeta": IntentRule(
-        verbs=("lista", "listar", "muestra", "mostrar", "contenido", "árbol", "arbol"),
+        # F7 (2026-09-28): "lee la carpeta" no autorizaba nada.
+        # La regla tenia target ("carpeta") pero le faltaba el
+        # verbo: el usuario decia "lee" y ninguna regla matcheaba
+        # (leer_archivo tiene "lee" pero target=archivo). El gate
+        # bloqueaba, el worker devolvia _BLOCKED_MESSAGE al modelo,
+        # y este entraba en bucle pidiendo confirmacion.
+        verbs=(
+            "lista", "listar", "muestra", "mostrar",
+            "contenido", "arbol",
+            "lee", "leer", "ve", "ver",
+            "abre", "abrir", "explora", "explorar",
+        ),
         target_words=("carpeta", "directorio", "workspace", "proyecto"),
     ),
     "leer_archivo": IntentRule(
