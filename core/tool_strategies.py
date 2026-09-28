@@ -18,7 +18,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
-from .intent import ToolIntentGate
+from .intent import ToolIntentGate, is_read_only
 
 
 logger = logging.getLogger(__name__)
@@ -80,13 +80,26 @@ def authorize_and_execute(
     authorization_text: str,
     on_tool,
     last_assistant: str | None = None,
+    auto_approve: bool = False,
 ) -> str:
     """Ejecuta una tool SI el gate la autoriza. Único punto de decisión.
 
     Esta función es la salvaguarda compartida entre estrategias. No se
     duplica: si cambia la política de autorización, cambia aquí y las
     dos estrategias la heredan.
+
+    F7-quater (2026-09-28): si auto_approve=True y la tool es
+    read-only, se salta el gate. Con el piloto automatico activo,
+    pedir al modelo que consulte al usuario por una lectura es
+    friccion sin valor. Las escrituras NUNCA saltan el gate.
     """
+    if auto_approve and is_read_only(name):
+        logger.debug(
+            "Tool read-only %s auto-aprobada por piloto automatico",
+            name,
+        )
+        return on_tool(name, arguments)
+
     if not gate.tool_is_requested(
         name, authorization_text, last_assistant=last_assistant
     ):

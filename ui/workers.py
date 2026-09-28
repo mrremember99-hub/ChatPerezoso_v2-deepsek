@@ -267,6 +267,7 @@ class ChatWorker(QObject):
                 system_prompt=self.system_prompt,
                 context_window=self.context_window,
                 on_metrics=self.metrics_updated.emit,
+                auto_approve=self.auto_approve,
             )
         except OllamaCancelled:
             self.cancelled.emit()

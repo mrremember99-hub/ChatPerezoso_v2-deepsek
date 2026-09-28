@@ -21,6 +21,53 @@ import simplemma
 from dataclasses import dataclass
 
 
+# F7-quater (2026-09-28): conjunto de tools de solo lectura.
+# Con piloto automatico activo (auto_approve=True), el gate NO
+# bloquea estas tools. Razon: leer/cargar/inspeccionar no tiene
+# efectos secundarios; pedir al modelo que "consulte" al usuario
+# por una lectura es friccion sin valor cuando el usuario ya ha
+# autorizado tools sin dialogo.
+#
+# El set es explicito a proposito: NO se usa un prefijo "read_"
+# porque podria haber tools con ese prefijo que no sean puras
+# (ej. "read_then_delete"). La lista es corta y manual. Si anades
+# una tool MCP nueva de solo lectura, anadela aqui.
+READ_ONLY_TOOLS: frozenset[str] = frozenset({
+    # Nucleo.
+    "leer_archivo",
+    "listar_carpeta",
+    "buscar_en_workspace",
+    # Git (solo lectura).
+    "git_status",
+    "git_diff",
+    "git_log",
+    "git_show",
+    # MCP filesystem: solo lectura.
+    "mcp__fs__read_file",
+    "mcp__fs__read_text_file",
+    "mcp__fs__read_media_file",
+    "mcp__fs__read_multiple_files",
+    "mcp__fs__list_directory",
+    "mcp__fs__list_directory_with_sizes",
+    "mcp__fs__directory_tree",
+    "mcp__fs__search_files",
+    "mcp__fs__get_file_info",
+    "mcp__fs__list_allowed_directories",
+})
+
+
+def is_read_only(name: str) -> bool:
+    """True si la tool es de solo lectura (sin efectos secundarios).
+
+    Usado por authorize_and_execute para saltar el gate cuando el
+    piloto automatico esta activo. Las tools de escritura NUNCA
+    se saltan el gate, aunque auto_approve sea True: el gate
+    aplica su propia heuristica de intencion sobre el texto del
+    usuario para esas.
+    """
+    return name in READ_ONLY_TOOLS
+
+
 # Confirmaciones conversacionales. Cuando el modelo pregunta
 # "¿Puedo leer gui.py?" y el usuario responde "si", el texto del
 # usuario no contiene verbos de la tool. Sin esta lista, el gate

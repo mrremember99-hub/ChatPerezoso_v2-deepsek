@@ -147,6 +147,12 @@ class _ChatContext:
     # Diagnostico: se construye solo con DEBUG activo.
     snapshot: Any = None
 
+    # F7-quater (2026-09-28): si True, el gate no bloquea
+    # tools read-only (ver core.intent.READ_ONLY_TOOLS).
+    # Default False por compat: el dataclass es interno pero
+    # los tests lo construyen a mano.
+    auto_approve: bool = False
+
 
 @dataclass
 class _RoundExecution:
@@ -662,6 +668,10 @@ class OllamaClient:
         system_prompt: str = "",
         context_window: ContextWindow | None = None,
         on_metrics: Callable[[dict[str, int]], None] | None = None,
+        # F7-quater (2026-09-28): si True, el gate no bloquea
+        # tools read-only (ver core.intent.READ_ONLY_TOOLS).
+        # Lo pasa el worker desde self.auto_approve.
+        auto_approve: bool = False,
     ) -> str:
         # Fase "una vez por chat": capabilities, strategy, gate,
         # system prompt, filtro de tools. Ver `_prepare_context`.
@@ -676,6 +686,7 @@ class OllamaClient:
             options=options,
             system_prompt=system_prompt,
             context_window=context_window,
+            auto_approve=auto_approve,
         )
 
         # Aliases locales. El cuerpo del bucle los usa tal cual.
@@ -958,6 +969,7 @@ class OllamaClient:
         options: dict[str, Any] | None,
         system_prompt: str,
         context_window: ContextWindow | None,
+        auto_approve: bool = False,
     ) -> _ChatContext:
         """Prepara el contexto de un chat().
 
@@ -1042,6 +1054,7 @@ class OllamaClient:
             on_metrics=on_metrics,
             cancel_event=cancel_event,
             context_window=context_window,
+            auto_approve=auto_approve,
             strategy=strategy,
             history=history,
             authorization_text=authorization_text,
@@ -1162,6 +1175,7 @@ class OllamaClient:
             text = authorize_and_execute(
                 name, args, ctx.gate,
                 ctx.authorization_text, ctx.on_tool,
+                auto_approve=ctx.auto_approve,
                 last_assistant=ctx.last_assistant,
             )
             if text.startswith("OPERACIÓN NO AUTORIZADA"):
