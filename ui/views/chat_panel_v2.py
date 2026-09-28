@@ -11,7 +11,7 @@ from typing import Callable
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QTextEdit
 
-from ..rendering import ChatRenderer, PlainTextRenderer
+from ..rendering import ChatRenderer, PlainTextRendererV2
 from ..theme_v2 import ACCENT, BG_APP, DOCUMENT_STYLESHEET_V2
 from .chat_panel import ChatPanel
 
@@ -44,7 +44,7 @@ def _apply_dark_palette(widget) -> None:
 class ChatPanelV2(ChatPanel):
     def __init__(
         self,
-        renderer_factory: RendererFactory = PlainTextRenderer,
+        renderer_factory: RendererFactory = PlainTextRendererV2,
     ) -> None:
         super().__init__(renderer_factory)
         # 1. Stylesheet del documento Markdown con la paleta v2.

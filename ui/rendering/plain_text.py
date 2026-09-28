@@ -10,14 +10,20 @@ from core.tool_result import ToolResult
 
 from .. import design
 from .markdown_renderer import to_html
+from .palette import V1_PALETTE, RendererPalette
 
 
 
 class PlainTextRenderer:
     _HEADER_PREFIXES = ("**PEREZOSO**", "PEREZOSO:", "PEREZOSO")
 
-    def __init__(self, chat: QTextEdit):
+    def __init__(
+        self,
+        chat: QTextEdit,
+        palette: RendererPalette | None = None,
+    ):
         self.chat = chat
+        self.palette = palette if palette is not None else V1_PALETTE
         # Los textos se acumulan como listas de fragmentos. La
         # concatenación con += sobre str es O(n²) para respuestas
         # largas; append sobre list y "".join() en el punto de consumo
@@ -88,10 +94,9 @@ class PlainTextRenderer:
         fmt.setRightMargin(0)
         return fmt
 
-    @staticmethod
-    def _fresh_char_format() -> QTextCharFormat:
+    def _fresh_char_format(self) -> QTextCharFormat:
         fmt = QTextCharFormat()
-        fmt.setForeground(QColor(design.RESPONSE_TEXT_COLOR))
+        fmt.setForeground(QColor(self.palette.response_text))
         fmt.setBackground(QColor(0, 0, 0, 0))
         return fmt
 
@@ -118,12 +123,12 @@ class PlainTextRenderer:
         cursor.insertHtml(
             f'<table align="right" width="{table_width}" '
             f'cellpadding="0" cellspacing="0">'
-            f'<tr><td bgcolor="{design.USER_MESSAGE_BG_COLOR}" '
+            f'<tr><td bgcolor="{self.palette.user_message_bg}" '
             f'style="padding:{design.USER_MESSAGE_PADDING_PX}px;">'
-            f'<div style="color:#7EE0A8; font-size:8pt; '
+            f'<div style="color:{self.palette.user_label}; font-size:8pt; '
             f'font-weight:700; letter-spacing:1.2px; '
             f'margin-bottom:6px;">TÚ</div>'
-            f'<div style="color:{design.USER_MESSAGE_TEXT_COLOR}; '
+            f'<div style="color:{self.palette.user_message_text}; '
             f'font-size:{design.USER_MESSAGE_FONT_SIZE_PX}px;">'
             f'{safe_text}</div>'
             f'</td></tr></table>'
@@ -244,7 +249,7 @@ class PlainTextRenderer:
                         code_fmt.setFontFamilies(
                             ["Menlo", "Courier New", "monospace"]
                         )
-                        code_fmt.setForeground(QColor(design.TOOL_CARD_TEXT))
+                        code_fmt.setForeground(QColor(self.palette.tool_card_text))
                         cursor.insertText(line, code_fmt)
                     else:
                         cursor.insertText(line)
@@ -296,7 +301,7 @@ class PlainTextRenderer:
         if rendered:
             cursor.insertHtml(
                 f'<div style="margin-left:{design.ASSISTANT_INDENT_PX}px; '
-                f'color:{design.RESPONSE_TEXT_COLOR};">'
+                f'color:{self.palette.response_text};">'
                 f'{rendered}'
                 f'</div>'
             )
@@ -322,7 +327,10 @@ class PlainTextRenderer:
         cursor.setBlockFormat(block)
         cursor.setCharFormat(self._fresh_char_format())
 
-        color = design.NARRATION_ACTIVE_COLOR if active else design.NARRATION_COLOR
+        color = (
+            self.palette.narration_active if active
+            else self.palette.narration
+        )
         safe = html.escape(text)
         cursor.insertHtml(
             f'<span style="color:{color}; '
@@ -348,9 +356,9 @@ class PlainTextRenderer:
         cursor.setCharFormat(self._fresh_char_format())
 
         color = {
-            "ok": design.TOOL_CARD_TEXT,
-            "error": "#E0A0A0",
-            "cancelled": "#E0BC7A",
+            "ok": self.palette.tool_card_text,
+            "error": self.palette.tool_card_error,
+            "cancelled": self.palette.tool_card_cancelled,
         }[result.status]
         icon = {"ok": "●", "error": "▲", "cancelled": "■"}[result.status]
         duration = f" · {result.duration_ms} ms" if result.duration_ms else ""
@@ -363,7 +371,7 @@ class PlainTextRenderer:
             f'font-size:{design.TOOL_CARD_FONT_SIZE_PT}pt;">'
             f'<span style="color:{color};">{icon}</span> '
             f'<b>{html.escape(result.tool_name)}</b>{html.escape(duration)}'
-            f'<br><span style="color:#8FA79A;">{summary}</span>'
+            f'<br><span style="color:{self.palette.tool_card_detail};">{summary}</span>'
             f'</div>'
         )
 
@@ -381,9 +389,9 @@ class PlainTextRenderer:
                 for line in lines
             )
             cursor.insertHtml(
-                f'<div style="border-left:3px solid {design.TOOL_CARD_BORDER}; '
+                f'<div style="border-left:3px solid {self.palette.tool_card_border}; '
                 f'padding:6px 0 6px 10px; '
-                f'color:{design.TOOL_CARD_TEXT}; '
+                f'color:{self.palette.tool_card_text}; '
                 f'font-family:{design.TOOL_CARD_MONO}; '
                 f'font-size:{design.TOOL_CARD_FONT_SIZE_PT}pt;">'
                 f'{detail_lines}'
@@ -431,7 +439,7 @@ class PlainTextRenderer:
         rendered = to_html(text)
         if rendered:
             cursor.insertHtml(
-                f'<div style="color:{design.RESPONSE_TEXT_COLOR};">'
+                f'<div style="color:{self.palette.response_text};">'
                 f'{rendered}'
                 f'</div>'
             )
