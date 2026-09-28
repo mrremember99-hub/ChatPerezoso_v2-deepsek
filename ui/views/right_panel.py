@@ -21,6 +21,7 @@ from PySide6.QtCore import (
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
+    QFrame,
     QHBoxLayout,
     QFileSystemModel,
     QLabel,
@@ -151,24 +152,36 @@ class RightPanel(QWidget):
         layout.addWidget(title)
 
         # -- MCP --
-        mcp_title = QLabel("MCP")
-        mcp_title.setObjectName("SectionTitle")
-        layout.addWidget(mcp_title)
-
-        self.mcp_list = QVBoxLayout()
-        self.mcp_list.setSpacing(6)
-        layout.addLayout(self.mcp_list)
+        self._build_mcp_section(layout)
 
         # -- COLA DE PROMPTS --
         layout.addSpacing(14)
+        self._build_queue_section(layout)
+
+        # -- ARCHIVOS --
+        layout.addSpacing(14)
+        self._build_files_section(layout)
+
+    # -- secciones (extraidas para permitir subclases v2 con cards) ---------
+
+    def _build_mcp_section(self, parent_layout: QVBoxLayout) -> None:
+        mcp_title = QLabel("MCP")
+        mcp_title.setObjectName("SectionTitle")
+        parent_layout.addWidget(mcp_title)
+
+        self.mcp_list = QVBoxLayout()
+        self.mcp_list.setSpacing(6)
+        parent_layout.addLayout(self.mcp_list)
+
+    def _build_queue_section(self, parent_layout: QVBoxLayout) -> None:
         self.queue_title = QLabel("COLA DE PROMPTS")
         self.queue_title.setObjectName("SectionTitle")
         self.queue_title.setVisible(False)
-        layout.addWidget(self.queue_title)
+        parent_layout.addWidget(self.queue_title)
 
         self.queue_list = QVBoxLayout()
         self.queue_list.setSpacing(2)
-        layout.addLayout(self.queue_list)
+        parent_layout.addLayout(self.queue_list)
 
         # Barra de pausa: aparece cuando un prompt falla y la
         # cola queda detenida esperando decisión del usuario.
@@ -201,13 +214,12 @@ class RightPanel(QWidget):
         paused_lay.addWidget(self.queue_cancel_btn)
         paused_lay.addStretch(1)
         self.queue_paused_bar.setVisible(False)
-        layout.addWidget(self.queue_paused_bar)
+        parent_layout.addWidget(self.queue_paused_bar)
 
-        # -- ARCHIVOS --
-        layout.addSpacing(14)
+    def _build_files_section(self, parent_layout: QVBoxLayout) -> None:
         self.workspace_title = QLabel("ARCHIVOS")
         self.workspace_title.setObjectName("SectionTitle")
-        layout.addWidget(self.workspace_title)
+        parent_layout.addWidget(self.workspace_title)
 
         self.workspace_tree = QTreeView()
         self.workspace_tree.setObjectName("WorkspaceTree")
@@ -231,7 +243,7 @@ class RightPanel(QWidget):
         self.workspace_tree.customContextMenuRequested.connect(
             self._on_tree_context_menu
         )
-        layout.addWidget(self.workspace_tree, 1)
+        parent_layout.addWidget(self.workspace_tree, 1)
 
     # -- API pública ---------------------------------------------------------
     def set_mcp_servers(

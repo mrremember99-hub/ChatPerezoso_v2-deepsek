@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 
 from .. import theme_v2
 from .chat_panel_v2 import ChatPanelV2 as ChatPanel
-from .right_panel import RightPanel
+from .right_panel_v2 import RightPanelV2 as RightPanel
 from .sidebar_v2 import SidebarV2 as Sidebar
 
 
