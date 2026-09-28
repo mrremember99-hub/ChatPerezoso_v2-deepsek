@@ -328,8 +328,9 @@ class ChatController(QObject):
         if ws is None:
             return ""
         try:
+            from core.ast_index import get_index
             from core.workspace_snapshot import snapshot_workspace
-            return snapshot_workspace(ws)
+            return snapshot_workspace(ws, index=get_index(ws.root))
         except Exception:
             return ""
 

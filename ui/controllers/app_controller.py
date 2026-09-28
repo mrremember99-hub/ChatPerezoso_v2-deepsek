@@ -10,6 +10,7 @@ from PySide6.QtCore import QObject, QThread, Slot
 from PySide6.QtWidgets import QApplication, QFileDialog
 
 from core.agents import Agent, AgentStore
+from core.ast_index import get_index
 from core.shutdown import (
     SHUTDOWN_BUDGET_SECONDS,
     remaining,
@@ -121,7 +122,10 @@ class AppController(QObject):
             num_predict=self.config.num_predict,
         )
         self.workspace = Workspace(self.config.workspace_path())
-        self.tools = ToolRegistry(self.workspace)
+        self.tools = ToolRegistry(
+            self.workspace,
+            ast_index=get_index(self.workspace.root),
+        )
         self.mcp = MCPToolBridge(self.tools)
 
         # Descubrimiento dinámico de plugins vía entry points.
@@ -584,7 +588,10 @@ class AppController(QObject):
             return
         try:
             self.workspace = Workspace(selected)
-            self.tools = ToolRegistry(self.workspace)
+            self.tools = ToolRegistry(
+                self.workspace,
+                ast_index=get_index(self.workspace.root),
+            )
             new_bridge = MCPToolBridge(self.tools)
 
             self.mcp_ctrl.rebind(new_bridge, self.workspace)

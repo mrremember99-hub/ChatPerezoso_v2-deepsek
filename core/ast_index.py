@@ -24,6 +24,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -53,6 +54,44 @@ class Symbol:
 
 
 # ── Paths ────────────────────────────────────────────────────────────
+
+
+# Cache module-level: un AstIndex por root de workspace, compartido
+# por ToolRegistry, snapshot y (en el futuro) el RAG. Evita abrir la
+# misma conexion SQLite dos veces y garantiza que el indice que
+# consulta buscar_simbolo es el mismo que refresca el snapshot.
+_INDEX_CACHE: dict[Path, "AstIndex"] = {}
+_INDEX_CACHE_LOCK = threading.Lock()
+
+
+def get_index(root: Path) -> "AstIndex":
+    """Devuelve el AstIndex compartido para ``root`` (uno por proceso).
+
+    Cache module-level thread-safe. La primera llamada abre la
+    conexion SQLite; las siguientes devuelven la misma instancia.
+    """
+    resolved = Path(root).resolve()
+    with _INDEX_CACHE_LOCK:
+        idx = _INDEX_CACHE.get(resolved)
+        if idx is None:
+            idx = AstIndex(resolved)
+            _INDEX_CACHE[resolved] = idx
+        return idx
+
+
+def close_all() -> None:
+    """Cierra todas las conexiones cacheadas y vacia el cache.
+
+    Util en shutdown de la app y en tests que quieran partir de cero.
+    Es idempotente: llamarla dos veces no falla.
+    """
+    with _INDEX_CACHE_LOCK:
+        for idx in _INDEX_CACHE.values():
+            try:
+                idx.close()
+            except Exception:
+                pass
+        _INDEX_CACHE.clear()
 
 
 def cache_path_for(root: Path) -> Path:

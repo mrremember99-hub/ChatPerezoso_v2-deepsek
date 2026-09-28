@@ -357,3 +357,59 @@ def test_interface_lines_vacio_si_no_hay_simbolos(tmp_path):
     with AstIndex(ws, db_path=db) as idx:
         idx.refresh()
         assert idx.interface_lines("comment.py") == []
+
+
+# ── cache global get_index / close_all (B2c) ───────────────────────
+
+
+def test_get_index_devuelve_la_misma_instancia(tmp_path):
+    from core.ast_index import get_index, close_all
+
+    close_all()
+    (tmp_path / "x.py").write_text("def f(): pass\n", encoding="utf-8")
+    a = get_index(tmp_path)
+    b = get_index(tmp_path)
+    assert a is b
+    close_all()
+
+
+def test_get_index_distintos_roots_distintas_instancias(tmp_path):
+    from core.ast_index import get_index, close_all
+
+    close_all()
+    d1 = tmp_path / "uno"; d1.mkdir()
+    d2 = tmp_path / "dos"; d2.mkdir()
+    a = get_index(d1)
+    b = get_index(d2)
+    assert a is not b
+    close_all()
+
+
+def test_get_index_resuelve_symlinks_y_paths_relativos(tmp_path, monkeypatch):
+    from core.ast_index import get_index, close_all
+
+    close_all()
+    d = tmp_path / "ws"; d.mkdir()
+    a = get_index(d)
+    # Mismo path pero con "." o ".." resueltos.
+    b = get_index(d / "." / "sub" / "..")
+    assert a is b
+    close_all()
+
+
+def test_close_all_vacia_el_cache(tmp_path):
+    from core.ast_index import get_index, close_all
+
+    close_all()
+    d = tmp_path / "ws"; d.mkdir()
+    a = get_index(d)
+    close_all()
+    b = get_index(d)
+    assert a is not b
+    close_all()
+
+
+def test_close_all_idempotente(tmp_path):
+    from core.ast_index import close_all
+    close_all()
+    close_all()  # no debe fallar
