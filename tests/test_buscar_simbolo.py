@@ -208,3 +208,17 @@ def test_buscar_detecta_cambio_en_disco(tmp_path):
     out = reg.call("buscar_simbolo", {"query": "nuevo"})
     assert "nuevo" in out
     assert "util.py" in out
+
+
+# ── Fixture: aislar ~/.cache/chatperezoso durante los tests ────────
+
+
+@pytest.fixture(autouse=True)
+def _isolate_ast_cache(tmp_path, monkeypatch):
+    """Redirige CACHE_DIR de ast_index a tmp_path.
+
+    Sin esto, get_index(root) y AstIndex(root) sin db_path escriben
+    en ~/.cache/chatperezoso/ y dejan basura tras cada corrida.
+    """
+    from core import ast_index as ai
+    monkeypatch.setattr(ai, "CACHE_DIR", tmp_path / "ast_cache")

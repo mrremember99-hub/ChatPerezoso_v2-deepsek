@@ -413,3 +413,17 @@ def test_close_all_idempotente(tmp_path):
     from core.ast_index import close_all
     close_all()
     close_all()  # no debe fallar
+
+
+# ── Fixture: aislar ~/.cache/chatperezoso durante los tests ────────
+
+
+@pytest.fixture(autouse=True)
+def _isolate_ast_cache(tmp_path, monkeypatch):
+    """Redirige CACHE_DIR de ast_index a tmp_path.
+
+    Sin esto, get_index(root) y AstIndex(root) sin db_path escriben
+    en ~/.cache/chatperezoso/ y dejan basura tras cada corrida.
+    """
+    from core import ast_index as ai
+    monkeypatch.setattr(ai, "CACHE_DIR", tmp_path / "ast_cache")

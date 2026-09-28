@@ -63,25 +63,26 @@ def _import_runner():
     return importlib.import_module("scripts.eval.runner")
 
 
-def _probe_caps(model: str):
-    """Best-effort: lee capacidades si el modulo esta disponible.
+def _probe_caps(model: str, host: str | None = None):
+    """Best-effort: lee capacidades via core.model_capabilities.
 
-    Bloque D refactoriza model_capabilities a async + AsyncClient. Aqui
-    solo leemos campos; si el modulo no expone una API compatible,
-    devolvemos None y los campos quedan a default.
+    La API real es ``get_capabilities(host, model, *, timeout=...)``.
+    Si no hay host o el modulo no esta disponible, devolvemos None
+    y los campos de capacidades quedan a default.
     """
+    if not host:
+        return None
     try:
         from core import model_capabilities as mc  # type: ignore
     except Exception:
         return None
-    for fname in ("get_capabilities", "probe", "get_model_capabilities", "detect"):
-        fn = getattr(mc, fname, None)
-        if callable(fn):
-            try:
-                return fn(model)
-            except Exception:
-                return None
-    return None
+    fn = getattr(mc, "get_capabilities", None)
+    if not callable(fn):
+        return None
+    try:
+        return fn(host, model)
+    except Exception:
+        return None
 
 
 @dataclass
@@ -178,7 +179,13 @@ def run_eval(model: str, *, host: str, timeout: float) -> dict:
     }
 
 
-def build_entry(model_info: dict, notes: dict, eval_result: dict | None) -> ModelEntry:
+def build_entry(
+    model_info: dict,
+    notes: dict,
+    eval_result: dict | None,
+    *,
+    host: str | None = None,
+) -> ModelEntry:
     name = model_info.get("name") or model_info.get("model") or "?"
     details = model_info.get("details") or {}
 
@@ -201,7 +208,7 @@ def build_entry(model_info: dict, notes: dict, eval_result: dict | None) -> Mode
     else:
         e.verdict = VERDICT_UNKNOWN
 
-    caps = _probe_caps(name)
+    caps = _probe_caps(name, host=host)
     if caps is not None:
         e.native_tools = bool(getattr(caps, "native_tools", False))
         e.thinking = bool(getattr(caps, "thinking", False))
@@ -315,7 +322,7 @@ def cmd_run(
                 write_raw(name, {"model": name, **eval_result})
             except Exception as exc:
                 print(f"    eval fallo: {exc}", file=sys.stderr)
-        entry = build_entry(m, notes, eval_result)
+        entry = build_entry(m, notes, eval_result, host=host)
         prev[entry.name] = entry
         print(f"    veredicto: {entry.effective_verdict}")
 
