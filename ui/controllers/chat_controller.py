@@ -594,6 +594,22 @@ class ChatController(QObject):
         # tools se ejecutaron en el turno inmediatamente anterior.
         trace = self._build_tool_trace()
         effective_system_prompt = self._last_system_prompt or ""
+        # Piloto automatico: si esta activo, se inyecta un
+        # bloque al final del system prompt para que el
+        # modelo sepa que NO debe pedir confirmacion en
+        # texto. El cliente ya auto-aprueba las tools via
+        # worker.auto_approve; sin este bloque, el modelo
+        # pregunta en prosa y se pierden turnos.
+        #
+        # getattr defensivo: los tests del controller usan
+        # __new__ + asignacion manual de atributos, sin
+        # llamar a __init__. Tratar _auto_approve ausente
+        # como OFF no cambia el comportamiento.
+        from ..autopilot_prompt import inject as _inject_autopilot
+        effective_system_prompt = _inject_autopilot(
+            effective_system_prompt,
+            getattr(self, "_auto_approve", False),
+        )
         # Inyectar resumen de sesion ANTES del system base si
         # existe. Formato: [RESUMEN DE LA SESION]\n...\n\n<base>
         summary = getattr(self, "_session_summary", None)
