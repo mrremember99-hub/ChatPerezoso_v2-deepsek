@@ -1,0 +1,292 @@
+{
+  "variant": "reduced",
+  "timestamp": "2026-09-27T17:26:31",
+  "model": "qwen3:1.7b",
+  "cases": [
+    {
+      "id": "leer_explicito",
+      "prompt": "Lee el archivo main.py",
+      "expected_tool": "leer_archivo",
+      "tool_calls": [
+        {
+          "name": "leer_archivo",
+          "arguments": {
+            "path": "main.py",
+            "numbered": true
+          },
+          "result_head": "1| def foo():\n2|     print('hola')\n3| \n4| if __name__ == '__main__':\n5|     foo()\n",
+          "errored": false
+        }
+      ],
+      "emitted": [
+        "leer_archivo"
+      ],
+      "first_call": "leer_archivo",
+      "correct": true,
+      "latency_s": 7.985,
+      "response_len": 156,
+      "error": null
+    },
+    {
+      "id": "listar_explicito",
+      "prompt": "Lista el contenido de la carpeta raiz",
+      "expected_tool": "listar_carpeta",
+      "tool_calls": [
+        {
+          "name": "listar_carpeta",
+          "arguments": {
+            "path": ".",
+            "recursive": false
+          },
+          "result_head": "[FILE] main.py\n[FILE] viejo.txt",
+          "errored": false
+        }
+      ],
+      "emitted": [
+        "listar_carpeta"
+      ],
+      "first_call": "listar_carpeta",
+      "correct": true,
+      "latency_s": 10.735,
+      "response_len": 127,
+      "error": null
+    },
+    {
+      "id": "crear_archivo",
+      "prompt": "Crea un archivo llamado nota.txt con el contenido 'hola mundo'",
+      "expected_tool": "crear_archivo",
+      "tool_calls": [
+        {
+          "name": "crear_archivo",
+          "arguments": {
+            "path": "nota.txt",
+            "content": "hola mundo"
+          },
+          "result_head": "Archivo creado: nota.txt\n\nContenido verificado en disco:\n---\nhola mundo\n---",
+          "errored": false
+        }
+      ],
+      "emitted": [
+        "crear_archivo"
+      ],
+      "first_call": "crear_archivo",
+      "correct": true,
+      "latency_s": 4.595,
+      "response_len": 50,
+      "error": null
+    },
+    {
+      "id": "editar_archivo",
+      "prompt": "En main.py, reemplaza la palabra 'foo' por 'bar'. Usa la herramienta de edicion.",
+      "expected_tool": "editar_archivo",
+      "tool_calls": [
+        {
+          "name": "editar_archivo",
+          "arguments": {
+            "path": "main.py",
+            "old_string": "foo",
+            "new_string": "bar",
+            "replace_all": true
+          },
+          "result_head": "Archivo editado: main.py (2 reemplazo(s))\n\nContenido verificado en disco:\n---\ndef bar():\n    print('hola')\n\nif __name__ ",
+          "errored": false
+        }
+      ],
+      "emitted": [
+        "editar_archivo"
+      ],
+      "first_call": "editar_archivo",
+      "correct": true,
+      "latency_s": 5.901,
+      "response_len": 215,
+      "error": null
+    },
+    {
+      "id": "borrar_archivo",
+      "prompt": "Borra el archivo viejo.txt",
+      "expected_tool": "borrar_archivo",
+      "tool_calls": [
+        {
+          "name": "borrar_archivo",
+          "arguments": {
+            "path": "viejo.txt"
+          },
+          "result_head": "Archivo borrado: viejo.txt",
+          "errored": false
+        }
+      ],
+      "emitted": [
+        "borrar_archivo"
+      ],
+      "first_call": "borrar_archivo",
+      "correct": true,
+      "latency_s": 4.437,
+      "response_len": 82,
+      "error": null
+    },
+    {
+      "id": "pregunta_general",
+      "prompt": "Explica en 2 frases que es un bucle for en Python.",
+      "expected_tool": null,
+      "tool_calls": [],
+      "emitted": [],
+      "first_call": null,
+      "correct": true,
+      "latency_s": 3.275,
+      "response_len": 214,
+      "error": null
+    },
+    {
+      "id": "pregunta_informativa",
+      "prompt": "Como leo un archivo en Python?",
+      "expected_tool": null,
+      "tool_calls": [],
+      "emitted": [],
+      "first_call": null,
+      "correct": true,
+      "latency_s": 13.49,
+      "response_len": 1943,
+      "error": null
+    },
+    {
+      "id": "charla",
+      "prompt": "Hola, buenos dias.",
+      "expected_tool": null,
+      "tool_calls": [],
+      "emitted": [],
+      "first_call": null,
+      "correct": true,
+      "latency_s": 2.556,
+      "response_len": 40,
+      "error": null
+    },
+    {
+      "id": "pregunta_conceptual",
+      "prompt": "Cual es la diferencia entre lista y tupla?",
+      "expected_tool": null,
+      "tool_calls": [],
+      "emitted": [],
+      "first_call": null,
+      "correct": true,
+      "latency_s": 23.518,
+      "response_len": 2371,
+      "error": null
+    },
+    {
+      "id": "leer_y_editar",
+      "prompt": "Lee main.py y luego editalo para anadir un comentario al inicio.",
+      "expected_tool": "leer_archivo",
+      "tool_calls": [
+        {
+          "name": "leer_archivo",
+          "arguments": {
+            "path": "main.py",
+            "numbered": true
+          },
+          "result_head": "1| def bar():\n2|     print('hola')\n3| \n4| if __name__ == '__main__':\n5|     bar()\n",
+          "errored": false
+        },
+        {
+          "name": "editar_archivo",
+          "arguments": {
+            "old_string": "# First line of main.py",
+            "new_string": "# Comment added by user",
+            "replace_all": true,
+            "path": "main.py"
+          },
+          "result_head": "ERROR: old_string no encontrado en main.py. Copia el fragmento exacto (incluye indentacion y saltos de linea).",
+          "errored": true
+        },
+        {
+          "name": "editar_archivo",
+          "arguments": {
+            "new_string": "# Comment added by user",
+            "old_string": "def bar()",
+            "path": "main.py",
+            "replace_all": true
+          },
+          "result_head": "Archivo editado: main.py (1 reemplazo(s))\n\nContenido verificado en disco:\n---\n# Comment added by user:\n    print('hola')",
+          "errored": false
+        }
+      ],
+      "emitted": [
+        "leer_archivo",
+        "editar_archivo",
+        "editar_archivo"
+      ],
+      "first_call": "leer_archivo",
+      "correct": true,
+      "latency_s": 18.158,
+      "response_len": 163,
+      "error": null
+    },
+    {
+      "id": "editar_sin_leer",
+      "prompt": "En main.py reemplaza 'foo' por 'bar' directamente. No hace falta que lo leas antes.",
+      "expected_tool": "editar_archivo",
+      "tool_calls": [
+        {
+          "name": "editar_archivo",
+          "arguments": {
+            "replace_all": true,
+            "path": "main.py",
+            "old_string": "foo",
+            "new_string": "bar"
+          },
+          "result_head": "ERROR: old_string no encontrado en main.py. Copia el fragmento exacto (incluye indentacion y saltos de linea).",
+          "errored": true
+        }
+      ],
+      "emitted": [
+        "editar_archivo"
+      ],
+      "first_call": "editar_archivo",
+      "correct": true,
+      "latency_s": 12.954,
+      "response_len": 205,
+      "error": null
+    },
+    {
+      "id": "editar_con_flujo_natural",
+      "prompt": "Necesito cambiar el nombre de la funcion foo() a bar() en main.py. Hazlo con la herramienta adecuada.",
+      "expected_tool": "editar_archivo",
+      "tool_calls": [],
+      "emitted": [],
+      "first_call": null,
+      "correct": false,
+      "latency_s": 5.249,
+      "response_len": 327,
+      "error": null
+    },
+    {
+      "id": "crear_y_verificar",
+      "prompt": "Crea un archivo config.py con la constante DEBUG = True. Cuando lo tengas, verifica que existe.",
+      "expected_tool": "crear_archivo",
+      "tool_calls": [
+        {
+          "name": "crear_archivo",
+          "arguments": {
+            "path": "config.py",
+            "content": "DEBUG = True"
+          },
+          "result_head": "Archivo creado: config.py\n\nContenido verificado en disco:\n---\nDEBUG = True\n---",
+          "errored": false
+        }
+      ],
+      "emitted": [
+        "crear_archivo"
+      ],
+      "first_call": "crear_archivo",
+      "correct": true,
+      "latency_s": 11.529,
+      "response_len": 102,
+      "error": null
+    }
+  ],
+  "summary": {
+    "total": 13,
+    "correct": 12,
+    "failures": 1,
+    "accuracy": 0.923
+  }
+}
