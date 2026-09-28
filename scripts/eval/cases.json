@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "description": "Casos de evaluacion end-to-end para ChatPerezoso. Congelados: cambios aqui invalidan comparativas historicas.",
+  "version": 2,
+  "description": "Casos de evaluacion end-to-end para ChatPerezoso. Congelados: cambios aqui invalidan comparativas historicas. v2 (2026-09-28): removidos los casos tool_calling del baseline; van en la suite tools (eval_tools.py), que si pasa tools al modelo.",
   "cases": [
     {
       "id": "cod_crear_funcion",
@@ -40,47 +40,6 @@
       "prompt": "Que devuelve `list(range(3, 0, -1))` en Python? Solo el resultado.",
       "min_response_chars": 5
     },
-
-    {
-      "id": "tool_leer_archivo",
-      "category": "tool_calling",
-      "system_prompt": "Eres un asistente con acceso a herramientas. Cuando el usuario pide leer un archivo, llama a la herramienta leer_archivo. No inventes el contenido.",
-      "prompt": "Lee el archivo config.json y dime cuantos campos tiene.",
-      "min_response_chars": 5,
-      "expects_tool_call": true
-    },
-    {
-      "id": "tool_buscar",
-      "category": "tool_calling",
-      "system_prompt": "Eres un asistente con acceso a herramientas. Cuando el usuario pide buscar algo, llama a la herramienta correspondiente.",
-      "prompt": "Busca donde esta definida la clase ChatController en el proyecto.",
-      "min_response_chars": 5,
-      "expects_tool_call": true
-    },
-    {
-      "id": "tool_git_status",
-      "category": "tool_calling",
-      "system_prompt": "Eres un asistente con acceso a herramientas de git.",
-      "prompt": "Muestrame el estado actual del repositorio git.",
-      "min_response_chars": 5,
-      "expects_tool_call": true
-    },
-    {
-      "id": "tool_listar",
-      "category": "tool_calling",
-      "system_prompt": "Eres un asistente con acceso a herramientas. Cuando el usuario pide listar, llama a la herramienta correspondiente.",
-      "prompt": "Lista el contenido de la carpeta core.",
-      "min_response_chars": 5,
-      "expects_tool_call": true
-    },
-    {
-      "id": "tool_no_necesaria",
-      "category": "tool_calling",
-      "system_prompt": "Eres un asistente con acceso a herramientas. Usa herramientas solo cuando sea necesario; para preguntas generales responde directamente.",
-      "prompt": "Que es Python?",
-      "min_response_chars": 80
-    },
-
     {
       "id": "conv_explicar_concepto",
       "category": "conversacional",

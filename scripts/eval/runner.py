@@ -23,7 +23,8 @@ import httpx
 
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-CASES_FILE = Path(__file__).resolve().parent / "cases.json"
+EVAL_DIR = Path(__file__).resolve().parent
+CASES_FILE = EVAL_DIR / "cases.json"
 DEFAULT_HOST = "http://localhost:11434"
 DEFAULT_MODEL = "gpt-oss:20b"
 DEFAULT_TIMEOUT = 180.0
