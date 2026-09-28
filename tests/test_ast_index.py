@@ -274,3 +274,86 @@ def test_index_ignora_archivos_directorios_skip(tmp_path):
         idx.refresh()
         assert idx.search("oculto") == []
         assert len(idx.search("visible")) == 1
+
+
+# ── bases en signature ─────────────────────────────────────────────
+
+
+def test_class_signature_incluye_bases():
+    src = "class Foo(Bar, Baz):\n    pass\n"
+    syms = extract_symbols_from_source(src, "x.py")
+    assert syms[0].signature == "class Foo(Bar, Baz)"
+
+
+def test_class_signature_sin_bases():
+    src = "class Foo:\n    pass\n"
+    syms = extract_symbols_from_source(src, "x.py")
+    assert syms[0].signature == "class Foo"
+
+
+def test_class_signature_base_cualificada():
+    src = "class Foo(pkg.Bar):\n    pass\n"
+    syms = extract_symbols_from_source(src, "x.py")
+    assert syms[0].signature == "class Foo(pkg.Bar)"
+
+
+# ── interface_lines ────────────────────────────────────────────────
+
+
+def test_interface_lines_formato_basico(tmp_path):
+    ws = _mk_ws(tmp_path)
+    db = tmp_path / "idx.sqlite"
+    with AstIndex(ws, db_path=db) as idx:
+        idx.refresh()
+        lines = idx.interface_lines("core/models.py")
+    text = "\n".join(lines)
+    assert "  class User" in text
+    # _format_args elimina self/cls de la firma (igual que el legacy).
+    assert "    def save()" in text
+    assert "  class Admin" in text
+    assert "  def get_user(uid)" in text
+
+
+def test_interface_lines_excluye_privados(tmp_path):
+    ws = tmp_path
+    (ws / "x.py").write_text(
+        "class A:\n"
+        "    def _hidden(self): ...\n"
+        "    def public(self): ...\n",
+        encoding="utf-8",
+    )
+    db = tmp_path / "idx.sqlite"
+    with AstIndex(ws, db_path=db) as idx:
+        idx.refresh()
+        text = "\n".join(idx.interface_lines("x.py"))
+        assert "def public" in text
+        assert "_hidden" not in text
+
+
+def test_interface_lines_archivo_no_indexado(tmp_path):
+    ws = _mk_ws(tmp_path)
+    db = tmp_path / "idx.sqlite"
+    with AstIndex(ws, db_path=db) as idx:
+        idx.refresh()
+        assert idx.interface_lines("no_existe.py") == []
+
+
+def test_interface_lines_trunca(tmp_path):
+    ws = tmp_path
+    src = "".join(f"def f{i}(): pass\n" for i in range(50))
+    (ws / "many.py").write_text(src, encoding="utf-8")
+    db = tmp_path / "idx.sqlite"
+    with AstIndex(ws, db_path=db) as idx:
+        idx.refresh()
+        lines = idx.interface_lines("many.py")
+        assert lines[-1] == "  ..."
+        assert len(lines) == 31  # 30 + marcador
+
+
+def test_interface_lines_vacio_si_no_hay_simbolos(tmp_path):
+    ws = tmp_path
+    (ws / "comment.py").write_text("# solo comentario\n", encoding="utf-8")
+    db = tmp_path / "idx.sqlite"
+    with AstIndex(ws, db_path=db) as idx:
+        idx.refresh()
+        assert idx.interface_lines("comment.py") == []

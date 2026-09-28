@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from .ast_index import AstIndex
 from .workspace import Workspace, _SKIP_DIRS
 
 
@@ -31,6 +32,7 @@ def snapshot_workspace(
     workspace: Workspace,
     *,
     max_files: int = _MAX_FILES,
+    index: AstIndex | None = None,
 ) -> str:
     """Devuelve un listado breve del workspace.
 
@@ -81,8 +83,14 @@ def snapshot_workspace(
 
         # .py: extraer interfaz publica con ast. Si funciona,
         # saltamos el preview de texto: la interfaz es mas util.
+        # Si se pasa un AstIndex, se consulta la cache SQLite en
+        # vez de re-parsear el archivo. El indice debe estar ya
+        # refrescado (refresh() antes de llamar al snapshot).
         if p.suffix.lower() == ".py" and size < 200_000:
-            iface = _extract_python_interface(p)
+            if index is not None:
+                iface = index.interface_lines(str(rel))
+            else:
+                iface = _extract_python_interface(p)
             if iface:
                 lines.append(info)
                 lines.extend(iface)

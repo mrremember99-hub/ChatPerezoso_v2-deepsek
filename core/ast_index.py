@@ -84,6 +84,15 @@ def _format_args(args: ast.arguments) -> str:
     return ", ".join(parts)
 
 
+def _name_of(node: ast.AST) -> str:
+    """Nombre legible de un nodo (Name/Attribute)."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return f"{_name_of(node.value)}.{node.attr}"
+    return "?"
+
+
 def _first_docstring(node: ast.AST) -> str:
     """Primera linea no vacia del docstring, truncada."""
     body = getattr(node, "body", None)
@@ -115,12 +124,17 @@ def _extract_from_body(
         if isinstance(node, ast.ClassDef):
             doc = _first_docstring(node)
             name = f"{prefix}{node.name}" if prefix else node.name
+            bases = ", ".join(_name_of(b) for b in node.bases)
+            sig = (
+                f"class {node.name}({bases})" if bases
+                else f"class {node.name}"
+            )
             yield Symbol(
                 name=name,
                 kind=KIND_CLASS,
                 file=rel_path,
                 line=node.lineno,
-                signature=f"class {node.name}",
+                signature=sig,
                 docstring=doc,
             )
             yield from _extract_from_body(
@@ -357,6 +371,61 @@ class AstIndex:
             )
             for row in cur.execute(sql, params)
         ]
+
+    def interface_lines(
+        self,
+        rel_path: str,
+        *,
+        max_symbols: int = 30,
+    ) -> list[str]:
+        """Lineas de interfaz publica de un archivo .py, al estilo del
+        snapshot legacy.
+
+        Formato:
+        - 2 espacios para clase/funcion/constante top-level
+        - 4 espacios para metodos directos de clase top-level
+        - No desciende a clases anidadas (compat con legacy)
+        - Trunca a max_symbols con "  ..." al final
+
+        Devuelve [] si el archivo no esta indexado o no tiene simbolos
+        publicos. En ese caso el llamante cae al preview de texto.
+        """
+        cur = self._con.cursor()
+        rows = list(
+            cur.execute(
+                "SELECT name, kind, line, signature FROM symbols "
+                "WHERE file = ? ORDER BY line",
+                (rel_path,),
+            )
+        )
+        out: list[str] = []
+        for row in rows:
+            if len(out) >= max_symbols:
+                out.append("  ...")
+                break
+            name = row["name"]
+            kind = row["kind"]
+            sig = row["signature"]
+            dots = name.count(".")
+            if kind == KIND_METHOD:
+                if dots != 1:
+                    # Metodo de clase anidada: el legacy no baja ahi.
+                    continue
+                method = name.split(".", 1)[1]
+                if method.startswith("_") and not method.startswith("__"):
+                    continue
+                out.append(f"    {sig}")
+            elif kind == KIND_CLASS:
+                if dots != 0:
+                    continue
+                out.append(f"  {sig}")
+            elif kind == KIND_FUNCTION:
+                if dots != 0:
+                    continue
+                out.append(f"  {sig}")
+            elif kind == KIND_CONSTANT:
+                out.append(f"  {name} = ...")
+        return out
 
     def stats(self) -> dict:
         """Contadores para diagnostico."""
