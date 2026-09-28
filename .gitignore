@@ -61,3 +61,5 @@ apply_*.py
 scripts/eval_results_*.json
 scripts/eval_tools_*.json
 .vscode/
+models_catalog.json
+scripts/eval/results/catalog/

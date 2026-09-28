@@ -1,0 +1,11 @@
+{
+  "_comentario": "Notas y overrides manuales del catalogo. Editar a mano.",
+  "_esquema": {
+    "<modelo>": {
+      "role": "chat | codigo | thinking | vision | ...",
+      "notes": "texto libre",
+      "verdict_override": "ok | warning | bad (opcional)",
+      "recommendation": "texto corto para la sidebar (opcional)"
+    }
+  }
+}
