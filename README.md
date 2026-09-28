@@ -1,4 +1,3 @@
-cat > README.md << 'BLOQUE1'
 # ChatPerezoso v2
 
 Cliente de escritorio para Ollama. PySide6 + httpx + asyncio. Núcleo pequeño, plugins todo lo demás. Proyecto personal, en español, un solo desarrollador.
@@ -6,18 +5,20 @@ Cliente de escritorio para Ollama. PySide6 + httpx + asyncio. Núcleo pequeño, 
 ## Arranque rápido
 
 ### macOS / Linux
+
+```bash
 git clone <repo> chatperezoso
 cd chatperezoso
 ./setup.sh --mcp
 source .venv/bin/activate
 python bootstrap.py
-
-text
+```
 
 ### Desarrollo
-pip install -e ".[dev]"
 
-text
+```bash
+pip install -e ".[dev]"
+```
 
 El extra `dev` instala `ruff`, `mypy`, `pytest`, `pytest-qt`, `pytest-timeout`.
 
@@ -68,7 +69,7 @@ chatperezoso/
 ├── tests/ # 1056 passed, 4 skipped
 └── docs/ # Auditorías y notas técnicas
 
-text
+```
 
 **Principio**: el núcleo debe ser pequeño, funcional y robusto. Todo lo que no sea imprescindible para hablar con Ollama y usar herramientas pertenece a plugins.
 BLOQUE1
@@ -115,7 +116,7 @@ escribir_archivo(gui.py) -> ok
 ejecutar_comando(python -m py_compile gui.py) -> ok
 Estas acciones YA se ejecutaron en el turno anterior. No las repitas sin motivo.
 
-text
+```
 
 **Implementación**: `_build_tool_trace()` + `_format_tool_arg_hint()` en `ChatController`. Los argumentos se guardan en `ToolResult.metadata["arguments"]` desde `workers.py`. El historial persistente queda limpio (solo `role`/`content`).
 
@@ -252,7 +253,7 @@ pytest -q # 1056 passed, 4 skipped
 pytest -q tests/test_X.py # Un archivo
 pytest -x # Parar al primer fallo
 
-text
+```
 
 ## Pendientes
 
