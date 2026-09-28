@@ -76,7 +76,13 @@ class _WorkspaceFilterProxy(QSortFilterProxyModel):
 
 
 class QueueRow(QLabel):
-    """Fila del todo list: símbolo + N/M. Cambia de color por estado."""
+    """Fila del todo list: símbolo + N/M. Cambia de color por estado.
+
+    Feature editar cola (2026-09-28): clic derecho abre menú con
+    Editar / Eliminar / Subir / Bajar. Solo aplicable a filas
+    pendientes (ni enviadas ni corriendo). El panel llama a
+    set_editable(False) en las filas ya procesadas.
+    """
 
     _SYMBOLS = {
         "pending": "▢",
@@ -86,12 +92,21 @@ class QueueRow(QLabel):
         "cancelled": "⊘",
     }
 
-    def __init__(self, index: int, total: int) -> None:
+    # idx 1-based (mismo formato que queue_item_status_changed).
+    edit_requested = Signal(int, str)    # idx, nuevo_texto
+    remove_requested = Signal(int)       # idx
+    move_requested = Signal(int, int)    # idx, delta (-1 subir / +1 bajar)
+
+    def __init__(self, index: int, total: int, text: str = "") -> None:
         super().__init__()
         self.setObjectName("QueueRow")
         self._index = index
         self._total = total
+        self._text = text
         self._status = "pending"
+        self._editable = True
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_context_menu)
         self._render()
 
     def set_status(self, status: str) -> None:
@@ -103,10 +118,65 @@ class QueueRow(QLabel):
         self.style().unpolish(self)
         self.style().polish(self)
 
+    def set_editable(self, editable: bool) -> None:
+        """Marca la fila como editable o no (ya enviada/corriendo)."""
+        self._editable = bool(editable)
+
+    def set_index(self, index: int, total: int | None = None) -> None:
+        """Renumera la fila tras un move/remove."""
+        self._index = index
+        if total is not None:
+            self._total = total
+        self._render()
+
+    def set_text(self, text: str) -> None:
+        """Cambia el texto del prompt (tras Editar)."""
+        self._text = text
+
     def _render(self) -> None:
         symbol = self._SYMBOLS[self._status]
         self.setText(f"  {symbol}   {self._index}/{self._total}")
         self.setProperty("status", self._status)
+
+    def _on_context_menu(self, pos) -> None:
+        menu = QMenu(self)
+        act_edit = menu.addAction("Editar prompt")
+        act_remove = menu.addAction("Eliminar de la cola")
+        menu.addSeparator()
+        act_up = menu.addAction("Subir")
+        act_down = menu.addAction("Bajar")
+
+        # Subir/Bajar segun posicion dentro del bloque pendiente.
+        act_up.setEnabled(self._editable and self._index > 1)
+        act_down.setEnabled(self._editable)
+
+        if not self._editable:
+            act_edit.setEnabled(False)
+            act_remove.setEnabled(False)
+            act_up.setEnabled(False)
+            act_down.setEnabled(False)
+
+        act_edit.triggered.connect(self._on_edit)
+        act_remove.triggered.connect(self._on_remove)
+        act_up.triggered.connect(lambda: self.move_requested.emit(self._index, -1))
+        act_down.triggered.connect(lambda: self.move_requested.emit(self._index, +1))
+
+        menu.exec(self.mapToGlobal(pos))
+
+    def _on_edit(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        new_text, ok = QInputDialog.getText(
+            self, "Editar prompt", "Texto nuevo:", text=self._text
+        )
+        if not ok:
+            return
+        new_text = new_text.strip()
+        if not new_text or new_text == self._text:
+            return
+        self.edit_requested.emit(self._index, new_text)
+
+    def _on_remove(self) -> None:
+        self.remove_requested.emit(self._index)
 
 
 class RightPanel(QWidget):
@@ -114,6 +184,10 @@ class RightPanel(QWidget):
     queue_retry_requested = Signal()
     queue_skip_requested = Signal()
     queue_cancel_requested = Signal()
+    # Feature editar cola (2026-09-28): idx 1-based, delta -1/+1.
+    queue_edit_requested = Signal(int, str)
+    queue_remove_requested = Signal(int)
+    queue_move_requested = Signal(int, int)
     mcp_toggle_requested = Signal(str, bool)
 
     def __init__(self) -> None:
@@ -425,15 +499,82 @@ class RightPanel(QWidget):
 
         self.queue_title.setVisible(True)
         total = len(prompts)
-        for i in range(total):
-            row = QueueRow(i + 1, total)
+        for i, prompt in enumerate(prompts):
+            row = QueueRow(i + 1, total, text=prompt)
+            row.edit_requested.connect(self._forward_edit)
+            row.remove_requested.connect(self._forward_remove)
+            row.move_requested.connect(self._forward_move)
             self.queue_list.addWidget(row)
             self._queue_rows.append(row)
 
     def update_queue_item(self, index: int, status: str) -> None:
-        """Actualiza la fila `index` (1-based) al nuevo estado."""
+        """Actualiza la fila `index` (1-based) al nuevo estado.
+
+        Feature editar cola (2026-09-28): cuando llega "running",
+        se recalcula la editabilidad: filas anteriores y la actual
+        no son editables (ya enviadas); las posteriores si.
+        """
         if 1 <= index <= len(self._queue_rows):
             self._queue_rows[index - 1].set_status(status)
+        if status == "running":
+            for i, row in enumerate(self._queue_rows):
+                row.set_editable((i + 1) > index)
+
+    # -- editar cola (2026-09-28) -------------------------------------------
+
+    def _forward_edit(self, idx: int, new_text: str) -> None:
+        self.queue_edit_requested.emit(idx, new_text)
+
+    def _forward_remove(self, idx: int) -> None:
+        self.queue_remove_requested.emit(idx)
+
+    def _forward_move(self, idx: int, delta: int) -> None:
+        self.queue_move_requested.emit(idx, delta)
+
+    def queue_row_edit(self, idx: int, new_text: str) -> None:
+        """Actualiza el texto de la fila `idx` (1-based)."""
+        if 1 <= idx <= len(self._queue_rows):
+            self._queue_rows[idx - 1].set_text(new_text)
+
+    def queue_row_remove(self, idx: int) -> None:
+        """Elimina la fila `idx` (1-based) y renumera las posteriores.
+
+        NO borra la fila de la cola del controller; ese es trabajo del
+        ChatController. Aqui solo se actualiza la vista.
+        """
+        if not (1 <= idx <= len(self._queue_rows)):
+            return
+        row = self._queue_rows.pop(idx - 1)
+        self.queue_list.removeWidget(row)
+        row.setParent(None)
+        row.deleteLater()
+        total = len(self._queue_rows)
+        for i, r in enumerate(self._queue_rows):
+            r.set_index(i + 1, total)
+
+    def queue_row_move(self, idx: int, delta: int) -> None:
+        """Mueve la fila `idx` (1-based) delta posiciones (-1 subir, +1 bajar).
+
+        Solo dentro del bloque pendiente: las filas ya enviadas
+        (idx por debajo del current) tienen set_editable(False) y no
+        emiten move_requested, pero se valida igual aqui.
+        """
+        if delta not in (-1, +1):
+            return
+        target = idx + delta
+        if not (1 <= idx <= len(self._queue_rows)):
+            return
+        if not (1 <= target <= len(self._queue_rows)):
+            return
+        rows = self._queue_rows
+        rows[idx - 1], rows[target - 1] = rows[target - 1], rows[idx - 1]
+        # Reordenar en el layout.
+        for r in rows:
+            self.queue_list.removeWidget(r)
+        for r in rows:
+            self.queue_list.addWidget(r)
+        for i, r in enumerate(rows):
+            r.set_index(i + 1, len(rows))
 
     # -- helpers -------------------------------------------------------------
     def _ensure_mcp_button(self, server_id: str) -> None:
