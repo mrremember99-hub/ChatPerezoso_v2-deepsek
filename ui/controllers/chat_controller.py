@@ -426,6 +426,78 @@ class ChatController(QObject):
             self._last_system_prompt,
         )
 
+    # -- editar cola (2026-09-28) -------------------------------------------
+    #
+    # Semantica V1: solo prompts PENDIENTES (idx > current) pueden
+    # editarse, eliminarse o moverse. Filas ya enviadas o la actual
+    # rechazan la operacion. Si hay plan de orquestacion (_phase_plan
+    # != None) tambien se rechaza: los prompts se regeneran con
+    # snapshot fresco en cada _advance_queue, editar el cuerpo es
+    # incoherente con ese flujo.
+
+    def _pending_slot(self, idx: int) -> int | None:
+        """Traduce idx 1-based del listado al indice en _queue.
+
+        Devuelve None si la operacion no es valida:
+          - no hay cola activa
+          - hay plan de orquestacion
+          - idx <= current (ya enviado o corriendo)
+          - idx fuera de rango
+        """
+        if not self._queue_active:
+            return None
+        if self._phase_plan is not None:
+            return None
+        current = self._queue_total - len(self._queue) + 1
+        if idx <= current:
+            return None
+        slot = idx - current - 1
+        if not (0 <= slot < len(self._queue)):
+            return None
+        return slot
+
+    def queue_edit_item(self, idx: int, new_text: str) -> bool:
+        """Edita el prompt pendiente en posicion `idx` (1-based)."""
+        slot = self._pending_slot(idx)
+        if slot is None:
+            return False
+        new_text = new_text.strip()
+        if not new_text:
+            return False
+        self._queue[slot] = new_text
+        self.status.emit(f"Prompt {idx} editado")
+        return True
+
+    def queue_remove_item(self, idx: int) -> bool:
+        """Elimina el prompt pendiente en posicion `idx` (1-based)."""
+        slot = self._pending_slot(idx)
+        if slot is None:
+            return False
+        self._queue.pop(slot)
+        self._queue_total -= 1
+        self.status.emit(f"Prompt {idx} eliminado de la cola")
+        return True
+
+    def queue_move_item(self, idx: int, delta: int) -> bool:
+        """Mueve el prompt pendiente en `idx` delta posiciones (-1/+1).
+
+        Restringido al bloque pendiente: origen y destino deben ser
+        ambos pendientes (idx > current y target > current).
+        """
+        if delta not in (-1, +1):
+            return False
+        slot = self._pending_slot(idx)
+        if slot is None:
+            return False
+        target_slot = self._pending_slot(idx + delta)
+        if target_slot is None:
+            return False
+        self._queue[slot], self._queue[target_slot] = (
+            self._queue[target_slot], self._queue[slot]
+        )
+        self.status.emit(f"Prompt {idx} movido")
+        return True
+
     def resume_queue_retry(self) -> bool:
         """Reintenta el prompt que falló. Solo válido si pausada.
 

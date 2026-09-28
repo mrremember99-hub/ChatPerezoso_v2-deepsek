@@ -273,6 +273,18 @@ class AppController(QObject):
         self.view.right_panel.queue_cancel_requested.connect(
             self.chat_ctrl.cancel_paused_queue
         )
+        # Feature editar cola (2026-09-28): las señales del panel
+        # mutan el controller; si el controller acepta, el panel
+        # actualiza la vista.
+        self.view.right_panel.queue_edit_requested.connect(
+            self._on_queue_edit
+        )
+        self.view.right_panel.queue_remove_requested.connect(
+            self._on_queue_remove
+        )
+        self.view.right_panel.queue_move_requested.connect(
+            self._on_queue_move
+        )
         self.chat_ctrl.metrics_updated.connect(self.diagnostics_ctrl.set_metrics)
         # Badge de contexto (Hueco 4): se actualiza cada vez que
         # cambia la conversacion. Barato (una property leida).
@@ -664,6 +676,23 @@ class AppController(QObject):
             self.view.set_status("Ya hay un turno o una cola en curso")
 
     @Slot(int, int)
+    # -- editar cola (2026-09-28) ------------------------------------------
+
+    def _on_queue_edit(self, idx: int, new_text: str) -> None:
+        """Aplica la edicion al controller y refleja en el panel."""
+        if self.chat_ctrl.queue_edit_item(idx, new_text):
+            self.view.right_panel.queue_row_edit(idx, new_text)
+
+    def _on_queue_remove(self, idx: int) -> None:
+        """Elimina el prompt en controller + panel."""
+        if self.chat_ctrl.queue_remove_item(idx):
+            self.view.right_panel.queue_row_remove(idx)
+
+    def _on_queue_move(self, idx: int, delta: int) -> None:
+        """Mueve el prompt en controller + panel."""
+        if self.chat_ctrl.queue_move_item(idx, delta):
+            self.view.right_panel.queue_row_move(idx, delta)
+
     def _on_queue_progress(self, current: int, total: int) -> None:
         self.view.set_status(f"Cola: {current}/{total}")
 
