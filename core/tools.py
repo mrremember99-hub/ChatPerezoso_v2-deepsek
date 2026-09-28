@@ -242,8 +242,27 @@ _RULES: dict[str, IntentRule] = {
         target_words=("carpeta", "directorio", "workspace", "proyecto"),
     ),
     "leer_archivo": IntentRule(
-        verbs=("lee", "leer", "abre", "abrir"),
-        target_words=("archivo", "fichero", "workspace"),
+        # F7-bis (2026-09-28): "analiza la aplicacion" bloqueaba
+        # leer_archivo porque "analiza" no era verbo de la regla
+        # (mismo patron que F7 en listar_carpeta). El gate devolvia
+        # _BLOCKED_MESSAGE al modelo, que pedia confirmacion en
+        # texto. Con autopilot ON se convierte en friccion inutil:
+        # leer es no destructivo, no hay nada que confirmar.
+        # Se anaden verbos naturales de "leer para procesar" y
+        # targets del tipo "el conjunto" (aplicacion, proyecto).
+        # requires_target=True sigue evitando "analiza esto" suelto.
+        verbs=(
+            "lee", "leer", "abre", "abrir",
+            "analiza", "analizar",
+            "revisa", "revisar",
+            "examina", "examinar",
+            "estudia", "estudiar",
+        ),
+        target_words=(
+            "archivo", "fichero", "workspace",
+            "aplicación", "aplicacion", "app",
+            "proyecto", "código", "codigo",
+        ),
         accepts_filename=True,
         is_read_prerequisite=True,
     ),

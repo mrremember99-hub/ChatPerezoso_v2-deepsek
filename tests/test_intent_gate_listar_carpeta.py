@@ -34,3 +34,21 @@ def test_lee_la_carpeta_no_autoriza_leer_archivo(tmp_path):
 def test_leer_sin_target_no_autoriza(tmp_path):
     g = _gate(tmp_path)
     assert not g.tool_is_requested("listar_carpeta", "lee")
+
+# F7-bis (2026-09-28): "analiza la aplicacion" debe autorizar leer_archivo.
+def test_analiza_la_aplicacion_autoriza_leer_archivo(tmp_path):
+    g = _gate(tmp_path)
+    assert g.tool_is_requested(
+        "leer_archivo", "analiza la aplicación"
+    )
+
+
+def test_revisa_el_proyecto_autoriza_leer_archivo(tmp_path):
+    g = _gate(tmp_path)
+    assert g.tool_is_requested("leer_archivo", "revisa el proyecto")
+
+
+def test_analiza_esto_no_autoriza_leer_archivo(tmp_path):
+    """Sin target de workspace, no debe autorizar."""
+    g = _gate(tmp_path)
+    assert not g.tool_is_requested("leer_archivo", "analiza esto")
