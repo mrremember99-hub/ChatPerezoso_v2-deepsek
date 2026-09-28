@@ -64,9 +64,12 @@ class RoundResult:
 _BLOCKED_MESSAGE = (
     "OPERACIÓN NO AUTORIZADA: la última petición del usuario no "
     "autoriza esta herramienta sobre el workspace. NO vuelvas a "
-    "intentar la misma herramienta. En su lugar, responde al usuario "
-    "explicando qué necesitas para proceder (por ejemplo, pídele que "
-    "confirme el nombre del archivo o reformule la petición)."
+    "intentar la misma herramienta. Prueba con OTRA herramienta "
+    "que encaje mejor con la petición (por ejemplo: para 'analiza X' "
+    "usa leer_archivo; para 'busca X' usa buscar_en_workspace; para "
+    "'lista el proyecto' usa listar_carpeta). Si ninguna encaja, "
+    "explica al usuario SIN pedirle confirmación por qué no puedes "
+    "proceder, y sugiérele cómo reformular la petición."
 )
 
 

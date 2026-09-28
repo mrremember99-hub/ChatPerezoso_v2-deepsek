@@ -63,6 +63,46 @@ def _reject_shrink_marker(content: str) -> None:
 _NUMBERED_LINE_PATTERN = re.compile(r"^\s*\d+\|", re.MULTILINE)
 
 
+# F3-ter (2026-09-28): umbrales para detectar truncados accidentales.
+# El modelo trunco gui.py a un placeholder del tipo
+# "# ... rest of the original gui.py content unchanged ..." que NO
+# coincide con _SHRINK_MARKER_PATTERN. En lugar de perseguir todas
+# las variantes del lenguaje natural, heuristica por tamano: un
+# archivo >= 1000 bytes (~50 lineas) reducido a < 50% es casi seguro
+# un truncado.
+_MIN_SIZE_FOR_SHRINK_CHECK = 1000
+_SHRINK_RATIO_THRESHOLD = 0.5
+
+
+def _reject_drastic_shrink(file: Path, new_size: int) -> None:
+    """Rechaza escribir si reduce drasticamente un archivo existente.
+
+    F3-ter (2026-09-28): defensa por tamano en write_file. Si el
+    archivo original era grande y el nuevo contenido es menos de la
+    mitad, se rechaza con mensaje accionable. Excepcion: archivos
+    nuevos o pequenos (< _MIN_SIZE) no aplican.
+    """
+    if not file.is_file():
+        return
+    try:
+        old_size = file.stat().st_size
+    except OSError:
+        return
+    if old_size < _MIN_SIZE_FOR_SHRINK_CHECK:
+        return
+    if new_size >= old_size * _SHRINK_RATIO_THRESHOLD:
+        return
+    pct = (100 * new_size // old_size) if old_size else 0
+    raise WorkspaceError(
+        f"Reduccion drastica bloqueada: {file.name} pasa de "
+        f"{old_size} a {new_size} bytes ({pct}% del original). "
+        "Si el cambio es quirurgico (editar unas lineas), usa "
+        "editar_archivo con old_string/new_string. Si es una "
+        "reescritura completa, incluye TODO el contenido nuevo "
+        "sin placeholders tipo '... resto del archivo sin cambios ...'."
+    )
+
+
 def _reject_numbered_output(content: str) -> None:
     """Rechaza contenido que parece ser el output numerado de
     leer_archivo(numbered=True) copiado tal cual.
@@ -422,6 +462,9 @@ class Workspace:
         data = content.encode("utf-8")
         if len(data) > MAX_WRITE_BYTES:
             raise WorkspaceError("Contenido demasiado grande.")
+        # F3-ter (2026-09-28): detectar truncado accidental antes de
+        # sobrescribir. Ver _reject_drastic_shrink.
+        _reject_drastic_shrink(file, len(data))
         file.parent.mkdir(parents=True, exist_ok=True)
         self._atomic_write_bytes(file, data)
         return f"Archivo escrito: {file.relative_to(self.root)}"
