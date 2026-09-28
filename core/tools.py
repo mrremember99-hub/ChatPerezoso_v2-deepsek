@@ -176,6 +176,38 @@ _SPECS: tuple[dict[str, Any], ...] = (
         },
         "required": ["path"],
     },
+    {
+        "name": "buscar_simbolo",
+        "description": (
+            "Busca clases, funciones, metodos y constantes de Python "
+            "por nombre (substring, case-insensitive) en el workspace. "
+            "Usala para localizar donde esta definido algo antes de "
+            "leer el archivo entero. NO lee contenido: solo devuelve "
+            "ubicaciones (archivo:linea) y firmas."
+        ),
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": (
+                    "Substring del nombre a buscar. Ejemplos: "
+                    "'User' (matchea User, UserModel, get_user), "
+                    "'get_' (matchea get_user, get_config)."
+                ),
+            },
+            "kind": {
+                "type": "string",
+                "description": (
+                    "Opcional: filtra por tipo. Valores: "
+                    "class | function | method | constant."
+                ),
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximo de resultados (default 30).",
+            },
+        },
+        "required": ["query"],
+    },
 )
 
 
@@ -300,13 +332,38 @@ _RULES: dict[str, IntentRule] = {
         target_words=("archivo", "fichero"),
         accepts_filename=True,
     ),
+    # B3 (2026-09-28): buscar_simbolo es read-only. La regla exige
+    # target (default requires_target=True) para no autorizarse con
+    # "busca la capital de Francia".
+    "buscar_simbolo": IntentRule(
+        verbs=(
+            "busca", "buscar", "localiza", "localizar",
+            "encuentra", "encontrar",
+            "dónde", "donde", "dónde está", "donde esta",
+            "definida", "definido",
+        ),
+        target_words=(
+            "símbolo", "simbolo", "función", "funcion",
+            "clase", "método", "metodo", "constante",
+            "definición", "definicion", "variable",
+        ),
+    ),
 }
 
 
 class ToolRegistry:
-    def __init__(self, workspace: Workspace):
+    def __init__(
+        self,
+        workspace: Workspace,
+        *,
+        ast_index: Any = None,
+    ):
         self.workspace = workspace
         self._spec_by_name = {spec["name"]: spec for spec in _SPECS}
+        # B3: cache lazy del AstIndex. Si el llamante lo inyecta,
+        # se respeta (tests). Si no, se crea en la primera llamada
+        # a buscar_simbolo.
+        self._ast_index = ast_index
 
     def definitions(self) -> list[dict[str, Any]]:
         return [
@@ -458,7 +515,49 @@ class ToolRegistry:
             )
         if name == "borrar_archivo":
             return self.workspace.delete_file(arguments["path"])
+        if name == "buscar_simbolo":
+            return self._buscar_simbolo(arguments)
         return f"ERROR: herramienta desconocida: {name}"
+
+    def _get_ast_index(self):
+        """Devuelve (y cachea) el AstIndex del workspace."""
+        if self._ast_index is None:
+            from .ast_index import AstIndex
+            self._ast_index = AstIndex(self.workspace.root)
+        return self._ast_index
+
+    def _buscar_simbolo(self, arguments: dict[str, Any]) -> str:
+        """Implementacion de la tool buscar_simbolo."""
+        query = arguments["query"]
+        kind = arguments.get("kind")
+        limit = int(arguments.get("limit") or 30)
+        valid_kinds = {"class", "function", "method", "constant"}
+        if kind and kind not in valid_kinds:
+            return (
+                f"ERROR: kind debe ser uno de: "
+                f"{', '.join(sorted(valid_kinds))}"
+            )
+        if limit <= 0:
+            limit = 30
+        idx = self._get_ast_index()
+        # refresh() es barato: solo re-parsea lo que cambio por mtime.
+        idx.refresh()
+        symbols = idx.search(query, kind=kind, limit=limit)
+        if not symbols:
+            return f"Sin resultados para {query!r}."
+        lines = [
+            f"Encontrados {len(symbols)} simbolo(s) para {query!r}:"
+        ]
+        for s in symbols:
+            doc = f"  # {s.docstring}" if s.docstring else ""
+            # s.name lleva "Clase.metodo" para metodos y el nombre
+            # plano para top-level. s.signature lleva solo "def foo()".
+            # Mostramos ambos: la clase importa para desambiguar.
+            lines.append(
+                f"  {s.file}:{s.line}  [{s.kind}]  {s.name}  "
+                f"{s.signature}{doc}"
+            )
+        return "\n".join(lines)
 
     def _with_verification(self, result: str, path: str) -> str:
         """Añade al resultado el contenido real leído del disco tras crear o

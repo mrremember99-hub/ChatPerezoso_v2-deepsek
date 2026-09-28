@@ -8,7 +8,7 @@ def test_registry_definitions(tmp_path):
     assert names == {
         "listar_carpeta", "leer_archivo", "crear_archivo", "crear_carpeta",
         "escribir_archivo", "editar_archivo", "insertar_en_archivo",
-        "borrar_archivo",
+        "borrar_archivo", "buscar_simbolo",
     }
 
 
