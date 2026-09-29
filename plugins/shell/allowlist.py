@@ -95,6 +95,8 @@ def is_command_allowed(command: str) -> bool:
         return _python_allowed(args)
     if program == "find":
         return _find_allowed(args)
+    if program == "tail":
+        return _tail_allowed(args)
     return True
 
 
@@ -137,5 +139,23 @@ def _python_allowed(args: list[str]) -> bool:
 def _find_allowed(args: list[str]) -> bool:
     for a in args:
         if a in _FIND_DANGEROUS_FLAGS:
+            return False
+    return True
+
+
+# tail sin -f/-F/--follow es read-only y termina solo. Con -f se queda
+# colgado hasta el timeout (30 s), lo que consume el turno sin aportar
+# nada util: el modelo no ve salida nueva, solo el ERROR de timeout.
+_TAIL_FOLLOW_FLAGS: frozenset[str] = frozenset({
+    "-f", "-F", "--follow", "--follow=name", "--follow=descriptor",
+})
+
+
+def _tail_allowed(args: list[str]) -> bool:
+    for a in args:
+        if a in _TAIL_FOLLOW_FLAGS:
+            return False
+        # Soporta --follow=NOMBRE (variante con argumento).
+        if a.startswith("--follow="):
             return False
     return True

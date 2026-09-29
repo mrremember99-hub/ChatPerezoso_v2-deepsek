@@ -63,8 +63,11 @@ garantía si se añade un nuevo cliente.
 - **Timeout duro**: `DEFAULT_TIMEOUT_SECONDS` por defecto,
   `MAX_TIMEOUT_SECONDS` como tope máximo. El proceso se mata si
   excede.
-- **Entorno mínimo**: el subproceso hereda un `env` reducido (sin
-  variables sensibles tipo tokens).
+- **Entorno reducido**: el subproceso hereda solo
+  `PATH`, `HOME`, `LANG`, `LC_ALL`, `TMPDIR`, `SHELL`, `USER`, más
+  `GIT_TERMINAL_PROMPT=0`, `PAGER=cat` y `GIT_PAGER=cat`. Nada de
+  tokens, SSH_AUTH_SOCK, AWS_*, etc. No es un sandbox, pero reduce
+  la superficie respecto al entorno completo del usuario.
 - **`analyze_risk`**: heurística de patrones peligrosos (`rm -rf`,
   `dd`, `chmod 777` en rutas críticas) que se muestra al usuario en
   el diálogo de confirmación.
@@ -109,15 +112,17 @@ comandos de lectura y de test, seguir preguntando por lo demas".
 ### Que NO se auto-aprueba (aunque el par de flags este ON)
 
 - **Mutantes del filesystem**: `rm`, `mv`, `cp`, `chmod`, `chown`,
-  `sed -i`, `sort -o`, `uniq` (con dos args), `tee`.
+  `sed`, `tee`, y en general cualquier programa que no figure en
+  `ALLOWED_PROGRAMS` (incluye `sort` y `uniq`, incluso en uso
+  read-only, por prudencia: tienen flags que escriben ficheros).
 - **Red**: `curl`, `wget`.
 - **Instalacion**: `pip install`, `npm install`.
 - **Escalada**: `sudo`, `su`, `doas`.
 - **git mutante**: `push`, `reset`, `checkout`, `clean`, `commit`,
   `rebase`, `merge`, `stash drop/pop/apply`.
-- **Metacaracteres**: `;`, `|`, `&&`, `>`, `<`, backticks, `$( )`,
-  `${ }` — los rechaza `_validate_command` y por tanto tambien la
-  allowlist.
+- **Metacaracteres**: `&&`, `||`, `;`, `|`, `>`, `<`, backticks,
+  `$(`, `${` — los rechaza `_validate_command` y por tanto tambien
+  la allowlist.
 - **Bypass conocidos**: `env VAR=x ls` (lanza otro comando),
   `python -c ...` (codigo inline), `find . -exec ...` (ejecuta
   comandos), `sort -o out.txt` (escribe fichero).

@@ -21,7 +21,6 @@ from plugins.shell.allowlist import is_command_allowed  # noqa: E402
     "ls -la",
     "cat README.md",
     "head -20 file.txt",
-    "tail -f log.txt",
     "wc -l file.py",
     "grep -n foo bar.py",
     "grep -rn TODO .",
@@ -155,6 +154,28 @@ def test_git_mutantes_denegados(cmd):
 ])
 def test_python_peligrosos_denegados(cmd):
     assert is_command_allowed(cmd) is False, f"NO deberia permitirse: {cmd}"
+
+
+# -- tail -f cuelga hasta timeout --------------------------------------
+
+@pytest.mark.parametrize("cmd", [
+    "tail -f log.txt",
+    "tail -F log.txt",
+    "tail --follow log.txt",
+    "tail --follow=name log.txt",
+    "tail -n 20 -f app.log",
+])
+def test_tail_follow_denegado(cmd):
+    assert is_command_allowed(cmd) is False, f"NO deberia permitirse: {cmd}"
+
+
+@pytest.mark.parametrize("cmd", [
+    "tail log.txt",
+    "tail -n 20 log.txt",
+    "tail -c 100 file.bin",
+])
+def test_tail_sin_follow_permitido(cmd):
+    assert is_command_allowed(cmd) is True, f"deberia permitirse: {cmd}"
 
 
 # -- find flags peligrosos ----------------------------------------------
