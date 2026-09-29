@@ -19,6 +19,14 @@ from pathlib import Path
 
 import parso
 
+# Limite defensivo: parso construye un arbol completo con
+# error_recovery=True y no tiene tope propio. Un archivo de varios MB
+# (generado, minificado o malicioso) bloquea el hilo del verificador
+# durante decenas de segundos. Coincide con MAX_WRITE_BYTES de
+# core/workspace.py para mantener una sola cota de "archivo razonable".
+MAX_VERIFY_BYTES = 1_000_000
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Estructura de issues
 # ─────────────────────────────────────────────────────────────────────
@@ -283,6 +291,18 @@ def _iter_syntax_errors(source: str) -> list[SyntaxIssue]:
 
 
 def check_python_syntax(path: Path) -> list[SyntaxIssue]:
+    # Limite de tamano ANTES de leer/parsear: parso no tiene tope
+    # propio y un archivo grande bloquea el hilo.
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        return [SyntaxIssue(0, 0, f"no se pudo leer: {exc}")]
+    if size > MAX_VERIFY_BYTES:
+        return [SyntaxIssue(
+            0, 0,
+            f"archivo demasiado grande para verificar "
+            f"({size} bytes > {MAX_VERIFY_BYTES})",
+        )]
     try:
         source = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
