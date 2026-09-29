@@ -19,7 +19,6 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 
-
 # H4 (2026-09-27): el default solo aplica si has_calibration() es
 # True (rama no usada en produccion) o si una futura ruta llama
 # directamente. Alineado con _PROSE_CHARS_PER_TOKEN de context_window

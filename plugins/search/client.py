@@ -150,7 +150,7 @@ class SearchClient:
         case_sensitive: bool = False,
         max_matches: int = 50,
         extensions: list[str] | None = None,
-        cancel_event: threading.Event | None = None,
+        cancel_event: _threading.Event | None = None,
     ) -> str:
         if not query:
             raise SearchError("La consulta de búsqueda no puede estar vacía.")
@@ -266,7 +266,7 @@ class SearchClient:
         limit: int,
         *,
         is_re2: bool,
-        cancel_event: threading.Event | None = None,
+        cancel_event: _threading.Event | None = None,
     ) -> list[tuple[int, str]]:
         hits: list[tuple[int, str]] = []
         try:

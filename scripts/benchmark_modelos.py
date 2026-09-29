@@ -17,7 +17,6 @@ from pathlib import Path
 
 import httpx
 
-
 HOST = "http://localhost:11434"
 TIMEOUT = 180.0  # segundos por peticion
 UNLOAD_AFTER = True  # liberar VRAM tras cada modelo
@@ -244,7 +243,7 @@ def main() -> int:
             model_results.append({**res, "name": spec["name"]})
             status = "OK" if res["ok"] else "FALLO"
             if res["error"]:
-                status = f"ERR"
+                status = "ERR"
             print(
                 f"    {spec['name']:20s} {status:6s} "
                 f"{res['elapsed']:6.2f}s"

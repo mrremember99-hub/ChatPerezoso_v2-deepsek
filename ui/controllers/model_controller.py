@@ -4,6 +4,7 @@ from PySide6.QtCore import QObject, QThread, Signal
 
 from core.ollama import OllamaClient
 from core.shutdown import remaining
+
 from ..workers import ModelWorker
 
 

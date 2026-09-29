@@ -21,7 +21,6 @@ from plugins.git import GitProvider
 from plugins.search import SearchProvider
 from plugins.shell import ShellProvider
 
-
 CASES = [
     (
         "¿Qué es un closure en programación?",

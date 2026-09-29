@@ -13,7 +13,6 @@ from .markdown_renderer import to_html
 from .palette import V1_PALETTE, RendererPalette
 
 
-
 class PlainTextRenderer:
     _HEADER_PREFIXES = ("**PEREZOSO**", "PEREZOSO:", "PEREZOSO")
 

@@ -15,7 +15,7 @@ ocultar la card entera. Se overridea set_queue_list.
 """
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
 

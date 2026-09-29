@@ -19,7 +19,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-
 # Coincide con múltiples formatos:
 #   "FASE 3"
 #   "## Fase 3 — Título"

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
 SUMMARY_HEADER = "[RESUMEN DE LA SESIÓN]"
 SUMMARY_MAX_CHARS = 2000
 SUMMARY_SECTIONS: tuple[str, ...] = (

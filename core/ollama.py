@@ -1774,7 +1774,8 @@ class OllamaClient:
         if not content or "```" in content:
             return None
         lines = [
-            l.rstrip() for l in content.strip().splitlines() if l.strip()
+            ln.rstrip() for ln in content.strip().splitlines()
+            if ln.strip()
         ]
         if not lines or len(lines) > 3:
             return None
@@ -1932,7 +1933,12 @@ class OllamaClient:
                 cancel_event=cancel_event,
             )
         except _CancelledByEvent:
-            raise OllamaCancelled("Operación cancelada por el usuario.")
+            # Traducimos a excepcion de dominio. La causa original
+            # (_CancelledByEvent) es ruido para el llamante; usamos
+            # from None para no ensuciar el traceback.
+            raise OllamaCancelled(
+                "Operación cancelada por el usuario."
+            ) from None
         except TimeoutError as exc:
             raise OllamaError(
                 "Ollama dejó de responder durante demasiado tiempo."
@@ -1956,7 +1962,9 @@ class OllamaClient:
                 )
             raise OllamaError(detail) from exc
         except asyncio.CancelledError:
-            raise OllamaCancelled("Operación cancelada por el usuario.")
+            raise OllamaCancelled(
+                "Operación cancelada por el usuario."
+            ) from None
 
     async def iter_ollama_events(
         self,

@@ -5,7 +5,6 @@ import json
 import logging
 import re
 
-
 logger = logging.getLogger(__name__)
 
 _TOOL_CALL_XML = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL | re.IGNORECASE)

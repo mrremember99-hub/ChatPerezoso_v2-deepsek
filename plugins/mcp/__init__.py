@@ -8,4 +8,4 @@ from ._base import MCPError, MCPServerConfig
 from .bridge import MCPToolBridge
 from .client import MCPClient
 
-__all__ = ["MCPError", "MCPServerConfig", "MCPClient", "MCPToolBridge"]
+__all__ = ["MCPClient", "MCPError", "MCPServerConfig", "MCPToolBridge"]

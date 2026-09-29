@@ -19,7 +19,6 @@ from typing import Any
 
 from ._base import MCPError, MCPServerConfig
 
-
 _POLL_INTERVAL_SECONDS = 0.2
 
 # Límite de texto devuelto por una herramienta MCP. Los servidores MCP

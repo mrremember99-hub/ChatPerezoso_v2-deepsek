@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QDialog,
     QComboBox,
+    QDialog,
     QDialogButtonBox,
     QFormLayout,
     QLabel,
@@ -377,10 +377,10 @@ def no_tool_calling_dialog(
 def edit_agent(
     parent: QWidget | None,
     *,
-    agent: "Agent",
+    agent: Agent,
     available_tools: list[str],
     available_models: list[str] | None = None,
-) -> "Agent | None":
+) -> Agent | None:
     """Devuelve un Agent editado o None si se cancela.
 
     ``available_tools`` es la lista completa de nombres de herramientas
@@ -392,7 +392,6 @@ def edit_agent(
     Si está vacía, el combo de modelo se muestra deshabilitado con la
     opción "(usar el global)".
     """
-    from core.agents import Agent
     from PySide6.QtWidgets import (
         QCheckBox,
         QComboBox,
@@ -402,6 +401,8 @@ def edit_agent(
         QPlainTextEdit,
         QSpinBox,
     )
+
+    from core.agents import Agent
 
     dialog = QDialog(parent)
     dialog.setWindowTitle("Editar agente")

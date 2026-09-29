@@ -33,7 +33,6 @@ from core.ollama import OllamaClient  # noqa: E402
 from core.tools import ToolRegistry  # noqa: E402
 from core.workspace import Workspace  # noqa: E402
 
-
 HOST = "http://localhost:11434"
 DEFAULT_MODEL = "qwen3:1.7b"
 DEFAULT_TIMEOUT_PER_CASE = 90.0

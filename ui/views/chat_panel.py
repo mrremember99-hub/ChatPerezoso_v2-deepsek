@@ -1,7 +1,7 @@
 """Panel central: chat, indicadores y caja de entrada."""
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from PySide6.QtCore import QElapsedTimer, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut

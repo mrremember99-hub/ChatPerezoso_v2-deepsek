@@ -33,7 +33,6 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parent.parent
 
 # Directorios que NUNCA se recorren.

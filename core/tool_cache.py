@@ -18,7 +18,6 @@ import threading
 import time
 from typing import Any
 
-
 # TTL por defecto: 5 segundos. Suficiente para absorber ráfagas del
 # modelo sin servir datos obsoletos al usuario.
 DEFAULT_TTL_SECONDS = 5.0

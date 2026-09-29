@@ -13,7 +13,6 @@ como subproceso cuando el usuario activa el servidor MCP.
 
 from mcp.server import MCPServer
 
-
 server = MCPServer(
     "chatperezoso-demo",
     instructions="Servidor de prueba con una única herramienta de lectura.",

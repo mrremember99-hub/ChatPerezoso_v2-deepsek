@@ -11,7 +11,6 @@ import httpx
 
 from .models_config import get_override
 
-
 logger = logging.getLogger(__name__)
 
 ToolMode = Literal["native", "xml", "unknown"]
@@ -49,7 +48,7 @@ class ModelCapabilities:
 # cambios en caliente (p. ej. Ollama arrancado tarde →
 # primera probe falla, segunda acierta pasados 60s).
 _CACHE_TTL_S = 60.0
-_CACHE: dict[tuple[str, str], tuple[float, "ModelCapabilities"]] = {}
+_CACHE: dict[tuple[str, str], tuple[float, ModelCapabilities]] = {}
 _CACHE_LOCK = threading.Lock()
 
 

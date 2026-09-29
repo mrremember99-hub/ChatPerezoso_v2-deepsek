@@ -70,7 +70,7 @@ async def _run_diagnostic() -> None:
 def main() -> int:
     try:
         asyncio.run(asyncio.wait_for(_run_diagnostic(), timeout=20.0))
-    except asyncio.TimeoutError:
+    except TimeoutError:
         _log("[!] TIMEOUT: el diagnóstico tardó más de 20 s.")
     except KeyboardInterrupt:
         _log("\n(interrumpido)")

@@ -14,11 +14,10 @@ import ast
 import re
 import shutil
 import subprocess
-
-import parso
 from dataclasses import dataclass
 from pathlib import Path
 
+import parso
 
 # ─────────────────────────────────────────────────────────────────────
 # Estructura de issues
@@ -487,4 +486,3 @@ def verify_all(path: Path) -> dict[str, list]:
         "secret": scan_secrets(path),
         "conflict": check_conflicts(path),
     }
-    

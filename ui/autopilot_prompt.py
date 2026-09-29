@@ -21,7 +21,6 @@ tuviesen que distinguir "tool X vs shell" y se lian.
 """
 from __future__ import annotations
 
-
 BLOCK = (
     "MODO PILOTO AUTOMATICO ACTIVO.\n"
     "Las herramientas se ejecutan sin dialogo de confirmacion.\n"

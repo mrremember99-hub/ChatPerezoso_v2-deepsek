@@ -118,10 +118,12 @@ def _reject_numbered_output(content: str) -> None:
     """
     if not isinstance(content, str):
         return
-    lines = [l for l in content.splitlines() if l.strip()][:30]
+    lines = [ln for ln in content.splitlines() if ln.strip()][:30]
     if len(lines) < 3:
         return
-    matches = sum(1 for l in lines if _NUMBERED_LINE_PATTERN.match(l))
+    matches = sum(
+        1 for ln in lines if _NUMBERED_LINE_PATTERN.match(ln)
+    )
     if matches >= max(3, int(len(lines) * 0.8)):
         raise WorkspaceError(
             "El contenido a escribir parece ser el output NUMERADO "

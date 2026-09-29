@@ -12,7 +12,6 @@ from core.ollama import OllamaCancelled, OllamaClient, OllamaError
 from core.tool_result import ToolResult
 from plugins.mcp import MCPError
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -425,8 +424,8 @@ class ChatWorker(QObject):
     _PATH_KEYS: tuple[str, ...] = ("archivo", "nombre", "path", "ruta")
 
     def _maybe_verify(
-        self, name: str, arguments: dict, tool_result: "ToolResult"
-    ) -> "ToolResult":
+        self, name: str, arguments: dict, tool_result: ToolResult
+    ) -> ToolResult:
         """Anexa verificación de sintaxis al resultado si aplica.
 
         Solo actúa si:

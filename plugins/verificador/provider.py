@@ -9,11 +9,10 @@ from __future__ import annotations
 import threading
 from typing import Any
 
-from core.workspace import Workspace, WorkspaceError
 from core.intent import IntentRule
+from core.workspace import Workspace, WorkspaceError
 
 from .client import verify_all
-
 
 _SPECS: tuple[dict[str, Any], ...] = (
     {

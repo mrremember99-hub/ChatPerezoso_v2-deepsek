@@ -8,8 +8,8 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 from PySide6.QtWidgets import QWidget
 
 from core.mcp_servers import MCPServerEntry, MCPServerStore
-from core.workspace import Workspace
 from core.shutdown import remaining
+from core.workspace import Workspace
 from plugins.mcp import (
     MCPClient,
     MCPError,
@@ -19,7 +19,6 @@ from plugins.mcp import (
 
 from ..views.dialogs import warn
 from ..workers import MCPWorker
-
 
 logger = logging.getLogger(__name__)
 

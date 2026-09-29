@@ -72,6 +72,7 @@ def _measure_renderer(deltas: int = 500, chunk_size: int = 8) -> dict:
       · coste de una pasada final de final_text() (Markdown + Pygments)
     """
     from PySide6.QtWidgets import QTextEdit
+
     from ui.rendering.plain_text import PlainTextRenderer
 
     widget = QTextEdit()

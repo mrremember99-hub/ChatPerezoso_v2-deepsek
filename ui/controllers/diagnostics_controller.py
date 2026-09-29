@@ -21,7 +21,6 @@ from ..diagnostics import SessionStats
 from ..views.diagnostics_panel import DiagnosticsPanel
 from .chat_controller import ChatController
 
-
 # Umbral mínimo para que una generación cuente como respuesta.
 # Por debajo de este tiempo se asume cancelación inmediata o error
 # instantáneo, y no se contabiliza. Es una constante de módulo para

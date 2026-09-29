@@ -21,7 +21,6 @@ from pathlib import Path
 
 import httpx
 
-
 ROOT = Path(__file__).resolve().parent.parent.parent
 EVAL_DIR = Path(__file__).resolve().parent
 CASES_FILE = EVAL_DIR / "cases.json"
@@ -129,7 +128,10 @@ def run_case(case: dict, *, host: str, model: str, timeout: float) -> dict:
         if case["forbidden_substring"] in response_text:
             failures.append(f"forbidden: {case['forbidden_substring']!r} presente")
     if "max_lines" in case:
-        lines = [l for l in response_text.strip().split(chr(10)) if l.strip()]
+        lines = [
+            ln for ln in response_text.strip().split(chr(10))
+            if ln.strip()
+        ]
         if len(lines) > case["max_lines"]:
             failures.append(f"too_many_lines: {len(lines)} > {case['max_lines']}")
 

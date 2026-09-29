@@ -14,7 +14,6 @@ from .client import (
     ShellError,
 )
 
-
 _SPECS: tuple[dict[str, Any], ...] = (
     {
         "name": "ejecutar_comando",

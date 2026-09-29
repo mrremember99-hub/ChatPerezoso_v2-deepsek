@@ -35,7 +35,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-
 BASE_DIR = Path(__file__).resolve().parent.parent
 MCP_SERVERS_FILE = BASE_DIR / "mcp_servers.json"
 
@@ -67,7 +66,7 @@ class MCPServerEntry:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "MCPServerEntry | None":
+    def from_dict(cls, data: dict[str, Any]) -> MCPServerEntry | None:
         if not isinstance(data, dict):
             return None
         server_id = str(data.get("id", "")).strip()

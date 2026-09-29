@@ -14,7 +14,6 @@ from core.workspace import Workspace
 
 from .client import GitClient, GitError
 
-
 _GIT_SPECS: tuple[dict[str, Any], ...] = (
     {
         "name": "git_status",

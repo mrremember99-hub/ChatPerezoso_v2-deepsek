@@ -6,4 +6,4 @@ sin sudo, timeout duro, entorno mínimo y confirmación siempre.
 from .client import ShellClient, ShellError, analyze_risk
 from .provider import ShellProvider
 
-__all__ = ["ShellClient", "ShellError", "analyze_risk", "ShellProvider"]
+__all__ = ["ShellClient", "ShellError", "ShellProvider", "analyze_risk"]

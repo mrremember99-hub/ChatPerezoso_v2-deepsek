@@ -26,7 +26,6 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-
 EVAL_DIR = Path(__file__).resolve().parent
 ROOT = EVAL_DIR.parent.parent
 BASELINE_FILE = EVAL_DIR / "baseline.json"

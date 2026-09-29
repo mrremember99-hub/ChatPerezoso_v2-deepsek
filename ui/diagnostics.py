@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
 # Aproximación de tokens: 1 token ≈ 4 caracteres. Es el ratio estándar
 # para texto en español/inglés sin tokenizer real. No es exacto pero es
 # suficiente para que el usuario vea si el contexto se está llenando.

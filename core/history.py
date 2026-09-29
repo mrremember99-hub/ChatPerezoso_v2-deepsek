@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -102,7 +102,7 @@ class HistoryStore:
             "messages": serializable,
             "model": model,
             "workspace": workspace,
-            "saved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "saved_at": datetime.now(UTC).isoformat(timespec="seconds"),
         }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)

@@ -44,11 +44,11 @@ class ToolResult:
         return text
 
     @classmethod
-    def error(cls, tool_name: str, message: str) -> "ToolResult":
+    def error(cls, tool_name: str, message: str) -> ToolResult:
         return cls(tool_name=tool_name, summary=message, detail="", is_error=True)
 
     @classmethod
-    def cancelled(cls, tool_name: str) -> "ToolResult":
+    def cancelled(cls, tool_name: str) -> ToolResult:
         return cls(
             tool_name=tool_name,
             summary="Operación cancelada por el usuario.",

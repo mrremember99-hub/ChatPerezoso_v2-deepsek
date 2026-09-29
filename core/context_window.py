@@ -20,11 +20,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from typing import Final
+
 from .token_calibration import (
     chars_per_token,
     has_calibration,
 )
-
 
 # Ratio de chars por token según densidad de código.
 # Justificación empírica: scripts/benchmark_context.py mide ~4.2 chars/
@@ -88,7 +88,7 @@ class RequestTokenCache:
 
     def get_or_compute(
         self,
-        window: "ContextWindow",
+        window: ContextWindow,
         message: dict,
     ) -> int:
         key = id(message)
@@ -321,7 +321,7 @@ class ContextWindow:
         system_prompt: str,
         tool_definitions: list[dict],
         messages: list[dict],
-        cache: "RequestTokenCache | None" = None,
+        cache: RequestTokenCache | None = None,
     ) -> tuple[list[dict], ContextBudget]:
         """Poda el historial hasta que quepa en el presupuesto.
 

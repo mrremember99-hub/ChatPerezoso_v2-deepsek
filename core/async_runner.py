@@ -22,10 +22,10 @@ import concurrent.futures
 import logging
 import threading
 import time
-from typing import Any, Callable, Coroutine
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 from .shutdown import remaining
-
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ class AsyncRunner:
         # Callback asíncrono opcional que se ejecuta antes de parar el
         # loop. Sirve para cerrar el AsyncClient persistente que vive
         # dentro del loop (httpx.AsyncClient está atado a su loop).
-        self._close_callback: "Callable[[], Coroutine[Any, Any, None]] | None" = None
+        self._close_callback: Callable[[], Coroutine[Any, Any, None]] | None = None
 
     def __del__(self) -> None:
         """Cierra el hilo del loop al recolectar el objeto.
@@ -112,7 +112,7 @@ class AsyncRunner:
             pass
 
     def set_close_callback(
-        self, callback: "Callable[[], Coroutine[Any, Any, None]]"
+        self, callback: Callable[[], Coroutine[Any, Any, None]]
     ) -> None:
         """Registra una corrutina que se ejecutará al cerrar el runner.
 

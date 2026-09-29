@@ -9,7 +9,6 @@ from core.workspace import Workspace
 
 from .client import SearchClient, SearchError
 
-
 _SPECS: tuple[dict[str, Any], ...] = (
     {
         "name": "buscar_en_workspace",

@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Any
+from typing import Any, ClassVar
 
 from core.intent import IntentRule
 from core.tools import ToolRegistry
 
 from ._base import MCPError
 from .client import MCPClient
-
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +22,7 @@ class MCPToolBridge:
 
     # Cuando un MCP expone una de estas herramientas con su nombre original,
     # la equivalente del núcleo deja de ofrecerse al modelo.
-    _CORE_REPLACEMENTS: dict[str, frozenset[str]] = {
+    _CORE_REPLACEMENTS: ClassVar[dict[str, frozenset[str]]] = {
         "listar_carpeta": frozenset({"list_directory"}),
         "leer_archivo": frozenset({"read_text_file", "read_file"}),
         "crear_archivo": frozenset({"write_file"}),
@@ -50,7 +49,7 @@ class MCPToolBridge:
     #   3. Si hay duda, no añadirlo: el coste de confirmar de más es
     #      mucho menor que el coste de confirmar de menos.
     # ────────────────────────────────────────────────────────────────
-    _TRUSTED_READONLY: dict[str, frozenset[str]] = {
+    _TRUSTED_READONLY: ClassVar[dict[str, frozenset[str]]] = {
         # server-filesystem oficial de Anthropic.
         # Referencia: https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem
         "fs": frozenset({

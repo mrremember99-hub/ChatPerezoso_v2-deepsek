@@ -6,7 +6,7 @@ y atributos se conservan: AppController no necesita cambios.
 """
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QTextEdit

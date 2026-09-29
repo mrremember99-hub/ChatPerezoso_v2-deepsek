@@ -9,6 +9,7 @@ con titulo, widgets autocontenidos. Secciones actuales:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
 
 from PySide6.QtCore import (
     QDir,
@@ -16,14 +17,13 @@ from PySide6.QtCore import (
     QPersistentModelIndex,
     QSortFilterProxyModel,
     Qt,
+    QUrl,
     Signal,
 )
-from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
-    QFrame,
-    QHBoxLayout,
     QFileSystemModel,
+    QHBoxLayout,
     QLabel,
     QMenu,
     QPushButton,
@@ -84,7 +84,7 @@ class QueueRow(QLabel):
     set_editable(False) en las filas ya procesadas.
     """
 
-    _SYMBOLS = {
+    _SYMBOLS: ClassVar[dict[str, str]] = {
         "pending": "▢",
         "running": "◐",
         "done": "✓",

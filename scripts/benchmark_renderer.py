@@ -54,6 +54,7 @@ def _make_stream(deltas: int, chunk_size: int, con_codigo: bool) -> list[str]:
 
 def _measure(deltas: int, chunk_size: int, con_codigo: bool) -> dict:
     from PySide6.QtWidgets import QTextEdit
+
     from ui.rendering.plain_text import PlainTextRenderer
 
     widget = QTextEdit()

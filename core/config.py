@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -68,7 +68,7 @@ class AppConfig:
     num_ctx_override: int = 0
 
     @classmethod
-    def load(cls) -> "AppConfig":
+    def load(cls) -> AppConfig:
         if not CONFIG_FILE.exists():
             return cls()
         try:

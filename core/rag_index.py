@@ -225,7 +225,7 @@ class RagIndex:
                         np.asarray(vec, dtype=np.float32).tobytes(),
                         now,
                     )
-                    for row, vec in zip(batch, vecs)
+                    for row, vec in zip(batch, vecs, strict=True)
                 ],
             )
             self.con.commit()

@@ -166,9 +166,7 @@ class FilteredToolProvider:
             name = _tool_name(definition)
             if not name:
                 continue
-            if name in self.allowed_names:
-                result.append(definition)
-            elif self._allow_all_mcp and name.startswith("mcp__"):
+            if name in self.allowed_names or (self._allow_all_mcp and name.startswith("mcp__")):
                 result.append(definition)
         return result
 
@@ -181,9 +179,7 @@ class FilteredToolProvider:
             return {}
         result: dict[str, IntentRule] = {}
         for name, rule in rules.items():
-            if name in self.allowed_names:
-                result[name] = rule
-            elif self._allow_all_mcp and name.startswith("mcp__"):
+            if name in self.allowed_names or (self._allow_all_mcp and name.startswith("mcp__")):
                 result[name] = rule
         return result
 
@@ -244,7 +240,7 @@ class CachedToolProvider:
         *,
         cacheable: set[str] | None = None,
         invalidating: set[str] | None = None,
-        cache: "ToolCache | None" = None,
+        cache: ToolCache | None = None,
     ):
         from .tool_cache import ToolCache
         self.source = source

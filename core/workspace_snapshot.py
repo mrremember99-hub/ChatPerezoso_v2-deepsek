@@ -13,8 +13,7 @@ import ast
 from pathlib import Path
 
 from .ast_index import AstIndex
-from .workspace import Workspace, _SKIP_DIRS
-
+from .workspace import _SKIP_DIRS, Workspace
 
 _MAX_FILES = 25
 _PREVIEW_LINES = 3

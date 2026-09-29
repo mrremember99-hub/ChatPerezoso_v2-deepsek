@@ -13,13 +13,11 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
-from .. import theme_v2
 from .diagnostics_panel import DiagnosticsPanel
 from .sidebar import Sidebar
 

@@ -248,19 +248,19 @@ QLabel#BoxContent {{
 """
 
 # Botones mas redondeados (diseno pill-shaped).
-_PILL_FIX = f"""
-QPushButton {{
+_PILL_FIX = """
+QPushButton {
     border-radius: 18px;
     padding: 5px 18px;
-}}
-QComboBox {{
+}
+QComboBox {
     border-radius: 18px;
     padding: 4px 12px;
-}}
-QLineEdit {{
+}
+QLineEdit {
     border-radius: 18px;
     padding: 6px 14px;
-}}
+}
 """
 
 DARK_STYLE = DARK_STYLE + _LABEL_FIX + _PILL_FIX

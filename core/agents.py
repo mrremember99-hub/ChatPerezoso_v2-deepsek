@@ -81,7 +81,7 @@ class Agent:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Agent | None":
+    def from_dict(cls, data: dict[str, Any]) -> Agent | None:
         if not isinstance(data, dict):
             return None
         name = data.get("name")
