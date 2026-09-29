@@ -221,6 +221,52 @@ def _tee(stream_in, stream_out, log_file) -> None:
     stream_in.close()
 
 
+def _extract_errors(log: Path) -> list[str]:
+    """Extrae errores del log agrupando tracebacks multi-linea.
+
+    Un solo traceback ocupa N lineas. La version anterior grepeaba
+    linea a linea y contaba 3 errores por un solo fallo.
+    """
+    if not log.exists():
+        return []
+    text = log.read_text(encoding="utf-8", errors="replace")
+    lines = text.splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        raw = lines[i]
+        s = raw.strip()
+        if s.startswith("Traceback (most recent call last)"):
+            block = [s]
+            j = i + 1
+            while j < len(lines):
+                nxt = lines[j]
+                if nxt.startswith("  ") or nxt.startswith("\t"):
+                    block.append(nxt.strip())
+                    j += 1
+                elif "Error:" in nxt or "Exception:" in nxt:
+                    block.append(nxt.strip())
+                    j += 1
+                    break
+                elif nxt.strip() == "":
+                    break
+                else:
+                    break
+            summary = next(
+                (ln for ln in reversed(block)
+                 if "Error" in ln or "Exception" in ln),
+                block[-1],
+            )
+            out.append(summary[:300])
+            i = j
+        elif "ERROR " in s or "Error:" in s:
+            out.append(s[:300])
+            i += 1
+        else:
+            i += 1
+    return out
+
+
 def _analyze(run_dir: Path, exit_code: int, duration_s: float) -> None:
     timeline = run_dir / "workspace_timeline.jsonl"
     counts = {"created": 0, "modified": 0, "deleted": 0, "history_snapshot": 0}
@@ -242,12 +288,7 @@ def _analyze(run_dir: Path, exit_code: int, duration_s: float) -> None:
                 first_ts = first_ts or ts
                 last_ts = ts
     log = run_dir / "app.log"
-    errors: list[str] = []
-    if log.exists():
-        for i, line in enumerate(log.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-            s = line.strip()
-            if s.startswith("Traceback") or "Error:" in s or "ERROR " in s:
-                errors.append(f"L{i}: {s[:200]}")
+    errors = _extract_errors(log)
     lines = [
         f"# Analisis de corrida OVERPAPER",
         "",

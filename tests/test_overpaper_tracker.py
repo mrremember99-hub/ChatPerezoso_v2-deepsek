@@ -106,4 +106,6 @@ def test_analyze_genera_informe(tmp_path, monkeypatch):
     md = (run_dir / "analysis.md").read_text(encoding="utf-8")
     assert "Creados: 1" in md
     assert "Modificados: 1" in md
-    assert "Traceback" in md
+    # _extract_errors agrupa tracebacks y reporta la linea final
+    # (la del tipo de excepcion), no la palabra "Traceback".
+    assert "ValueError" in md
