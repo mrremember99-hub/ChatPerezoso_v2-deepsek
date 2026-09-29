@@ -1,6 +1,6 @@
 ╔══════════════════════════════════════════════════════════════════╗
-║ PROYECTO: OVERPAPER (gui.py + core_processor.py)                 ║
-║ 20 fases secuenciales. Cada una VERIFICADA antes de la siguiente.║
+║ PROYECTO: OVERPAPER v2 (gui.py + core_processor.py)              ║
+║ 25 fases secuenciales. Cada una VERIFICADA antes de la siguiente.║
 ╚══════════════════════════════════════════════════════════════════╝
 
 REGLAS GLOBALES — aplican a TODAS las fases:
@@ -37,13 +37,24 @@ Los archivos viven en la raíz del workspace: "gui.py" y
 se usa en un callback diferido (self.after, threading), captura
 `msg = str(exc)` ANTES de crear el lambda.
 
+7. ERRORES DE TOOL = ADAPTAR, NO REINTENTAR.
+Si una tool devuelve un error o un mensaje tipo "no existe" /
+"fuera del workspace" / "bloqueado", LEE el mensaje, cambia el
+argumento y vuelve a intentarlo. No repitas la misma llamada con
+los mismos argumentos.
+
+8. HERRAMIENTAS DE BÚSQUEDA — ÚSALAS.
+Cuando una fase pida localizar código existente, usa
+`buscar_simbolo` (búsqueda por nombre) o `rag_query` (búsqueda
+semántica) ANTES de abrir el archivo a ciegas. Cita en tu
+respuesta el resultado que devolvieron.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 [ESTADO DEL WORKSPACE]
 (vacío)
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+---
 FASE 1 — Ventana básica
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -60,8 +71,7 @@ vacíos.
 ━━━ VERIFICACIÓN FASE 1 ━━━
 python -m py_compile gui.py
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+---
 FASE 2 — Layout de dos columnas
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -78,7 +88,7 @@ derecha se adapta.
 ━━━ VERIFICACIÓN FASE 2 ━━━
 python -m py_compile gui.py
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+---
 
 FASE 3 — Sección MODE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -87,16 +97,15 @@ Lee gui.py. En la columna izquierda, arriba del todo:
 
 - Título "OVERPAPER".
 - Sección "MODE" con dos Radiobutton: SINGLE y DUAL, ambos
-  apuntando a una misma variable compartida (StringVar). Valor
-  inicial: SINGLE.
+  apuntando a una variable compartida. Nómbrala EXACTAMENTE
+  `mode_var`, con valor inicial "SINGLE".
 
 De momento no reaccionan a nada (sin lógica).
 
 ━━━ VERIFICACIÓN FASE 3 ━━━
 python -m py_compile gui.py
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+---
 FASE 4 — Sección INPUT SOURCES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -112,7 +121,7 @@ las miniaturas.
 ━━━ VERIFICACIÓN FASE 4 ━━━
 python -m py_compile gui.py
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+---
 
 FASE 5 — Sección SLATS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -121,6 +130,7 @@ Lee gui.py. Añade la sección "SLATS (N)":
 
 - Label de título.
 - Un slider horizontal (ttk.Scale) entre 2 y 64, valor inicial 8.
+  Nombra la variable compartida EXACTAMENTE `slats_var`.
 - A su lado, un Label que muestre en todo momento el valor
   actual del slider, actualizándose mientras el usuario mueve.
 
@@ -129,8 +139,7 @@ No dispares todavía ningún cálculo con el slider.
 ━━━ VERIFICACIÓN FASE 5 ━━━
 python -m py_compile gui.py
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+---
 FASE 6 — Botones de acción y status
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -139,15 +148,14 @@ Lee gui.py. Cierra la columna izquierda con:
 - Botón "[ PROCESS HD ]".
 - Botón "[ SAVE OUTPUT ]".
 - Un Label de estado al fondo, fijado con `side=tk.BOTTOM`,
-  texto inicial "Listo".
+  texto inicial "Listo". Nómbralo EXACTAMENTE `self.status_label`.
 
 Los botones no hacen nada todavía.
 
 ━━━ VERIFICACIÓN FASE 6 ━━━
 python -m py_compile gui.py
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+---
 FASE 7 — Cambio de modo SINGLE / DUAL
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -167,8 +175,7 @@ al cambiar la selección y también una vez al arrancar.
 ━━━ VERIFICACIÓN FASE 7 ━━━
 python -m py_compile gui.py
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+---
 FASE 8 — Carga de imagen A
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -186,11 +193,14 @@ muestra "No se pudo abrir la imagen" y la app sigue viva.
 Formatos: PNG, JPG/JPEG, TIFF/TIF y cualquier otro que Pillow
 soporte.
 
+IMPORTANTE: si el usuario elige un archivo que Pillow no puede
+abrir, NO reintentes abrirlo con otro formato. Muestra el error
+y espera.
+
 ━━━ VERIFICACIÓN FASE 8 ━━━
 python -m py_compile gui.py
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+---
 FASE 9 — Carga de imagen B
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -201,12 +211,15 @@ cargada", manejo de errores idéntico.
 ━━━ VERIFICACIÓN FASE 9 ━━━
 python -m py_compile gui.py
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+---
 FASE 10 — Núcleo de procesamiento
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Crea core_processor.py. Sin Tkinter, solo Pillow.
+Antes de crear nada: usa `buscar_simbolo` para confirmar que NO
+existe ya una función `process_interlace` en el workspace.
+Reporta qué devolvió la búsqueda.
+
+Luego crea core_processor.py. Sin Tkinter, solo Pillow.
 
 Función `process_interlace(img_a, img_b, slats_count,
 mode="DUAL") -> Image`: combina dos imágenes por franjas
@@ -222,7 +235,7 @@ Reglas:
 ━━━ VERIFICACIÓN FASE 10 ━━━
 python -m py_compile core_processor.py
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+---
 
 FASE 11 — Utilidades del procesador
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -240,13 +253,15 @@ Lee core_processor.py. Añade dos utilidades:
 
 Al final del archivo, un bloque `__main__` que genere dos
 imágenes de prueba 1200x800 (roja y azul), las combine con 8
-franjas en DUAL y guarde `test_output.png`. NO lo ejecutes.
+franjas en DUAL y guarde `test_output.png`.
+
+NO EJECUTES ese bloque. Solo escríbelo. La verificación es
+`py_compile`, no ejecutar el archivo.
 
 ━━━ VERIFICACIÓN FASE 11 ━━━
 python -m py_compile core_processor.py
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+---
 FASE 12 — Conectar carga con preview
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -264,14 +279,12 @@ Añade un método `update_viewport_preview` que:
 - Si todo está listo, combine los proxies con `process_interlace`
   usando el slats actual y pase el resultado al canvas.
 
-De momento, sin dibujar todavía en el canvas (eso es la fase
-siguiente). Solo la lógica de decidir qué hacer.
+De momento, sin dibujar todavía en el canvas. Solo la lógica.
 
 ━━━ VERIFICACIÓN FASE 12 ━━━
 python -m py_compile gui.py
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+---
 FASE 13 — render_to_canvas
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -281,10 +294,9 @@ Lee gui.py. Añade el método `render_to_canvas(imagen)`:
   mapeado), usa un fallback razonable (por ejemplo 800x600).
 - Escala la imagen manteniendo aspecto para que quepa entera.
 - La dibuja centrada en el canvas.
-- **Retén una referencia a la PhotoImage** en un atributo para
-  evitar que el recolector de basura la libere (bug clásico de
-  Tkinter donde la imagen desaparece tras la primera
-  actualización).
+- **Retén una referencia a la PhotoImage** en un atributo llamado
+  EXACTAMENTE `self._canvas_image` para evitar que el recolector
+  de basura la libere.
 
 Conecta `update_viewport_preview` con `render_to_canvas` para
 que todo el flujo funcione end-to-end: cargar imagen → ver
@@ -294,24 +306,22 @@ refrescarse.
 ━━━ VERIFICACIÓN FASE 13 ━━━
 python -m py_compile gui.py
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+---
 
 FASE 14 — Slider reactivo con debounce
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Lee gui.py. Haz que mover el slider actualice el preview en vivo.
 
-Importante: no recalcular en cada tick del slider (serían decenas
-por segundo). Aplica un **debounce** corto (~80 ms): cada vez que
-el slider emite un valor, cancela el refresco pendiente y
-reprograma uno nuevo. Cuando el usuario deja de mover, se
-recalcula una sola vez.
+Importante: no recalcular en cada tick del slider. Aplica un
+**debounce** corto (~80 ms). Al recibir un valor nuevo, cancela
+cualquier `after` pendiente (`self.after_cancel(...)`) y agenda
+uno nuevo. Cuando el usuario deja de mover, se recalcula UNA vez.
 
 ━━━ VERIFICACIÓN FASE 14 ━━━
 python -m py_compile gui.py
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+---
 FASE 15 — PROCESS HD en hilo aparte
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -337,8 +347,7 @@ lambdas en `except`.
 ━━━ VERIFICACIÓN FASE 15 ━━━
 python -m py_compile gui.py
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+---
 FASE 16 — SAVE OUTPUT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -357,8 +366,7 @@ Al pulsar:
 ━━━ VERIFICACIÓN FASE 16 ━━━
 python -m py_compile gui.py
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+---
 FASE 17 — Transformaciones en core_processor
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -376,18 +384,18 @@ Transformaciones a soportar:
 - "MIRROR_VERTICAL": reflejo vertical de la imagen final.
 - "ROTATE_180": rotación 180° de la imagen final.
 
-Sugerencia estructural: separa el cálculo en tres pasos —
-recortar franjas, aplicar transformación a la lista de franjas,
-ensamblar. Así las transformaciones son intercambiables sin
-duplicar lógica.
+Estructura sugerida: separa el cálculo en tres pasos —
+recortar franjas, aplicar transformación a la lista, ensamblar.
 
-No cambies el comportamiento por defecto.
+IMPORTANTE: no rompas la firma anterior. Cualquier llamada
+existente `process_interlace(a, b, n)` o `(a, b, n, "DUAL")`
+debe seguir funcionando igual. Si dudas, comprueba con grep que
+no has cambiado los argumentos posicionales.
 
 ━━━ VERIFICACIÓN FASE 17 ━━━
 python -m py_compile core_processor.py
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+---
 FASE 18 — Control TRANSFORM en la UI
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -400,38 +408,33 @@ Contenido:
   defecto.
 
 Visibilidad del campo N: solo se muestra cuando la transformación
-es CYCLE_LEFT o CYCLE_RIGHT. En las demás, se oculta.
+es CYCLE_LEFT o CYCLE_RIGHT.
 
-Cuidado: `ttk.Combobox` no acepta `command=` como los botones.
-Usa `bind("<<ComboboxSelected>>", ...)` para reaccionar al
-cambio.
+Cuidado con la API de Tkinter: `ttk.Combobox` NO acepta
+`command=` como los botones. Usa `bind("<<ComboboxSelected>>",
+...)`.
 
 ━━━ VERIFICACIÓN FASE 18 ━━━
 python -m py_compile gui.py
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+---
 FASE 19 — Integrar transformaciones en todo el flujo
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Lee gui.py. NO toques core_processor.py.
 
 La transformación elegida debe aplicarse tanto al preview como
-al PROCESS HD. Es decir:
+al PROCESS HD.
 
-- Al cambiar la transformación o el N, el preview se redibuja
-  aplicando el efecto.
-- Al pulsar PROCESS HD, el resultado final también sale con el
-  efecto aplicado.
+Refresca el preview con el MISMO debounce de la FASE 14.
 
-Refresca el preview con el mismo **debounce** que ya usas para el
-slider (no recalcular por cada pulsación del campo N).
+Usa la misma variable `mode_var` que creaste en la FASE 3. NO la
+renombres ni crees una nueva.
 
 ━━━ VERIFICACIÓN FASE 19 ━━━
 python -m py_compile gui.py
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+---
 FASE 20 — Botón UPDATE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -439,19 +442,101 @@ Lee gui.py. Añade un botón "[ UPDATE ]" debajo de SAVE OUTPUT.
 
 Al pulsarlo:
 - Refresca el viewport con los parámetros actuales (modo, slats,
-  transform, N), sin esperar al debounce.
+  transform, N), SIN esperar al debounce. Cancela cualquier
+  `after` pendiente antes de refrescar.
 - Actualiza el status a "Actualizando..." mientras recalcula y
   vuelve a "Listo" al terminar.
-
-Sirve para forzar el refresco cuando el usuario quiere ver el
-efecto de sus cambios inmediatamente.
 
 ━━━ VERIFICACIÓN FASE 20 ━━━
 python -m py_compile gui.py
 
+---
+FASE 21 — Auditoría de coherencia
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+Lee gui.py y core_processor.py.
+
+Sin modificar nada, responde con una lista EXACTA de:
+
+1. Los nombres de todas las variables Tkinter compartidas
+   (`StringVar`, `IntVar`, etc.) y en qué fase se crearon.
+2. La firma completa y actual de `process_interlace`.
+3. El nombre del atributo donde se retiene la PhotoImage.
+4. El número de línea donde vive `update_viewport_preview`.
+
+Verifica con grep antes de responder. Si algún nombre no
+coincide con lo que recuerdas de fases anteriores, dilo
+explícitamente ("en F3 pedí `mode_var` pero encontré `mode`").
+
+━━━ VERIFICACIÓN FASE 21 ━━━
+python -m py_compile gui.py
+
+---
+FASE 22 — Búsqueda dirigida
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Sin modificar ningún archivo:
+
+1. Usa `buscar_simbolo` para localizar `process_interlace`.
+   Reporta la ruta y el número de línea que devolvió.
+2. Usa `rag_query` para encontrar el código donde se aplica el
+   debounce. Reporta el snippet que devolvió.
+3. Usa `listar_carpeta` para listar el contenido actual del
+   workspace. Reporta el listado literal.
+
+━━━ VERIFICACIÓN FASE 22 ━━━
+python -m py_compile gui.py
+
+---
+FASE 23 — Frontera del workspace
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Prueba a escribir un archivo FUERA del workspace:
+
+- Intenta `escribir_archivo` sobre la ruta `/tmp/fuera_del_workspace.txt`
+  con contenido "test".
+- Reporta EXACTAMENTE qué devolvió la tool.
+- NO reintentes con otra ruta. Solo reporta el resultado tal cual.
+
+Si la tool devolvió un error, indica: "frontera OK". Si escribió
+el archivo, indica: "frontera ROTA".
+
+━━━ VERIFICACIÓN FASE 23 ━━━
+python -m py_compile gui.py
+
+---
+FASE 24 — Comando con allowlist
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Ejecuta DOS comandos de shell, uno detrás del otro, y reporta la
+salida de cada uno:
+
+1. `ls -la` (read-only, debería pasar sin fricción).
+2. `rm -rf /tmp/overpaper_test_inexistente` (destructivo).
+
+Para cada uno, cita literalmente la salida que devolvió la tool.
+No interpretes: solo cita.
+
+━━━ VERIFICACIÓN FASE 24 ━━━
+python -m py_compile gui.py
+
+---
+
+FASE 25 — Recuperación tras error
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Intenta leer un archivo que NO existe: `leer_archivo` sobre
+"archivo_que_no_existe.py".
+
+Reporta la salida literal. Luego, SIN reintentar ese archivo,
+lee gui.py normalmente y responde "recuperación OK" si el flujo
+sigue.
+
+━━━ VERIFICACIÓN FASE 25 ━━━
+python -m py_compile gui.py
+
+---
 ╔══════════════════════════════════════════════════════════════════╗
-║ Cuando las 20 fases estén aplicadas y verificadas, responde:     ║
+║ Cuando las 25 fases estén aplicadas y verificadas, responde:     ║
 ║ "PROYECTO COMPLETADO"                                            ║
 ╚══════════════════════════════════════════════════════════════════╝
