@@ -12,6 +12,8 @@ conversación" borra el archivo.
 from __future__ import annotations
 
 import json
+import os
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -106,10 +108,15 @@ class HistoryStore:
         }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            # Escritura atómica: escribir a .tmp y renombrar. Si el
-            # proceso muere a mitad, history.json queda intacto (el
-            # .tmp se ignora y el replace() es atómico en POSIX).
-            tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
+            # Escritura atómica: escribir a .tmp unico y renombrar.
+            # Si el proceso muere a mitad, history.json queda intacto
+            # (el .tmp se ignora y el replace() es atómico en POSIX).
+            # Nombre unico por escritura (pid + uuid): dos writers
+            # concurrentes no colisionan en el mismo .tmp.
+            tmp_path = self.path.with_name(
+                f"{self.path.name}.{os.getpid()}."
+                f"{uuid.uuid4().hex[:8]}.tmp"
+            )
             tmp_path.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",

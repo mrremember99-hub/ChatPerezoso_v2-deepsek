@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import re
+import uuid
 from pathlib import Path
 
 MAX_READ_BYTES = 200_000
@@ -173,10 +175,15 @@ class Workspace:
         archivo viejo queda intacto: el .tmp se ignora y os.replace
         es atomico en POSIX.
 
+        El .tmp lleva pid+uuid para que dos writers concurrentes al
+        mismo target no colisionen en el mismo fichero.
+
         Levanta WorkspaceError si falla, para que el modelo lo vea
         como ERROR en el tool result en vez de un fallo silencioso.
         """
-        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp = path.with_name(
+            f"{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
+        )
         try:
             tmp.write_bytes(data)
             tmp.replace(path)

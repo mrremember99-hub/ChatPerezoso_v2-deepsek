@@ -12,6 +12,8 @@ de herramientas que se ofrece al modelo.
 from __future__ import annotations
 
 import json
+import os
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -295,11 +297,17 @@ class AgentStore:
         }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            # Escritura atomica: escribir a .tmp y renombrar. Si el
-            # proceso muere a mitad, agents.json queda intacto (el
-            # .tmp se ignora y el replace() es atomico en POSIX).
-            # Mismo patron que HistoryStore.save.
-            tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
+            # Escritura atomica: escribir a .tmp unico y renombrar.
+            # Si el proceso muere a mitad, agents.json queda intacto
+            # (el .tmp se ignora y el replace() es atomico en POSIX).
+            # Nombre unico por escritura (pid + uuid) para que dos
+            # writers concurrentes al mismo target no colisionen en
+            # el mismo .tmp y mezclen bytes. Mismo patron que
+            # HistoryStore.save y Workspace._atomic_write_bytes.
+            tmp_path = self.path.with_name(
+                f"{self.path.name}.{os.getpid()}."
+                f"{uuid.uuid4().hex[:8]}.tmp"
+            )
             tmp_path.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
