@@ -24,7 +24,10 @@ class RequestSnapshot:
     history_messages: int
     active_tools: list[str]
     options: dict | None
-    thinking_override: bool | None
+    # bool = forzar on/off. str = nivel de thinking (gpt-oss:
+    # "low"/"medium"/"high"; Ollama ignora bool para ese modelo).
+    # None = auto (Ollama decide).
+    thinking_override: bool | str | None
     round_number: int = 0
 
     def to_log(self) -> str:

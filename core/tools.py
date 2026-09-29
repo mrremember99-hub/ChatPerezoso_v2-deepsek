@@ -483,11 +483,12 @@ class ToolRegistry:
         # Normalizar aliases (line_start -> start_line, archivo ->
         # path...) antes de validar. Modelos pequeños inventan
         # nombres; si la intencion es correcta, no rechazamos.
-        arguments = _normalise_args(arguments, spec)
-        if isinstance(arguments, str):
-            return arguments
-        if isinstance(arguments, str):
-            return arguments
+        # _normalise_args devuelve str si hay colisión con valores
+        # distintos.
+        normalized = _normalise_args(arguments, spec)
+        if isinstance(normalized, str):
+            return normalized
+        arguments = normalized
 
         for field in spec["required"]:
             if field not in arguments:

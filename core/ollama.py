@@ -1896,6 +1896,7 @@ class OllamaClient:
             return name, args
         return None
 
+    @staticmethod
     def _textual_tool_call_name(content: str, tool_names: set[str]) -> str | None:
         if "{" in content and '"name"' in content:
             match = OllamaClient._TEXTUAL_CALL_NAME.search(content)

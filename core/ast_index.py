@@ -384,10 +384,10 @@ class AstIndex:
           estan en ``_dirty``, y borra los que ya no existen.
         - ``paths=[...]``: procesa solo esos (absolutos o relativos).
         """
+        disk_paths: dict[str, Path] = {}
         if paths is None:
             disk_paths = {self._rel(p): p for p in self.iter_py_files()}
         else:
-            disk_paths: dict[str, Path] = {}
             for raw in paths:
                 p = Path(raw)
                 if not p.is_absolute():
