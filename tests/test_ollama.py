@@ -977,3 +977,50 @@ def test_embed_timeout_argumento(monkeypatch):
         client.shutdown()
 
     assert seen["timeout"] == 12.5
+
+
+# ── X2.1: embed captura cancelacion ─────────────────────────────
+# Auditoria externa 2026-09-29, P1#6.
+#
+# AsyncRunner.submit traduce CancelledError a _CancelledByEvent.
+# _stream ya la convierte a OllamaCancelled; embed no lo hacia y
+# filtraba la excepcion privada del runner al llamante.
+
+def test_embed_cancelado_lanza_ollama_cancelled(monkeypatch):
+    from core.async_runner import _CancelledByEvent
+    from core.ollama import OllamaCancelled
+
+    client = OllamaClient()
+
+    # Simulamos cancelacion: submit lanza _CancelledByEvent.
+    def fake_submit(coro, *, cancel_event=None, timeout=None):
+        coro.close()
+        raise _CancelledByEvent()
+
+    monkeypatch.setattr(client._async_runner, "submit", fake_submit)
+
+    try:
+        with pytest.raises(OllamaCancelled):
+            client.embed(["x"])
+    finally:
+        client.shutdown()
+
+
+def test_embed_httpx_error_lanza_ollama_error(monkeypatch):
+    """Control: los otros caminos siguen emitiendo OllamaError."""
+    import httpx
+    from core.ollama import OllamaError
+
+    client = OllamaClient()
+
+    def fake_submit(coro, *, cancel_event=None, timeout=None):
+        coro.close()
+        raise httpx.ConnectError("caido")
+
+    monkeypatch.setattr(client._async_runner, "submit", fake_submit)
+
+    try:
+        with pytest.raises(OllamaError):
+            client.embed(["x"])
+    finally:
+        client.shutdown()

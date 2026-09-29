@@ -553,3 +553,27 @@ def test_index_pending_salta_constantes(tmp_path):
         assert st["symbols"] == 1
     finally:
         idx.close()
+
+
+# ── X2.1: get_rag_index actualiza ollama al reciclar ─────────────
+# Auditoria externa 2026-09-29, P1#5.
+
+def test_get_rag_index_actualiza_ollama_al_reciclar(tmp_path):
+    """El cache es por root+model. Si el llamante pasa un OllamaClient
+    nuevo (mismo root+model), se actualiza la referencia en lugar de
+    quedarse con el viejo (potencialmente cerrado)."""
+    root = _ws(tmp_path)
+    close_all()
+
+    ollama_a = FakeOllama()
+    ollama_b = FakeOllama()
+
+    a = get_rag_index(root, ollama=ollama_a)
+    assert a.ollama is ollama_a
+
+    # Mismo root+model, cliente distinto: debe reciclar y actualizar.
+    b = get_rag_index(root, ollama=ollama_b)
+    assert b is a, "mismo root+model -> misma instancia"
+    assert b.ollama is ollama_b, "referencia al cliente debe actualizarse"
+
+    close_all()

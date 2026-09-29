@@ -680,6 +680,14 @@ class OllamaClient:
                 self._embed_async(texts, model, timeout),
                 cancel_event=cancel_event,
             )
+        except _CancelledByEvent:
+            # X2.1 (auditoria externa 2026-09-29, P1#6): submit()
+            # traduce CancelledError a _CancelledByEvent. _stream
+            # ya la convierte a OllamaCancelled; embed estaba
+            # filtrando la excepcion privada del AsyncRunner.
+            raise OllamaCancelled(
+                "Operación cancelada por el usuario."
+            ) from None
         except httpx.HTTPError as exc:
             # Algunos httpx.HTTPError (ej. ReadTimeout sin request
             # adjunto) tienen str() vacio. Incluir el tipo si pasa.

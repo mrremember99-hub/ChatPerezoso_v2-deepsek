@@ -451,6 +451,14 @@ def get_rag_index(
         if idx is None or idx.model != model:
             idx = RagIndex(resolved, ollama=ollama, model=model)
             _RAG_CACHE[resolved] = idx
+        elif idx.ollama is not ollama:
+            # X2.1 (auditoria externa 2026-09-29, P1#5): el cache se
+            # indexa por root+model, no por cliente. Si el llamante
+            # pasa un OllamaClient nuevo (p. ej. tras recrear la app
+            # manteniendo el workspace), actualizamos la referencia
+            # para no quedar atados a un cliente potencialmente
+            # cerrado.
+            idx.ollama = ollama
         return idx
 
 
