@@ -1,0 +1,42 @@
+# Config de ruff para ChatPerezoso v2.
+#
+# Objetivo: cazar bugs reales sin inundar de ruido cultural.
+# Las reglas que se ignoran tienen justificación explicita abajo.
+
+line-length = 100
+target-version = "py311"
+
+[lint]
+# No usamos ALL a proposito: el default set (E4,E7,E9,F) es demasiado
+# pobre, pero ALL incluye reglas que no aplican (ARG, PLR2004, etc.).
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes (incluye F821 undefined name)
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "C4",   # flake8-comprehensions
+    "RET",  # flake8-return
+    "RUF",  # reglas propias de ruff
+]
+
+ignore = [
+    "E501",    # line-too-long: line-length=100 ya es razonable
+    "E402",    # module-import-not-at-top: legitimo con imports
+               # condicionales dentro de try/except
+    "RUF001",  # ambiguous-unicode-character: acentos y simbolos
+    "RUF002",  #   en español son esperados (docstrings, strings,
+    "RUF003",  #   comentarios)
+    "RUF100",  # unused-noqa: se limpian a mano cuando se toquen
+]
+
+[lint.per-file-ignores]
+# Los tests tienen patrones que son ruido fuera de tests:
+# - F401/F811: imports condicionales y fakes duplicados
+# - B007: loops con variable no usada en asserts
+# - B023: closures en parametrize
+"tests/*" = ["F401", "F811", "B007", "B023"]
+# Los scripts de un solo uso tienen imports locales.
+"scripts/*" = ["F401"]
