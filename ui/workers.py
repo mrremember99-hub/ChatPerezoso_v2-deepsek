@@ -398,9 +398,18 @@ class ChatWorker(QObject):
         # comandos que pasen la allowlist. Un comando fuera de la
         # lista (rm, mv, git push, pip install...) degrada a
         # confirmacion manual en lugar de ejecutarse sin dialogo.
+        #
+        # Overpaper run #2: solo consultar la allowlist si el argumento
+        # command es un string valido. Si es None/vacio/no-string,
+        # dejamos auto=True para que tools.call rechace con un mensaje
+        # accionable ("command es obligatorio y debe ser texto"). Sin
+        # esto, mistral-small caia en un dialogo de confirmacion por
+        # cada intento con args malformados, timeout de 10 min, bucle.
         if auto and name == "ejecutar_comando":
-            if not is_command_allowed(arguments.get("command", "")):
-                auto = False
+            cmd = arguments.get("command", "")
+            if isinstance(cmd, str) and cmd.strip():
+                if not is_command_allowed(cmd):
+                    auto = False
 
         if requires and not auto:
             # _request_confirmation devuelve también el tiempo REAL de
@@ -566,9 +575,20 @@ class ChatWorker(QObject):
             )
             duration_ms = 0
         else:
+            # Overpaper run #2: el mensaje anterior no distinguia entre
+            # "el usuario dijo No" y "nadie respondio en 10 min". El
+            # modelo recibia un mensaje generico y reintentaba la misma
+            # llamada con los mismos args -> bucle. Ahora le decimos
+            # explicitamente que fue timeout y que busque alternativa
+            # auto-aprobable.
             result = (
-                "OPERACIÓN CANCELADA: no se recibió confirmación del usuario "
-                "a tiempo. No se ha ejecutado ninguna operación."
+                f"OPERACIÓN CANCELADA POR TIMEOUT DE CONFIRMACIÓN "
+                f"({CONFIRMATION_TIMEOUT_SECONDS} s sin respuesta del "
+                "usuario). El comando NO se ha ejecutado. Si no está "
+                "en la allowlist de autopilot+shell (ls, cat, grep, "
+                "pytest, python -m py_compile...), usa una alternativa "
+                "auto-aprobable o pide al usuario que confirme "
+                "manualmente. NO repitas la misma llamada."
             )
             duration_ms = 0
 

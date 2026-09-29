@@ -125,3 +125,81 @@ def test_metacaracteres_degrada_a_confirmacion(qapp, monkeypatch):
     assert result == "bloqueado por metacaracteres"
     assert len(calls) == 1
     assert len(tools.calls) == 0
+
+
+# ── Overpaper run #2: Fix 1 + Fix 2 ────────────────────────────────
+
+def test_command_none_no_pide_confirmacion(qapp, monkeypatch):
+    """command=None no debe caer a dialogo; tools.call rechaza."""
+    w, tools = _make_worker(auto_approve=True, auto_approve_shell=True)
+
+    confirm_calls: list = []
+    monkeypatch.setattr(
+        w, "_request_confirmation",
+        lambda name, args: (confirm_calls.append(1), ("confirmado", 0))[1],
+    )
+
+    result = w._call_tool("ejecutar_comando", {"command": None})
+    # No debe haber pedido confirmacion (fix 1).
+    assert confirm_calls == [], "no deberia pedir dialogo con command=None"
+    # tools.call debe haberse llamado con allow_destructive=True.
+    assert len(tools.calls) == 1
+    _name, _args, kwargs = tools.calls[0]
+    assert kwargs.get("allow_destructive") is True
+
+
+def test_command_vacio_no_pide_confirmacion(qapp, monkeypatch):
+    """command="" o command="   " no debe caer a dialogo."""
+    w, tools = _make_worker(auto_approve=True, auto_approve_shell=True)
+
+    confirm_calls: list = []
+    monkeypatch.setattr(
+        w, "_request_confirmation",
+        lambda name, args: (confirm_calls.append(1), ("confirmado", 0))[1],
+    )
+
+    w._call_tool("ejecutar_comando", {"command": ""})
+    w._call_tool("ejecutar_comando", {"command": "   "})
+    assert confirm_calls == []
+
+
+def test_command_valido_fuera_allowlist_si_pide_confirmacion(
+    qapp, monkeypatch
+):
+    """Comando valido pero fuera de allowlist -> dialogo (regresion)."""
+    w, tools = _make_worker(auto_approve=True, auto_approve_shell=True)
+
+    confirm_calls: list = []
+    monkeypatch.setattr(
+        w, "_request_confirmation",
+        lambda name, args: (confirm_calls.append(1), ("denegado", 0))[1],
+    )
+
+    w._call_tool("ejecutar_comando", {"command": "rm -rf /"})
+    assert len(confirm_calls) == 1, "rm -rf deberia pedir confirmacion"
+
+
+def test_mensaje_timeout_menciona_allowlist_y_no_reintentar(qapp):
+    """El mensaje de timeout debe guiar al modelo, no solo informar."""
+    from ui import workers as wmod
+    # Simulamos el flujo sin event.wait real: hacemos que event.wait
+    # devuelva inmediatamente False y _confirmation_approved=False.
+    w, _tools = _make_worker(auto_approve=False, auto_approve_shell=False)
+
+    # No conectamos la senal, no hay UI -> event.wait expira.
+    # Reducimos el timeout para no colgar el test.
+    import ui.workers as uw
+    monkeypatch = None  # noqa (necesario para el linter)
+    old = uw.CONFIRMATION_TIMEOUT_SECONDS
+    try:
+        uw.CONFIRMATION_TIMEOUT_SECONDS = 0.05
+        result, duration = w._request_confirmation(
+            "ejecutar_comando", {"command": "black gui.py"},
+        )
+    finally:
+        uw.CONFIRMATION_TIMEOUT_SECONDS = old
+
+    assert duration == 0
+    assert "TIMEOUT" in result or "timeout" in result.lower()
+    assert "allowlist" in result
+    assert "NO repitas" in result
