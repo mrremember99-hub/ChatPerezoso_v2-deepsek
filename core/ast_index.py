@@ -69,8 +69,18 @@ _INDEX_CACHE_LOCK = threading.Lock()
 def get_index(root: Path) -> AstIndex:
     """Devuelve el AstIndex compartido para ``root`` (uno por proceso).
 
-    Cache module-level thread-safe. La primera llamada abre la
-    conexion SQLite; las siguientes devuelven la misma instancia.
+    Cache module-level thread-safe (el dict esta protegido por
+    ``_INDEX_CACHE_LOCK``).
+
+    IMPORTANTE - contrato de hilo: la instancia resultante contiene
+    una ``sqlite3.Connection`` con ``check_same_thread=True``. Debe
+    usarse exclusivamente desde el hilo que hizo la primera llamada
+    a ``get_index`` (en la app, el hilo de UI). Un uso desde otro
+    hilo hara que SQLite lance ``ProgrammingError`` — que es lo
+    correcto, mejor que corromper el indice.
+
+    Si en el futuro hace falta acceso cross-thread, hay que añadir
+    un lock de instancia o serializar las operaciones via cola.
     """
     resolved = Path(root).resolve()
     with _INDEX_CACHE_LOCK:
@@ -260,7 +270,15 @@ class AstIndex:
         self.root = Path(root).resolve()
         self.db_path = Path(db_path) if db_path else cache_path_for(self.root)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._con = sqlite3.connect(str(self.db_path))
+        # X2.3a (auditoria externa 2026-09-29, P1#4): check_same_thread
+        # explicito. Es el default de sqlite3, pero lo dejamos escrito
+        # porque el contrato de get_index() asume que la instancia vive
+        # en un unico hilo. Si en el futuro se necesita acceso desde
+        # varios, hay que añadir un lock propio o serializar via cola.
+        self._con = sqlite3.connect(
+            str(self.db_path),
+            check_same_thread=True,
+        )
         self._con.row_factory = sqlite3.Row
         self._ensure_schema()
         self._dirty: set[str] = set()
