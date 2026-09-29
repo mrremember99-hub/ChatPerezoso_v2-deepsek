@@ -286,8 +286,12 @@ class ContextWindow:
         note_tokens = self.estimate_tokens(note)
         content_budget = max(0, max_tokens - note_tokens)
         if content_budget == 0:
-            # Solo cabe la nota. Devolverla sola es mejor que devolver
-            # el texto original sin recortar.
+            # La nota sola ocupa todo el presupuesto (o mas). Si
+            # excede (note_tokens > max_tokens), "" es lo unico que
+            # respeta el contrato de fit(). Si cabe justa, devolverla
+            # es lo mejor disponible.
+            if note_tokens > max_tokens:
+                return ""
             return note.strip()
 
         # Biseccion: mayor n tal que el prefijo de n lineas quepa en
@@ -305,13 +309,33 @@ class ContextWindow:
             else:
                 hi = mid - 1
 
+        # Ajuste final: estimate_tokens no es perfectamente aditivo
+        # (la nota es prosa, el contenido puede ser codigo con ratio
+        # distinto), asi que el prefijo elegido por biseccion + nota
+        # puede exceder max_tokens. Reducir linea a linea hasta que
+        # quepa.
         if best > 0:
-            return text[:prefix_chars[best]] + note
+            candidate = text[:prefix_chars[best]] + note
+            while best > 0 and self.estimate_tokens(candidate) > max_tokens:
+                best -= 1
+                candidate = text[:prefix_chars[best]] + note
+            if self.estimate_tokens(candidate) <= max_tokens:
+                return candidate
 
-        # Ni una sola linea cabe: cortar por caracteres con ratio
-        # conservador de codigo, tambien sobre content_budget.
+        # Ni una linea cabe (o el ajuste la redujo a 0): cortar por
+        # caracteres con ratio conservador de codigo, tambien sobre
+        # content_budget, con el mismo ajuste por desviacion.
         estimated_chars = max(1, int(content_budget * 2.8))
-        return text[:estimated_chars] + note
+        candidate = text[:estimated_chars] + note
+        while estimated_chars > 0 and self.estimate_tokens(candidate) > max_tokens:
+            estimated_chars //= 2
+            candidate = text[:estimated_chars] + note
+        if self.estimate_tokens(candidate) > max_tokens:
+            # Ultimo recurso: la nota sola (cabe por construccion
+            # porque estamos en content_budget>0, i.e. note_tokens
+            # <= max_tokens).
+            return note.strip()
+        return candidate
 
     # -- poda ----------------------------------------------------------------
 
