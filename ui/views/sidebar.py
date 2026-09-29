@@ -261,16 +261,26 @@ class Sidebar(QWidget):
                 for name in names:
                     self.agent_combo.addItem(name)
         else:
+            from PySide6.QtGui import QStandardItemModel
+
             model = self.agent_combo.model()
+            # mypy: QComboBox.model() declara QAbstractItemModel, que
+            # no tiene .item(). En runtime es QStandardItemModel (el
+            # default del combo). isinstance es la forma segura de
+            # acceder al item para deshabilitarlo.
+            std_model = (
+                model if isinstance(model, QStandardItemModel) else None
+            )
             for category, names in categories.items():
                 # Cabecera deshabilitada. El usuario ve la agrupación
                 # pero no puede seleccionarla.
                 header = f"── {category} ──"
                 self.agent_combo.addItem(header)
-                idx = self.agent_combo.count() - 1
-                item = model.item(idx)
-                if item is not None:
-                    item.setEnabled(False)
+                if std_model is not None:
+                    idx = self.agent_combo.count() - 1
+                    item = std_model.item(idx)
+                    if item is not None:
+                        item.setEnabled(False)
                 for name in names:
                     self.agent_combo.addItem(name)
 

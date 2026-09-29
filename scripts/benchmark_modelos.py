@@ -237,7 +237,7 @@ def main() -> int:
     for i, model in enumerate(models, 1):
         print(f"[{i}/{len(models)}] {model}")
         model_results = []
-        for j, spec_factory in enumerate(SUITE, 1):
+        for spec_factory in SUITE:
             spec = spec_factory()
             res = run_test(model, spec)
             model_results.append({**res, "name": spec["name"]})

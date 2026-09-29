@@ -79,7 +79,7 @@ class SidebarV2(Sidebar):
         refresh = QPushButton("actualizar")
         refresh.setObjectName("SecondaryButton")
         refresh.clicked.connect(lambda: self.model_refresh_requested.emit())
-        lay.addWidget(refresh, alignment=Qt.AlignRight)
+        lay.addWidget(refresh, alignment=Qt.AlignmentFlag.AlignRight)
 
         # Caja marron con info del modelo (capabilities + recommendation)
         info_box = QWidget()
@@ -150,14 +150,14 @@ class SidebarV2(Sidebar):
         choose.clicked.connect(
             lambda: self.workspace_change_requested.emit()
         )
-        lay.addWidget(choose, alignment=Qt.AlignHCenter)
+        lay.addWidget(choose, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         # Caja marron con listado de archivos del workspace.
         files_box = QLabel("")
         files_box.setObjectName("BoxContent")
         files_box.setWordWrap(True)
         files_box.setMinimumHeight(120)
-        files_box.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        files_box.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         files_box.setContentsMargins(8, 6, 8, 6)
         files_box.setText("(vacio)")
         self._files_box = files_box
@@ -180,4 +180,4 @@ class SidebarV2(Sidebar):
         clear = QPushButton("nuevo chat")
         clear.setObjectName("PrimaryButton")
         clear.clicked.connect(lambda: self.clear_chat_requested.emit())
-        root.addWidget(clear, alignment=Qt.AlignHCenter)
+        root.addWidget(clear, alignment=Qt.AlignmentFlag.AlignHCenter)

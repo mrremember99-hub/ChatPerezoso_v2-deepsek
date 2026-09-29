@@ -179,7 +179,12 @@ class MCPToolBridge:
                     close()
         else:
             server_id = str(server_id).strip()
-            client = self._servers.pop(server_id, None)
+            # mypy: pop(key, None) sobre dict[str, MCPClient] no acepta
+            # None como default. Semantica identica con try/except.
+            try:
+                client = self._servers.pop(server_id)
+            except KeyError:
+                client = None
             if client is not None:
                 close = getattr(client, "close", None)
                 if close is not None:

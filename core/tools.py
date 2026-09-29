@@ -493,7 +493,7 @@ class ToolRegistry:
             if field not in arguments:
                 return f"ERROR: falta el argumento requerido: {field}"
 
-        for field, value in arguments.items():
+        for field in arguments:
             if field not in spec["properties"]:
                 return f"ERROR: argumento no permitido para {name}: {field}"
 

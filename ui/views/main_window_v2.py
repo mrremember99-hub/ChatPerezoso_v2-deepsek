@@ -57,7 +57,7 @@ class _Header(QWidget):
         if theme_v2.SLOTH_SVG.exists():
             renderer = QSvgRenderer(str(theme_v2.SLOTH_SVG))
             pm = QPixmap(56, 56)
-            pm.fill(Qt.transparent)
+            pm.fill(Qt.GlobalColor.transparent)
             from PySide6.QtGui import QPainter
             painter = QPainter(pm)
             renderer.render(painter)
@@ -93,7 +93,7 @@ class MainWindowV2(QMainWindow):
         self._header = _Header()
         outer.addWidget(self._header)
 
-        splitter = QSplitter(Qt.Horizontal)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(6)
         outer.addWidget(splitter, 1)

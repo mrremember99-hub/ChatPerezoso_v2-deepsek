@@ -104,8 +104,7 @@ def _sanitize(raw: str) -> str:
     # anterior (por ejemplo, un lenguaje con caracteres raros que el
     # regex no capturó), lo dejamos plano.
     raw = re.sub(r'<code class="[^"]*">', "<code>", raw)
-    raw = raw.replace("<br/>", "<br>").replace("<br />", "<br>")
-    return raw
+    return raw.replace("<br/>", "<br>").replace("<br />", "<br>")
 
 
 def _highlight_code_block(match: re.Match) -> str:

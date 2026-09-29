@@ -45,6 +45,21 @@ verificador = "plugins.verificador:VerificadorProvider"
 [tool.setuptools.packages.find]
 include = ["core*", "ui*", "plugins*", "scripts*"]
 
+[tool.mypy]
+# No analizamos scripts/: tienen imports relativos que mypy no
+# resuelve sin --explicit-package-bases, y no aportan al tipo de
+# core/ui/plugins.
+files = ["core", "ui", "plugins"]
+# Los tests usan fakes que no cumplen los Protocol al 100%. El codigo
+# de produccion si es estricto.
+exclude = ["^tests/", "^scripts/"]
+
+[[tool.mypy.overrides]]
+# re2 no expone py.typed y no tiene stubs publicados. Es un modulo
+# opcional (fallback a regex con timeout si no esta).
+module = ["re2"]
+ignore_missing_imports = true
+
 [tool.pyright]
 include = ["core", "ui", "plugins", "scripts", "tests"]
 exclude = [
