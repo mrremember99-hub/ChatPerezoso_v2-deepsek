@@ -148,6 +148,12 @@ class RagIndex:
 
     @property
     def con(self) -> sqlite3.Connection:
+        """Conexion compartida con AstIndex.
+
+        Preferir los helpers `ast_index.cursor()` / `ast_index.commit()`
+        que ya toman el lock. Si se accede directamente, envolver en
+        `with self.ast_index.lock:`.
+        """
         return self.ast_index.con
 
     # -- indexado ------------------------------------------------------------
@@ -164,7 +170,6 @@ class RagIndex:
         para y devuelve lo hecho hasta el momento (idempotente:
         volver a llamar continua donde se quedo).
         """
-        cur = self.con.cursor()
         sql = (
             "SELECT s.id, s.file, s.line, s.end_line, s.name, s.kind, "
             "s.signature, s.docstring "
@@ -180,7 +185,9 @@ class RagIndex:
         if limit is not None:
             sql += " LIMIT ?"
             params.append(int(limit))
-        rows = list(cur.execute(sql, params))
+        with self.ast_index.lock:
+            cur = self.con.cursor()
+            rows = list(cur.execute(sql, params))
         if not rows:
             return 0
 
@@ -213,22 +220,23 @@ class RagIndex:
                 break
 
             now = time.time()
-            cur.executemany(
-                "INSERT OR REPLACE INTO embeddings"
-                "(symbol_id, model, dim, vector, indexed_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                [
-                    (
-                        row["id"],
-                        self.model,
-                        len(vec),
-                        np.asarray(vec, dtype=np.float32).tobytes(),
-                        now,
-                    )
-                    for row, vec in zip(batch, vecs, strict=True)
-                ],
-            )
-            self.con.commit()
+            with self.ast_index.lock:
+                cur.executemany(
+                    "INSERT OR REPLACE INTO embeddings"
+                    "(symbol_id, model, dim, vector, indexed_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    [
+                        (
+                            row["id"],
+                            self.model,
+                            len(vec),
+                            np.asarray(vec, dtype=np.float32).tobytes(),
+                            now,
+                        )
+                        for row, vec in zip(batch, vecs, strict=True)
+                    ],
+                )
+                self.con.commit()
             indexed += len(batch)
         return indexed
 
@@ -262,7 +270,6 @@ class RagIndex:
             return []
         qvec = np.asarray(qvec_list[0], dtype=np.float32)
 
-        cur = self.con.cursor()
         sql = (
             "SELECT s.id, s.file, s.line, s.end_line, s.name, s.kind, "
             "s.signature, s.docstring, e.vector, e.dim "
@@ -273,7 +280,9 @@ class RagIndex:
         if kind:
             sql += " AND s.kind = ?"
             params.append(kind)
-        rows = list(cur.execute(sql, params))
+        with self.ast_index.lock:
+            cur = self.con.cursor()
+            rows = list(cur.execute(sql, params))
         if not rows:
             return []
 
@@ -339,14 +348,15 @@ class RagIndex:
         reindexar. Util si quieres forzar reindexado puntual sin
         tocar el AST.
         """
-        cur = self.con.cursor()
-        cur.execute(
-            "DELETE FROM embeddings WHERE symbol_id IN "
-            "(SELECT id FROM symbols WHERE file = ?)",
-            (rel_path,),
-        )
-        n = cur.rowcount
-        self.con.commit()
+        with self.ast_index.lock:
+            cur = self.con.cursor()
+            cur.execute(
+                "DELETE FROM embeddings WHERE symbol_id IN "
+                "(SELECT id FROM symbols WHERE file = ?)",
+                (rel_path,),
+            )
+            n = cur.rowcount
+            self.con.commit()
         return int(n)
 
     def cleanup_orphans(self) -> int:
@@ -356,13 +366,14 @@ class RagIndex:
         algo se desincroniza (crash a mitad de borrado, migracion
         interrumpida), esto limpia.
         """
-        cur = self.con.cursor()
-        cur.execute(
-            "DELETE FROM embeddings WHERE symbol_id NOT IN "
-            "(SELECT id FROM symbols)"
-        )
-        n = cur.rowcount
-        self.con.commit()
+        with self.ast_index.lock:
+            cur = self.con.cursor()
+            cur.execute(
+                "DELETE FROM embeddings WHERE symbol_id NOT IN "
+                "(SELECT id FROM symbols)"
+            )
+            n = cur.rowcount
+            self.con.commit()
         return int(n)
 
     def stats(self) -> dict:
@@ -373,21 +384,22 @@ class RagIndex:
         indexar. Si quieres el total bruto, mira
         ``ast_index.stats()``.
         """
-        cur = self.con.cursor()
-        total_sym = int(
-            cur.execute(
-                "SELECT COUNT(*) FROM symbols "
-                "WHERE file NOT LIKE 'tests/%' "
-                "  AND file NOT LIKE '%test_%' "
-                "  AND kind != 'constant'"
-            ).fetchone()[0]
-        )
-        total_emb = int(
-            cur.execute(
-                "SELECT COUNT(*) FROM embeddings WHERE model = ?",
-                (self.model,),
-            ).fetchone()[0]
-        )
+        with self.ast_index.lock:
+            cur = self.con.cursor()
+            total_sym = int(
+                cur.execute(
+                    "SELECT COUNT(*) FROM symbols "
+                    "WHERE file NOT LIKE 'tests/%' "
+                    "  AND file NOT LIKE '%test_%' "
+                    "  AND kind != 'constant'"
+                ).fetchone()[0]
+            )
+            total_emb = int(
+                cur.execute(
+                    "SELECT COUNT(*) FROM embeddings WHERE model = ?",
+                    (self.model,),
+                ).fetchone()[0]
+            )
         return {
             "root": str(self.root),
             "model": self.model,

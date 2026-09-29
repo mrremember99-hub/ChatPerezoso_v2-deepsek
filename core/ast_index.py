@@ -27,6 +27,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -270,14 +271,16 @@ class AstIndex:
         self.root = Path(root).resolve()
         self.db_path = Path(db_path) if db_path else cache_path_for(self.root)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        # X2.3a (auditoria externa 2026-09-29, P1#4): check_same_thread
-        # explicito. Es el default de sqlite3, pero lo dejamos escrito
-        # porque el contrato de get_index() asume que la instancia vive
-        # en un unico hilo. Si en el futuro se necesita acceso desde
-        # varios, hay que añadir un lock propio o serializar via cola.
+        # OVERPAPER run #1 (2026-09-29): acceso multi-thread.
+        # check_same_thread=False + lock propio. threadsafety=3
+        # (serialized) del modulo C NO protege el wrapper Python:
+        # dos threads llamando .cursor() a la vez provocan
+        # InterfaceError('bad parameter or other API misuse').
+        # El RLock serializa TODAS las operaciones sobre self._con.
+        self._lock = threading.RLock()
         self._con = sqlite3.connect(
             str(self.db_path),
-            check_same_thread=True,
+            check_same_thread=False,
         )
         self._con.row_factory = sqlite3.Row
         self._ensure_schema()
@@ -286,7 +289,8 @@ class AstIndex:
     # ── Schema ────────────────────────────────────────────────
 
     def _ensure_schema(self) -> None:
-        cur = self._con.cursor()
+        with self._lock:
+            cur = self._con.cursor()
         cur.executescript(
             """
             CREATE TABLE IF NOT EXISTS meta (
@@ -412,12 +416,13 @@ class AstIndex:
                 if p.is_file() and p.suffix.lower() == ".py":
                     disk_paths[self._rel(p)] = p
 
-        # Archivos indexados actualmente.
-        cur = self._con.cursor()
-        known = {
-            row["path"]: row["mtime"]
-            for row in cur.execute("SELECT path, mtime FROM files")
-        }
+        # Archivos indexados actualmente (bajo lock).
+        with self._lock:
+            cur = self._con.cursor()
+            known = {
+                row["path"]: row["mtime"]
+                for row in cur.execute("SELECT path, mtime FROM files")
+            }
 
         touched = 0
 
@@ -439,7 +444,8 @@ class AstIndex:
                 touched += 1
 
         self._dirty.clear()
-        self._con.commit()
+        with self._lock:
+            self._con.commit()
         return touched
 
     def search(
@@ -468,7 +474,9 @@ class AstIndex:
         sql += " ORDER BY file, line LIMIT ?"
         params.append(int(limit))
 
-        cur = self._con.cursor()
+        with self._lock:
+            cur = self._con.cursor()
+            rows = list(cur.execute(sql, params))
         return [
             Symbol(
                 name=row["name"],
@@ -478,7 +486,7 @@ class AstIndex:
                 signature=row["signature"],
                 docstring=row["docstring"],
             )
-            for row in cur.execute(sql, params)
+            for row in rows
         ]
 
     def interface_lines(
@@ -499,14 +507,15 @@ class AstIndex:
         Devuelve [] si el archivo no esta indexado o no tiene simbolos
         publicos. En ese caso el llamante cae al preview de texto.
         """
-        cur = self._con.cursor()
-        rows = list(
-            cur.execute(
-                "SELECT name, kind, line, signature FROM symbols "
-                "WHERE file = ? ORDER BY line",
-                (rel_path,),
+        with self._lock:
+            cur = self._con.cursor()
+            rows = list(
+                cur.execute(
+                    "SELECT name, kind, line, signature FROM symbols "
+                    "WHERE file = ? ORDER BY line",
+                    (rel_path,),
+                )
             )
-        )
         out: list[str] = []
         for row in rows:
             if len(out) >= max_symbols:
@@ -534,9 +543,10 @@ class AstIndex:
 
     def stats(self) -> dict:
         """Contadores para diagnostico."""
-        cur = self._con.cursor()
-        n_sym = cur.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
-        n_files = cur.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+        with self._lock:
+            cur = self._con.cursor()
+            n_sym = cur.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
+            n_files = cur.execute("SELECT COUNT(*) FROM files").fetchone()[0]
         return {
             "db_path": str(self.db_path),
             "root": str(self.root),
@@ -546,19 +556,45 @@ class AstIndex:
         }
 
     @property
-    def con(self) -> sqlite3.Connection:
-        """Conexion SQLite subyacente.
+    def lock(self) -> threading.RLock:
+        """Lock que serializa el acceso a la conexion.
 
-        Publica para que otros modulos (rag_index) usen el mismo
-        schema sin abrir una segunda conexion.
+        Expuesto para que rag_index pueda envolver sus propias
+        operaciones sin abrir una segunda conexion.
+        """
+        return self._lock
+
+    @contextmanager
+    def cursor(self):
+        """Cursor bajo lock. Uso recomendado para lecturas."""
+        with self._lock:
+            cur = self._con.cursor()
+            try:
+                yield cur
+            finally:
+                cur.close()
+
+    def commit(self) -> None:
+        """Commit bajo lock."""
+        with self._lock:
+            self._con.commit()
+
+    @property
+    def con(self) -> sqlite3.Connection:
+        """Conexion SQLite subyacente (sin lock).
+
+        Preferir `cursor()` / `commit()`. Se mantiene por
+        compatibilidad; el llamante debe envolver su acceso en
+        `self.lock` o usar los helpers.
         """
         return self._con
 
     def close(self) -> None:
-        try:
-            self._con.close()
-        except sqlite3.Error:
-            pass
+        with self._lock:
+            try:
+                self._con.close()
+            except sqlite3.Error:
+                pass
 
     def __enter__(self) -> AstIndex:
         return self
@@ -575,35 +611,38 @@ class AstIndex:
             return str(path)
 
     def _delete_file(self, rel: str) -> None:
-        cur = self._con.cursor()
-        # C2a: borrar embeddings de los simbolos de este archivo.
-        # Evita huerfanos: si el archivo se borra o cambia, sus
-        # vectores dejan de tener sentido.
-        cur.execute(
-            "DELETE FROM embeddings WHERE symbol_id IN "
-            "(SELECT id FROM symbols WHERE file = ?)",
-            (rel,),
-        )
-        cur.execute("DELETE FROM symbols WHERE file = ?", (rel,))
-        cur.execute("DELETE FROM files WHERE path = ?", (rel,))
+        with self._lock:
+            cur = self._con.cursor()
+            # C2a: borrar embeddings de los simbolos de este archivo.
+            # Evita huerfanos: si el archivo se borra o cambia, sus
+            # vectores dejan de tener sentido.
+            cur.execute(
+                "DELETE FROM embeddings WHERE symbol_id IN "
+                "(SELECT id FROM symbols WHERE file = ?)",
+                (rel,),
+            )
+            cur.execute("DELETE FROM symbols WHERE file = ?", (rel,))
+            cur.execute("DELETE FROM files WHERE path = ?", (rel,))
 
     def _index_file(self, abs_path: Path, rel: str, mtime: float) -> None:
         self._delete_file(rel)
+        # extract_symbols es CPU puro (ast.parse), fuera del lock.
         syms = extract_symbols(abs_path, self.root)
-        cur = self._con.cursor()
-        if syms:
-            cur.executemany(
-                "INSERT OR REPLACE INTO symbols"
-                "(file, line, name, kind, signature, docstring, end_line) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [
-                    (s.file, s.line, s.name, s.kind, s.signature,
-                     s.docstring, s.end_line)
-                    for s in syms
-                ],
+        with self._lock:
+            cur = self._con.cursor()
+            if syms:
+                cur.executemany(
+                    "INSERT OR REPLACE INTO symbols"
+                    "(file, line, name, kind, signature, docstring, end_line) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        (s.file, s.line, s.name, s.kind, s.signature,
+                         s.docstring, s.end_line)
+                        for s in syms
+                    ],
+                )
+            cur.execute(
+                "INSERT OR REPLACE INTO files(path, mtime, indexed_at) "
+                "VALUES (?, ?, ?)",
+                (rel, mtime, time.time()),
             )
-        cur.execute(
-            "INSERT OR REPLACE INTO files(path, mtime, indexed_at) "
-            "VALUES (?, ?, ?)",
-            (rel, mtime, time.time()),
-        )
