@@ -113,6 +113,9 @@ def main() -> int:
     p.add_argument("--skip-renderer", action="store_true")
     args = p.parse_args()
 
+    if args.repeats < 1:
+        p.error("--repeats debe ser >= 1")
+
     _setup_qt()
 
     print(f"Modelo:       {args.model}")

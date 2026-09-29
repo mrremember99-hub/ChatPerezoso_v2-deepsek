@@ -102,6 +102,9 @@ def main() -> int:
     p.add_argument("--repeats", type=int, default=50)
     args = p.parse_args()
 
+    if args.repeats < 1:
+        p.error("--repeats debe ser >= 1")
+
     print(f"Turnos por historial: {args.turns}")
     print(f"Límite de contexto:   {args.limit} tokens")
     print()

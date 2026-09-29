@@ -89,6 +89,11 @@ def main() -> int:
     p.add_argument("--repeats", type=int, default=3)
     args = p.parse_args()
 
+    if args.repeats < 1:
+        p.error("--repeats debe ser >= 1")
+    if args.chunk_size < 1:
+        p.error("--chunk-size debe ser >= 1")
+
     _setup_qt()
 
     print(f"deltas por muestra:  {args.deltas}")
