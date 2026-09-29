@@ -74,12 +74,87 @@ garantía si se añade un nuevo cliente.
 `cancel_event: threading.Event` se propaga hasta el cliente. Si el
 usuario cancela el diálogo, el proceso se aborta.
 
+## Autopilot + allowlist (Bloque E)
+
+Cuando `auto_approve_tools` y `auto_approve_shell` estan activos a la
+vez, `ejecutar_comando` se auto-aprueba **solo si el comando pasa la
+allowlist** (`plugins/shell/allowlist.py`). Un comando fuera de la
+lista **degrada a confirmacion manual**: el usuario ve el dialogo
+normal, no se bloquea.
+
+### Motivo
+
+Sin la allowlist, ese par de flags era "el modelo puede ejecutar
+cualquier binario del PATH sin preguntar" — incluido `rm`, `mv`,
+`git push` o `pip install`. Pensados para iterar rapido con `pytest`
+y `ls`, activaban en realidad un piloto automatico sin freno.
+
+Con la allowlist, el par de flags significa "auto-aprobar los
+comandos de lectura y de test, seguir preguntando por lo demas".
+
+### Que se auto-aprueba
+
+- **Filesystem read-only**: `ls`, `cat`, `head`, `tail`, `wc`,
+  `grep`, `find` (sin `-exec`/`-delete`/`-fprint*`), `file`,
+  `which`, `diff`, `tree`, `pwd`, `echo`, `stat`, `du`, `df`,
+  `basename`, `dirname`, `readlink`, `realpath`, `date`, `uname`,
+  `whoami`, `id`.
+- **Tests / ejecucion controlada**: `pytest`, `python`, `python3`
+  (rechaza `-c` y `-i`; `-m` solo modulos de la lista blanca:
+  `pytest`, `unittest`, `json.tool`, `pydoc`).
+- **git read-only**: `status`, `log`, `diff`, `show`, `branch`,
+  `remote`, `config`, `rev-parse`, `ls-files`, `blame`, `describe`,
+  `tag`, `stash` (sin args o con `list`).
+
+### Que NO se auto-aprueba (aunque el par de flags este ON)
+
+- **Mutantes del filesystem**: `rm`, `mv`, `cp`, `chmod`, `chown`,
+  `sed -i`, `sort -o`, `uniq` (con dos args), `tee`.
+- **Red**: `curl`, `wget`.
+- **Instalacion**: `pip install`, `npm install`.
+- **Escalada**: `sudo`, `su`, `doas`.
+- **git mutante**: `push`, `reset`, `checkout`, `clean`, `commit`,
+  `rebase`, `merge`, `stash drop/pop/apply`.
+- **Metacaracteres**: `;`, `|`, `&&`, `>`, `<`, backticks, `$( )`,
+  `${ }` — los rechaza `_validate_command` y por tanto tambien la
+  allowlist.
+- **Bypass conocidos**: `env VAR=x ls` (lanza otro comando),
+  `python -c ...` (codigo inline), `find . -exec ...` (ejecuta
+  comandos), `sort -o out.txt` (escribe fichero).
+
+### Como se degrada
+
+No es bloqueo: es degradacion a confirmacion. El worker calcula
+`auto` con `_is_auto_approved`, y si la tool es `ejecutar_comando` y
+`is_command_allowed(command)` devuelve False, vuelve a
+`auto = False`. El flujo sigue como si autopilot estuviera OFF para
+ese comando concreto: aparece el dialogo de confirmacion de siempre.
+
+Eso evita dos males: por un lado, no rompe la sesion del usuario con
+un "comando bloqueado" criptico; por otro, no auto-aprueba lo que no
+deberia.
+
+### Como extender la allowlist
+
+Editar `plugins/shell/allowlist.py`. Las reglas viven en tres sitios:
+
+- `ALLOWED_PROGRAMS`: el conjunto de programas permitidos.
+- `GIT_READONLY_SUBCOMMANDS`: subcomandos de git permitidos.
+- `PYTHON_READONLY_MODULES`: modulos `python -m X` permitidos.
+
+Los casos especiales (git, python, find) tienen funciones dedicadas
+(`_git_allowed`, `_python_allowed`, `_find_allowed`). Cualquier
+programa que acepte escribir ficheros como efecto colateral
+(`sort -o`, `tee`, `sed -i`) debe quedar fuera, aunque el uso
+"tipico" sea read-only.
+
 ## Resumen del contrato
 
 | Aspecto | Garantía |
 |---|---|
 | Confirmación | **Siempre** obligatoria |
 | Autopilot | Bloqueado para shell |
+| Autopilot + shell ON | Solo allowlist; resto -> confirmacion |
 | Shell injection | Filtro de metacaracteres (bloquea todo) |
 | Timeout | Duro, tope `MAX_TIMEOUT_SECONDS` |
 | Entorno | Reducido, sin variables sensibles |
