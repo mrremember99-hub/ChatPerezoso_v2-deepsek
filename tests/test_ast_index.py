@@ -427,3 +427,111 @@ def _isolate_ast_cache(tmp_path, monkeypatch):
     """
     from core import ast_index as ai
     monkeypatch.setattr(ai, "CACHE_DIR", tmp_path / "ast_cache")
+
+
+# ── C0: end_line ──────────────────────────────────────────────────
+
+
+def test_end_line_funcion():
+    src = "def f():\n    x = 1\n    return x\n"
+    syms = extract_symbols_from_source(src, "x.py")
+    assert syms[0].line == 1
+    assert syms[0].end_line == 3
+
+
+def test_end_line_clase_y_metodo():
+    src = (
+        "class Foo:\n"
+        "    def bar(self, a):\n"
+        "        return a\n"
+    )
+    syms = extract_symbols_from_source(src, "x.py")
+    by_name = {s.name: s for s in syms}
+    assert by_name["Foo"].line == 1
+    assert by_name["Foo"].end_line == 3
+    assert by_name["Foo.bar"].line == 2
+    assert by_name["Foo.bar"].end_line == 3
+
+
+def test_end_line_constante():
+    src = "MAX = 10\n"
+    syms = extract_symbols_from_source(src, "x.py")
+    assert syms[0].line == 1
+    assert syms[0].end_line == 1
+
+
+def test_end_line_symbol_manual_default_cero():
+    # Symbol construido a mano sin end_line: default 0 (compat).
+    s = Symbol(name="x", kind="function", file="a.py", line=1)
+    assert s.end_line == 0
+
+
+def test_end_line_persiste_en_db(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "x.py").write_text(
+        "def f():\n    x = 1\n    return x\n", encoding="utf-8"
+    )
+    db = tmp_path / "idx.sqlite"
+    with AstIndex(ws, db_path=db) as idx:
+        idx.refresh()
+        rows = list(idx._con.execute(
+            "SELECT name, end_line FROM symbols ORDER BY line"
+        ))
+        assert rows[0]["name"] == "f"
+        assert rows[0]["end_line"] == 3
+
+
+def test_migracion_schema_v1_a_v2(tmp_path):
+    """DB creada con schema 1 (sin end_line) -> al abrir con AstIndex
+    v2, se migra: columna end_line anadida + datos vaciados."""
+    import sqlite3
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "x.py").write_text(
+        "def f():\n    return 1\n", encoding="utf-8"
+    )
+    db = tmp_path / "idx.sqlite"
+
+    # Creamos DB manualmente con schema 1 (sin end_line).
+    con = sqlite3.connect(str(db))
+    con.executescript(
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        "CREATE TABLE symbols ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  file TEXT NOT NULL, line INTEGER NOT NULL,"
+        "  name TEXT NOT NULL, kind TEXT NOT NULL,"
+        "  signature TEXT NOT NULL DEFAULT '',"
+        "  docstring TEXT NOT NULL DEFAULT ''"
+        ");"
+        "CREATE TABLE files ("
+        "  path TEXT PRIMARY KEY, mtime REAL NOT NULL,"
+        "  indexed_at REAL NOT NULL"
+        ");"
+        "INSERT INTO meta(key, value) VALUES('schema', '1');"
+        "INSERT INTO symbols(file, line, name, kind) "
+        "VALUES('x.py', 1, 'viejo', 'function');"
+        "INSERT INTO files(path, mtime, indexed_at) "
+        "VALUES('x.py', 0.0, 0.0);"
+    )
+    con.commit()
+    con.close()
+
+    # Abrimos con AstIndex v2: debe migrar y vaciar.
+    with AstIndex(ws, db_path=db) as idx:
+        # El simbolo viejo desaparecio.
+        assert idx.search("viejo") == []
+        # La columna end_line existe.
+        cols = [r[1] for r in idx._con.execute(
+            "PRAGMA table_info(symbols)"
+        )]
+        assert "end_line" in cols
+        # El schema quedo al dia.
+        row = idx._con.execute(
+            "SELECT value FROM meta WHERE key='schema'"
+        ).fetchone()
+        assert int(row[0]) == 2
+        # Y el refresh reparsea el archivo.
+        idx.refresh()
+        assert any(s.name == "f" for s in idx.search("f"))

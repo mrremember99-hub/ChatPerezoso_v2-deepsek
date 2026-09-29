@@ -35,7 +35,7 @@ from .workspace import _SKIP_DIRS
 
 CACHE_DIR = Path.home() / ".cache" / "chatperezoso"
 _MAX_DOCSTRING = 200
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 KIND_CLASS = "class"
 KIND_FUNCTION = "function"
@@ -51,6 +51,9 @@ class Symbol:
     line: int
     signature: str = ""
     docstring: str = ""
+    # C0: linea final (inclusive). 0 = desconocido (compat con
+    # tests que construyen Symbol a mano sin end_line).
+    end_line: int = 0
 
 
 # ── Paths ────────────────────────────────────────────────────────────
@@ -175,6 +178,7 @@ def _extract_from_body(
                 line=node.lineno,
                 signature=sig,
                 docstring=doc,
+                end_line=node.end_lineno or node.lineno,
             )
             yield from _extract_from_body(
                 node.body,
@@ -195,6 +199,7 @@ def _extract_from_body(
                 line=node.lineno,
                 signature=f"def {node.name}({args})",
                 docstring=_first_docstring(node),
+                end_line=node.end_lineno or node.lineno,
             )
         elif isinstance(node, ast.Assign) and not prefix:
             # Constantes top-level: NAME = ... con NAME en mayusculas.
@@ -206,6 +211,7 @@ def _extract_from_body(
                         file=rel_path,
                         line=node.lineno,
                         signature=f"{t.id} = ...",
+                        end_line=node.end_lineno or node.lineno,
                     )
                     break
 
@@ -277,7 +283,8 @@ class AstIndex:
                 name TEXT NOT NULL,
                 kind TEXT NOT NULL,
                 signature TEXT NOT NULL DEFAULT '',
-                docstring TEXT NOT NULL DEFAULT ''
+                docstring TEXT NOT NULL DEFAULT '',
+                end_line INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
             CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file);
@@ -290,10 +297,41 @@ class AstIndex:
             );
             """
         )
-        cur.execute(
-            "INSERT OR IGNORE INTO meta(key, value) VALUES('schema', ?)",
-            (str(_SCHEMA_VERSION),),
-        )
+        # C0: deteccion de schema viejo. Si el meta.schema no cuadra
+        # con _SCHEMA_VERSION, migramos: ALTER TABLE si falta la
+        # columna nueva + vaciado completo para forzar reparseo (los
+        # simbolos viejos tienen end_line=0 y queremos que se llenen).
+        row = cur.execute(
+            "SELECT value FROM meta WHERE key='schema'"
+        ).fetchone()
+        current = int(row["value"]) if row else 0
+
+        if current == 0:
+            # DB nueva: la creamos con el schema actual.
+            cur.execute(
+                "INSERT INTO meta(key, value) VALUES('schema', ?)",
+                (str(_SCHEMA_VERSION),),
+            )
+        elif current < _SCHEMA_VERSION:
+            # Migracion. Solo hay una version previa (1 -> 2), asi que
+            # no hace falta una maquina general de migraciones. Si en
+            # el futuro hay mas, se convierte en una lista de pasos.
+            if current == 1:
+                try:
+                    cur.execute(
+                        "ALTER TABLE symbols ADD COLUMN "
+                        "end_line INTEGER NOT NULL DEFAULT 0"
+                    )
+                except sqlite3.OperationalError:
+                    # Columna ya presente (reintento): ignorar.
+                    pass
+            # Vaciado: la proxima refresh() reparsea todo.
+            cur.execute("DELETE FROM symbols")
+            cur.execute("DELETE FROM files")
+            cur.execute(
+                "UPDATE meta SET value=? WHERE key='schema'",
+                (str(_SCHEMA_VERSION),),
+            )
         self._con.commit()
 
     # ── API publica ───────────────────────────────────────────
@@ -511,10 +549,11 @@ class AstIndex:
         if syms:
             cur.executemany(
                 "INSERT OR REPLACE INTO symbols"
-                "(file, line, name, kind, signature, docstring) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(file, line, name, kind, signature, docstring, end_line) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
-                    (s.file, s.line, s.name, s.kind, s.signature, s.docstring)
+                    (s.file, s.line, s.name, s.kind, s.signature,
+                     s.docstring, s.end_line)
                     for s in syms
                 ],
             )
