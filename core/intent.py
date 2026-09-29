@@ -95,6 +95,22 @@ _CONTINUATIONS: frozenset[str] = frozenset({
 })
 
 
+# X1.3 (auditoria externa 2026-09-29, P1#2): negaciones cortas.
+# is_short_confirmation acepta cualquier frase <=4 tokens que
+# contenga una palabra de _CONFIRMATIONS. "no, claro" pasaba por
+# "claro". Estas palabras al INICIO de la frase la descalifican
+# como confirmacion.
+_NEGATIONS: frozenset[str] = frozenset({
+    "no", "nunca", "jamas", "jamás",
+    "tampoco", "nada",
+    "cancela", "cancelar", "cancelalo", "cancelala",
+    "cancélalo", "cancélala",
+    "para", "parar", "paralo", "parala",
+    "espera", "esperar", "esperate", "espérate",
+    "alto", "stop",
+})
+
+
 # F6 (2026-09-27): post-procesado sobre simplemma. simplemma no
 # tiene POS tagging, asi que falla con sustantivos verbales,
 # participios irregulares y algunos encliticos.
@@ -362,9 +378,13 @@ class ToolIntentGate:
         norm = text.strip().lower().rstrip(".!,;:")
         if not norm:
             return False
+        # X1.3: si la frase empieza por negacion, no es confirmacion
+        # aunque contenga una palabra de _CONFIRMATIONS ("no, claro").
+        tokens = norm.split()
+        if tokens and tokens[0].strip(".!,;:") in _NEGATIONS:
+            return False
         if norm in _CONFIRMATIONS:
             return True
-        tokens = norm.split()
         if len(tokens) <= 4 and any(
             t.strip(".!,;:") in _CONFIRMATIONS for t in tokens
         ):

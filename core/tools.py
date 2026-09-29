@@ -10,6 +10,23 @@ from .workspace import Workspace, WorkspaceError
 logger = logging.getLogger(__name__)
 
 
+# Tools que requieren confirmacion explicita del usuario antes de
+# ejecutarse (via ToolRegistry.call(allow_destructive=False)).
+#
+# X1.2 (auditoria externa 2026-09-29, P1#1): por que NO estan
+# editar_archivo ni insertar_en_archivo:
+#
+#   - escribir_archivo reescribe el archivo entero. Un error del
+#     modelo borra el contenido completo.
+#   - crear_archivo/crear_carpeta/borrar_archivo son operaciones de
+#     creacion/borrado: irreversibles o casi.
+#   - editar_archivo exige old_string exacto y falla si no aparece.
+#     No puede vaciar un archivo, solo sustituir fragmentos concretos.
+#   - insertar_en_archivo anade lineas; no destruye.
+#
+# El riesgo de destruccion total distingue a escribir_archivo de
+# editar/insertar. Si en el futuro el modo de edicion cambia (p. ej.
+# edicion por rango sin validacion), revisar esta decision.
 _CONFIRMATION_REQUIRED = frozenset(
     {"crear_archivo", "crear_carpeta", "escribir_archivo", "borrar_archivo"}
 )

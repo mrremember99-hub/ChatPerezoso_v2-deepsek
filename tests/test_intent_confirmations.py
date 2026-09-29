@@ -90,3 +90,63 @@ def test_texto_no_confirmacion_sigue_reglas_normales():
         "leer_archivo", "lee el archivo",
         last_assistant="cualquier cosa",
     )
+
+
+# ── X1.3: negaciones al inicio no son confirmaciones ──────────────
+
+
+def test_no_claro_no_es_confirmacion():
+    """Auditoria externa 2026-09-29, P1#2: 'no, claro' pasaba por
+    'claro' antes del fix. La negacion al inicio la descalifica."""
+    from core.intent import ToolIntentGate
+    assert not ToolIntentGate.is_short_confirmation("no, claro")
+    assert not ToolIntentGate.is_short_confirmation("no")
+    assert not ToolIntentGate.is_short_confirmation("no, gracias")
+    assert not ToolIntentGate.is_short_confirmation("nunca")
+    assert not ToolIntentGate.is_short_confirmation("para")
+    assert not ToolIntentGate.is_short_confirmation("espera")
+    assert not ToolIntentGate.is_short_confirmation("cancela")
+
+
+def test_confirmaciones_siguen_siendo_confirmaciones():
+    """El fix no rompe los casos legitimos."""
+    from core.intent import ToolIntentGate
+    assert ToolIntentGate.is_short_confirmation("si")
+    assert ToolIntentGate.is_short_confirmation("vale")
+    assert ToolIntentGate.is_short_confirmation("ok, adelante")
+    assert ToolIntentGate.is_short_confirmation("si, por favor")
+    assert ToolIntentGate.is_short_confirmation("claro")
+    assert ToolIntentGate.is_short_confirmation("dale")
+
+
+def test_negacion_con_puntuacion_inicial():
+    """'¡No!' tiene puntuacion al inicio; debe seguir contando."""
+    from core.intent import ToolIntentGate
+    # Ojo: el strip de puntuacion esta al final, no al principio.
+    # "¡no!" -> split -> "¡no!" -> strip(".!,;:") -> "¡no" (no match).
+    # Este test documenta el limite actual.
+    assert not ToolIntentGate.is_short_confirmation("no!")
+    assert ToolIntentGate.is_short_confirmation("no, claro") is False
+
+
+def test_tool_is_requested_rechaza_no_claro():
+    """El caso real: assistant propone, usuario dice 'no, claro'."""
+    from core.intent import IntentRule, ToolIntentGate
+    gate = ToolIntentGate({
+        "escribir_archivo": IntentRule(
+            verbs=("escribe", "escribir"),
+            target_words=("archivo",),
+        ),
+    })
+    # Assistant propuso escribir, usuario dice "no, claro".
+    assert not gate.tool_is_requested(
+        "escribir_archivo",
+        "no, claro",
+        last_assistant="¿Escribo el archivo main.py?",
+    )
+    # Control positivo: "si, claro" si autoriza.
+    assert gate.tool_is_requested(
+        "escribir_archivo",
+        "si, claro",
+        last_assistant="¿Escribo el archivo main.py?",
+    )

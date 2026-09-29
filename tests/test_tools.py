@@ -230,6 +230,11 @@ def test_editar_archivo_via_registry(tmp_path):
 
 
 def test_editar_archivo_no_requiere_confirmacion(tmp_path):
+    """X1.2: decision deliberada. editar_archivo exige old_string
+    exacto y falla si no aparece; no puede vaciar el archivo entero.
+    A diferencia de escribir_archivo, no hay riesgo de destruccion
+    total. Ver comentario junto a _CONFIRMATION_REQUIRED en
+    core/tools.py."""
     tools = ToolRegistry(Workspace(tmp_path))
     assert not tools.requires_confirmation("editar_archivo")
 
