@@ -86,9 +86,24 @@ def check_workspace() -> bool:
     line("ruta", str(workspace))
     line("existe", "sí" if workspace.exists() else "NO")
     line("es carpeta", "sí" if workspace.is_dir() else "NO")
-    line("legible", "sí" if workspace.is_dir() else "—")
-    line("escribible", "sí" if workspace.is_dir() and _writable(workspace) else "—")
-    return workspace.exists() and workspace.is_dir()
+    line("legible", "sí" if _readable(workspace) else "—")
+    line("escribible", "sí" if _readable(workspace) and _writable(workspace) else "—")
+    return workspace.exists() and workspace.is_dir() and _readable(workspace)
+
+
+def _readable(path: Path) -> bool:
+    """True si path es carpeta y podemos listar su contenido.
+
+    No usamos os.access: con root siempre devuelve True. Probamos
+    listar, que es lo que realmente nos importa.
+    """
+    if not path.is_dir():
+        return False
+    try:
+        next(path.iterdir(), None)
+        return True
+    except OSError:
+        return False
 
 
 def _writable(path: Path) -> bool:
