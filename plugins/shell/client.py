@@ -96,6 +96,12 @@ class ShellClient:
             raise ShellError(f"Comando mal formado: {exc}") from exc
         if not parts:
             raise ShellError("El comando no contiene ningún token válido.")
+        # OVERPAPER run #1: en macOS moderno solo existe python3.
+        # Muchos prompts (incluidos los de prueba) dicen "python" y el
+        # modelo gasta un turno entero aprendiendo el error. Normalizar
+        # aqui ahorra ese turno y hace la tool mas robusta.
+        if parts[0] == "python":
+            parts[0] = "python3"
         try:
             return self._run(parts, work_dir, timeout, cancel_event)
         except FileNotFoundError:
