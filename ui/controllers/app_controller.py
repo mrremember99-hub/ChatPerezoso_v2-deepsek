@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog
 
 from core.agents import Agent, AgentStore
 from core.ast_index import get_index
+from core.rag_index import get_rag_index
 from core.shutdown import (
     SHUTDOWN_BUDGET_SECONDS,
     remaining,
@@ -125,6 +126,9 @@ class AppController(QObject):
         self.tools = ToolRegistry(
             self.workspace,
             ast_index=get_index(self.workspace.root),
+            rag_index=get_rag_index(
+                self.workspace.root, ollama=self.ollama,
+            ),
         )
         self.mcp = MCPToolBridge(self.tools)
 
@@ -591,6 +595,9 @@ class AppController(QObject):
             self.tools = ToolRegistry(
                 self.workspace,
                 ast_index=get_index(self.workspace.root),
+                rag_index=get_rag_index(
+                    self.workspace.root, ollama=self.ollama,
+                ),
             )
             new_bridge = MCPToolBridge(self.tools)
 

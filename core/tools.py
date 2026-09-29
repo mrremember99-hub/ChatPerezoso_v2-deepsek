@@ -208,6 +208,39 @@ _SPECS: tuple[dict[str, Any], ...] = (
         },
         "required": ["query"],
     },
+    {
+        "name": "rag_query",
+        "description": (
+            "Busca fragmentos de codigo por SIGNIFICADO (no por "
+            "nombre). Usala cuando sepas QUE quieres hacer pero no "
+            "como se llama ('donde se valida un usuario', 'como se "
+            "guarda un archivo', 'logica de reintentos'). Devuelve "
+            "los k fragmentos mas similares con archivo:linea. "
+            "Para buscar por nombre exacto usa buscar_simbolo."
+        ),
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": (
+                    "Pregunta o descripcion en lenguaje natural. "
+                    "Ejemplos: 'validacion de credenciales', "
+                    "'guardar archivo en disco', 'parsear JSON'."
+                ),
+            },
+            "k": {
+                "type": "integer",
+                "description": "Numero de resultados (default 5).",
+            },
+            "kind": {
+                "type": "string",
+                "description": (
+                    "Opcional: filtra por tipo. Valores: "
+                    "class | function | method | constant."
+                ),
+            },
+        },
+        "required": ["query"],
+    },
 )
 
 
@@ -348,6 +381,30 @@ _RULES: dict[str, IntentRule] = {
             "definición", "definicion", "variable",
         ),
     ),
+    # C3a: rag_query busca por SIGNIFICADO. Acepta preguntas abiertas
+    # ("como se guarda un archivo") porque el usuario no sabe el
+    # nombre. Requiere target code-related para no dispararse con
+    # "como se hace una tortilla".
+    "rag_query": IntentRule(
+        # Verbos especificos de busqueda. No incluimos "que"/"como"
+        # porque aparecen en cualquier texto español y dispararian
+        # el gate con "sigue con lo que estabas haciendo" o
+        # "¿Que hora es?". Los tests de intent_continuations lo
+        # detectaron (C3a).
+        verbs=(
+            "busca", "buscar", "encuentra", "encontrar",
+            "localiza", "localizar",
+            "dónde", "donde", "dónde está", "donde esta",
+        ),
+        target_words=(
+            "código", "codigo", "función", "funcion",
+            "clase", "método", "metodo",
+            "lógica", "logica",
+            "implementación", "implementacion",
+            "validación", "validacion",
+            "guardado", "lectura", "escritura",
+        ),
+    ),
 }
 
 
@@ -357,6 +414,7 @@ class ToolRegistry:
         workspace: Workspace,
         *,
         ast_index: Any = None,
+        rag_index: Any = None,
     ):
         self.workspace = workspace
         self._spec_by_name = {spec["name"]: spec for spec in _SPECS}
@@ -364,6 +422,9 @@ class ToolRegistry:
         # se respeta (tests). Si no, se crea en la primera llamada
         # a buscar_simbolo.
         self._ast_index = ast_index
+        # C3a: RagIndex opcional. Si no se inyecta, rag_query
+        # devuelve un error controlado (no rompe el resto del tools).
+        self._rag_index = rag_index
 
     def definitions(self) -> list[dict[str, Any]]:
         return [
@@ -517,6 +578,8 @@ class ToolRegistry:
             return self.workspace.delete_file(arguments["path"])
         if name == "buscar_simbolo":
             return self._buscar_simbolo(arguments)
+        if name == "rag_query":
+            return self._rag_query(arguments)
         return f"ERROR: herramienta desconocida: {name}"
 
     def _get_ast_index(self):
@@ -556,6 +619,40 @@ class ToolRegistry:
             lines.append(
                 f"  {s.file}:{s.line}  [{s.kind}]  {s.name}  "
                 f"{s.signature}{doc}"
+            )
+        return "\n".join(lines)
+
+    def _rag_query(self, arguments: dict[str, Any]) -> str:
+        """Implementacion de la tool rag_query."""
+        if self._rag_index is None:
+            return (
+                "ERROR: rag_query no disponible: el indice RAG no "
+                "esta inicializado. Usa buscar_simbolo para buscar "
+                "por nombre."
+            )
+        query = arguments["query"]
+        k = int(arguments.get("k") or 5)
+        kind = arguments.get("kind")
+        valid_kinds = {"class", "function", "method", "constant"}
+        if kind and kind not in valid_kinds:
+            return (
+                f"ERROR: kind debe ser uno de: "
+                f"{', '.join(sorted(valid_kinds))}"
+            )
+        if k <= 0:
+            k = 5
+        hits = self._rag_index.query(query, k=k, kind=kind)
+        if not hits:
+            return f"Sin resultados para {query!r}."
+        lines = [
+            f"Encontrados {len(hits)} fragmento(s) para {query!r}:"
+        ]
+        for h in hits:
+            s = h.symbol
+            doc = f"  # {s.docstring}" if s.docstring else ""
+            lines.append(
+                f"  {h.score:.3f}  {s.file}:{s.line}  [{s.kind}]  "
+                f"{s.name}  {s.signature}{doc}"
             )
         return "\n".join(lines)
 

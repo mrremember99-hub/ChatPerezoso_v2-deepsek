@@ -38,6 +38,7 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "listar_carpeta",
     "buscar_en_workspace",
     "buscar_simbolo",
+    "rag_query",
     # Git (solo lectura).
     "git_status",
     "git_diff",
