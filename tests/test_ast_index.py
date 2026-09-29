@@ -482,7 +482,7 @@ def test_end_line_persiste_en_db(tmp_path):
         assert rows[0]["end_line"] == 3
 
 
-def test_migracion_schema_v1_a_v2(tmp_path):
+def test_migracion_schema_v1_a_vN(tmp_path):
     """DB creada con schema 1 (sin end_line) -> al abrir con AstIndex
     v2, se migra: columna end_line anadida + datos vaciados."""
     import sqlite3
@@ -531,7 +531,145 @@ def test_migracion_schema_v1_a_v2(tmp_path):
         row = idx._con.execute(
             "SELECT value FROM meta WHERE key='schema'"
         ).fetchone()
-        assert int(row[0]) == 2
+        # La migracion v1 -> vN lleva el schema al valor actual.
+        from core.ast_index import _SCHEMA_VERSION
+        assert int(row[0]) == _SCHEMA_VERSION
         # Y el refresh reparsea el archivo.
         idx.refresh()
         assert any(s.name == "f" for s in idx.search("f"))
+
+
+# ── C2a: tabla embeddings ─────────────────────────────────────────
+
+
+def test_schema_v3_tiene_tabla_embeddings(tmp_path):
+    ws = tmp_path / "ws"; ws.mkdir()
+    (ws / "x.py").write_text("def f(): pass\n", encoding="utf-8")
+    with AstIndex(ws, db_path=tmp_path / "idx.sqlite") as idx:
+        cols = [r[1] for r in idx.con.execute(
+            "PRAGMA table_info(embeddings)"
+        )]
+        assert cols == [
+            "symbol_id", "model", "dim", "vector", "indexed_at",
+        ]
+        schema = idx.con.execute(
+            "SELECT value FROM meta WHERE key='schema'"
+        ).fetchone()[0]
+        assert int(schema) == 3
+
+
+def test_schema_v2_a_v3_no_vacia_symbols(tmp_path):
+    """La migracion 2->3 solo anade la tabla embeddings, no toca
+    symbols. Un simbolo existente debe sobrevivir."""
+    import sqlite3
+
+    ws = tmp_path / "ws"; ws.mkdir()
+    (ws / "x.py").write_text(
+        "def f():\n    return 1\n", encoding="utf-8"
+    )
+    db = tmp_path / "idx.sqlite"
+
+    # Simulamos una DB en schema 2 (con end_line, sin embeddings).
+    con = sqlite3.connect(str(db))
+    con.executescript(
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        "CREATE TABLE symbols ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  file TEXT NOT NULL, line INTEGER NOT NULL,"
+        "  name TEXT NOT NULL, kind TEXT NOT NULL,"
+        "  signature TEXT NOT NULL DEFAULT '',"
+        "  docstring TEXT NOT NULL DEFAULT '',"
+        "  end_line INTEGER NOT NULL DEFAULT 0"
+        ");"
+        "CREATE TABLE files ("
+        "  path TEXT PRIMARY KEY, mtime REAL NOT NULL,"
+        "  indexed_at REAL NOT NULL"
+        ");"
+        "INSERT INTO meta(key, value) VALUES('schema', '2');"
+        "INSERT INTO symbols(file, line, name, kind, end_line) "
+        "VALUES('x.py', 1, 'preservado', 'function', 2);"
+        "INSERT INTO files(path, mtime, indexed_at) "
+        "VALUES('x.py', 0.0, 0.0);"
+    )
+    con.commit()
+    con.close()
+
+    # Abrir con AstIndex v3: migra, no vacia.
+    with AstIndex(ws, db_path=db) as idx:
+        # El simbolo viejo sigue ahi (no se vacio).
+        assert any(s.name == "preservado" for s in idx.search("preservado"))
+        # Y existe embeddings.
+        cols = [r[1] for r in idx.con.execute(
+            "PRAGMA table_info(embeddings)"
+        )]
+        assert "symbol_id" in cols
+        schema = idx.con.execute(
+            "SELECT value FROM meta WHERE key='schema'"
+        ).fetchone()[0]
+        assert int(schema) == 3
+
+
+def test_delete_file_limpia_embeddings_huerfanos(tmp_path):
+    import struct
+
+    ws = tmp_path / "ws"; ws.mkdir()
+    (ws / "x.py").write_text(
+        "def f():\n    return 1\ndef g():\n    return 2\n",
+        encoding="utf-8",
+    )
+    (ws / "y.py").write_text("def h(): pass\n", encoding="utf-8")
+
+    with AstIndex(ws, db_path=tmp_path / "idx.sqlite") as idx:
+        idx.refresh()
+        # Insertamos embeddings para todos.
+        sids = [r[0] for r in idx.con.execute("SELECT id FROM symbols")]
+        blob = struct.pack("3f", 0.1, 0.2, 0.3)
+        for sid in sids:
+            idx.con.execute(
+                "INSERT INTO embeddings"
+                "(symbol_id, model, dim, vector, indexed_at) "
+                "VALUES (?, 'test', 3, ?, 0.0)",
+                (sid, blob),
+            )
+        idx.con.commit()
+        assert idx.con.execute(
+            "SELECT COUNT(*) FROM embeddings"
+        ).fetchone()[0] == 3
+
+        # Borrar x.py: solo debe quedar el embedding de h.
+        idx._delete_file("x.py")
+        idx.con.commit()
+        assert idx.con.execute(
+            "SELECT COUNT(*) FROM embeddings"
+        ).fetchone()[0] == 1
+
+
+def test_delete_file_no_toca_embeddings_de_otros(tmp_path):
+    import struct
+
+    ws = tmp_path / "ws"; ws.mkdir()
+    (ws / "a.py").write_text("def f(): pass\n", encoding="utf-8")
+    (ws / "b.py").write_text("def g(): pass\n", encoding="utf-8")
+
+    with AstIndex(ws, db_path=tmp_path / "idx.sqlite") as idx:
+        idx.refresh()
+        sids = {r["file"]: r["id"] for r in idx.con.execute(
+            "SELECT id, file FROM symbols"
+        )}
+        blob = struct.pack("1f", 1.0)
+        for sid in sids.values():
+            idx.con.execute(
+                "INSERT INTO embeddings"
+                "(symbol_id, model, dim, vector, indexed_at) "
+                "VALUES (?, 'test', 1, ?, 0.0)",
+                (sid, blob),
+            )
+        idx.con.commit()
+
+        idx._delete_file("a.py")
+        idx.con.commit()
+        rows = list(idx.con.execute(
+            "SELECT symbol_id FROM embeddings"
+        ))
+        assert len(rows) == 1
+        assert rows[0][0] == sids["b.py"]

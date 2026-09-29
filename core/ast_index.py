@@ -35,7 +35,7 @@ from .workspace import _SKIP_DIRS
 
 CACHE_DIR = Path.home() / ".cache" / "chatperezoso"
 _MAX_DOCSTRING = 200
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 KIND_CLASS = "class"
 KIND_FUNCTION = "function"
@@ -295,6 +295,18 @@ class AstIndex:
                 mtime REAL NOT NULL,
                 indexed_at REAL NOT NULL
             );
+            -- C2a: embeddings del RAG. Vive aqui (no en rag_index)
+            -- para que ast_index sea el unico dueno del schema y
+            -- _delete_file pueda limpiar huerfanos sin coordinacion.
+            CREATE TABLE IF NOT EXISTS embeddings (
+                symbol_id INTEGER PRIMARY KEY,
+                model TEXT NOT NULL,
+                dim INTEGER NOT NULL,
+                vector BLOB NOT NULL,
+                indexed_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_embeddings_model
+                ON embeddings(model);
             """
         )
         # C0: deteccion de schema viejo. Si el meta.schema no cuadra
@@ -313,9 +325,12 @@ class AstIndex:
                 (str(_SCHEMA_VERSION),),
             )
         elif current < _SCHEMA_VERSION:
-            # Migracion. Solo hay una version previa (1 -> 2), asi que
-            # no hace falta una maquina general de migraciones. Si en
-            # el futuro hay mas, se convierte en una lista de pasos.
+            # Migracion. Hay dos casos historicos:
+            #   v1 -> v2: anade columna end_line a symbols. Requiere
+            #             vaciar la tabla para forzar reparseo (los
+            #             simbolos viejos tienen end_line=0).
+            #   v2 -> v3: anade tabla embeddings. NO requiere vaciar
+            #             (nada cambia en symbols).
             if current == 1:
                 try:
                     cur.execute(
@@ -323,11 +338,11 @@ class AstIndex:
                         "end_line INTEGER NOT NULL DEFAULT 0"
                     )
                 except sqlite3.OperationalError:
-                    # Columna ya presente (reintento): ignorar.
                     pass
-            # Vaciado: la proxima refresh() reparsea todo.
-            cur.execute("DELETE FROM symbols")
-            cur.execute("DELETE FROM files")
+                cur.execute("DELETE FROM symbols")
+                cur.execute("DELETE FROM files")
+            # Nota: la tabla embeddings ya la crea executescript()
+            # de _ensure_schema antes de llegar aqui.
             cur.execute(
                 "UPDATE meta SET value=? WHERE key='schema'",
                 (str(_SCHEMA_VERSION),),
@@ -517,6 +532,15 @@ class AstIndex:
             "dirty": len(self._dirty),
         }
 
+    @property
+    def con(self) -> sqlite3.Connection:
+        """Conexion SQLite subyacente.
+
+        Publica para que otros modulos (rag_index) usen el mismo
+        schema sin abrir una segunda conexion.
+        """
+        return self._con
+
     def close(self) -> None:
         try:
             self._con.close()
@@ -539,6 +563,14 @@ class AstIndex:
 
     def _delete_file(self, rel: str) -> None:
         cur = self._con.cursor()
+        # C2a: borrar embeddings de los simbolos de este archivo.
+        # Evita huerfanos: si el archivo se borra o cambia, sus
+        # vectores dejan de tener sentido.
+        cur.execute(
+            "DELETE FROM embeddings WHERE symbol_id IN "
+            "(SELECT id FROM symbols WHERE file = ?)",
+            (rel,),
+        )
         cur.execute("DELETE FROM symbols WHERE file = ?", (rel,))
         cur.execute("DELETE FROM files WHERE path = ?", (rel,))
 
