@@ -116,10 +116,11 @@ def test_chunk_text_trunca_body():
     # contar de mas (el nombre del simbolo contiene "x" si lo usamos).
     s = Symbol(name="fn", kind="function", file="a.py", line=1,
                end_line=1)
+    from core.rag_index import MAX_BODY_CHARS
     body = "Z" * 5000
     out = _chunk_text(s, body)
     # Exactamente MAX_BODY_CHARS del cuerpo, ni uno mas.
-    assert out.count("Z") == 800
+    assert out.count("Z") == MAX_BODY_CHARS
 
 
 # ── index_pending ─────────────────────────────────────────────────
@@ -377,3 +378,108 @@ def _isolate_ast_cache(tmp_path, monkeypatch):
     yield
     ast_close_all()
     close_all()
+
+
+# ── C5a: prefijos nomic + skip tests ─────────────────────────────
+
+
+def test_prefix_para_nomic_documento():
+    from core.rag_index import _prefix_for, NOMIC_DOC_PREFIX
+    assert _prefix_for("hola", "nomic-embed-text", is_query=False) == \
+        NOMIC_DOC_PREFIX + "hola"
+
+
+def test_prefix_para_nomic_query():
+    from core.rag_index import _prefix_for, NOMIC_QUERY_PREFIX
+    assert _prefix_for("hola", "nomic-embed-text", is_query=True) == \
+        NOMIC_QUERY_PREFIX + "hola"
+
+
+def test_prefix_para_otro_modelo_no_aplica():
+    from core.rag_index import _prefix_for
+    assert _prefix_for("hola", "text-embedding-3-small", is_query=False) == "hola"
+    assert _prefix_for("hola", "text-embedding-3-small", is_query=True) == "hola"
+
+
+def test_index_pending_salta_archivos_de_tests(tmp_path):
+    root = tmp_path / "ws"; root.mkdir()
+    (root / "tests").mkdir()
+    (root / "tests" / "test_foo.py").write_text(
+        "def test_algo(): pass\n", encoding="utf-8"
+    )
+    (root / "core.py").write_text(
+        "def produccion(): pass\n", encoding="utf-8"
+    )
+    from core.ast_index import AstIndex
+    idx = AstIndex(root, db_path=tmp_path / "idx.sqlite")
+    idx.refresh()
+    ollama = FakeOllama()
+    rag = RagIndex(root, ollama=ollama, ast_index=idx)
+    try:
+        n = rag.index_pending()
+        # Solo produccion (no test_algo).
+        assert n == 1
+        st = rag.stats()
+        # stats cuenta symbols sin filtro: 2 (test_algo + produccion).
+        assert st["symbols"] == 2
+        assert st["embedded"] == 1
+    finally:
+        idx.close()
+
+
+def test_index_pending_chunks_llevan_prefijo_nomic(tmp_path):
+    """El embed que se llama desde index_pending debe recibir textos
+    con 'search_document: ' al principio."""
+    root = tmp_path / "ws"; root.mkdir()
+    (root / "x.py").write_text(
+        "def f():\n    '''doc'''\n    return 1\n", encoding="utf-8"
+    )
+    from core.ast_index import AstIndex
+    idx = AstIndex(root, db_path=tmp_path / "idx.sqlite")
+    idx.refresh()
+
+    captured = []
+
+    class CapturingOllama(FakeOllama):
+        def embed(self, texts, **kw):
+            captured.append(list(texts))
+            return super().embed(texts, **kw)
+
+    rag = RagIndex(root, ollama=CapturingOllama(), ast_index=idx)
+    try:
+        rag.index_pending()
+        assert captured, "embed no se llamo"
+        for t in captured[0]:
+            assert t.startswith("search_document: "), t[:60]
+    finally:
+        idx.close()
+
+
+def test_query_lleva_prefijo_nomic(tmp_path):
+    """query() debe embeber 'search_query: <texto>'."""
+    root = tmp_path / "ws"; root.mkdir()
+    (root / "x.py").write_text(
+        "def f():\n    return 1\n", encoding="utf-8"
+    )
+    from core.ast_index import AstIndex
+    idx = AstIndex(root, db_path=tmp_path / "idx.sqlite")
+    idx.refresh()
+
+    seen_queries = []
+
+    class CapturingOllama(FakeOllama):
+        def embed(self, texts, **kw):
+            # Solo capturamos las que empiezan por search_query
+            for t in texts:
+                if t.startswith("search_query: "):
+                    seen_queries.append(t)
+            return super().embed(texts, **kw)
+
+    rag = RagIndex(root, ollama=CapturingOllama(), ast_index=idx)
+    try:
+        rag.index_pending()
+        rag.query("como se guarda")
+        assert seen_queries, "query no se embebio"
+        assert seen_queries[0] == "search_query: como se guarda"
+    finally:
+        idx.close()

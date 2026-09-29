@@ -30,7 +30,19 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "nomic-embed-text"
 DEFAULT_BATCH = 32
-MAX_BODY_CHARS = 800
+MAX_BODY_CHARS = 1200
+
+# C5a: nomic-embed-text esta entrenado con prefijos especificos
+# ("search_document:" para documentos, "search_query:" para queries).
+# Sin ellos pierde ~15-20 puntos de retrieval. Solo aplicamos para
+# modelos que empiezan por "nomic".
+NOMIC_DOC_PREFIX = "search_document: "
+NOMIC_QUERY_PREFIX = "search_query: "
+
+# C5a: no indexar tests por defecto. Sus nombres ("test_foo_...")
+# son descriptivos y dominan las busquedas por significado,
+# desplazando al codigo de produccion.
+_SKIP_INDEX_PREFIXES = ("tests/", "test_")
 
 _RAG_CACHE: dict[Path, "RagIndex"] = {}
 _RAG_CACHE_LOCK = threading.Lock()
@@ -40,6 +52,18 @@ _RAG_CACHE_LOCK = threading.Lock()
 class RagHit:
     symbol: Symbol
     score: float
+
+
+def _prefix_for(text: str, model: str, *, is_query: bool) -> str:
+    """Anade el prefijo correcto segun el modelo de embeddings.
+
+    nomic-embed-text usa "search_document:" / "search_query:".
+    Otros modelos no llevan prefijo (o el prefijo seria ruido).
+    """
+    if not model.startswith("nomic"):
+        return text
+    prefix = NOMIC_QUERY_PREFIX if is_query else NOMIC_DOC_PREFIX
+    return prefix + text
 
 
 def _chunk_text(symbol: Symbol, body: str) -> str:
@@ -112,7 +136,9 @@ class RagIndex:
             "s.signature, s.docstring "
             "FROM symbols s "
             "LEFT JOIN embeddings e ON e.symbol_id = s.id "
-            "WHERE e.symbol_id IS NULL OR e.model != ? "
+            "WHERE (e.symbol_id IS NULL OR e.model != ?) "
+            "  AND s.file NOT LIKE 'tests/%' "
+            "  AND s.file NOT LIKE '%test_%' "
             "ORDER BY s.id"
         )
         params: list[Any] = [self.model]
@@ -129,7 +155,11 @@ class RagIndex:
             batch = rows[i : i + batch_size]
             symbols = [self._row_to_symbol(r) for r in batch]
             chunks = [
-                _chunk_text(s, self._body_for(s, file_cache))
+                _prefix_for(
+                    _chunk_text(s, self._body_for(s, file_cache)),
+                    self.model,
+                    is_query=False,
+                )
                 for s in symbols
             ]
             try:
@@ -186,7 +216,10 @@ class RagIndex:
         if not q:
             return []
         try:
-            qvec_list = self.ollama.embed([q], model=self.model)
+            qvec_list = self.ollama.embed(
+                [_prefix_for(q, self.model, is_query=True)],
+                model=self.model,
+            )
         except OllamaError as exc:
             logger.warning("Embed de query fallo: %s", exc)
             return []
