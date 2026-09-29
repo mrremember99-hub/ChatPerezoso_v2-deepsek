@@ -211,6 +211,15 @@ class MCPClient:
                 workspace_hint = arg
                 break
 
+        if workspace_hint is None:
+            # X1.1 (auditoria externa 2026-09-29): sin un identificador
+            # inequivoco del workspace, no podemos distinguir un
+            # servidor MCP de ESTE proyecto de uno de otro proyecto
+            # del mismo usuario. Preferimos dejar un huerfano a matar
+            # un proceso ajeno. El SDK ya hace SIGTERM al process
+            # group; esto es solo un cleanup de ultimo recurso.
+            return
+
         for proc in psutil.process_iter(["pid", "name", "cmdline"]):
             try:
                 name = (proc.info.get("name") or "").lower()
