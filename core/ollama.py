@@ -652,6 +652,65 @@ class OllamaClient:
             if item.get("name")
         ]
 
+    # -- embeddings (C1, 2026-09-29) ----------------------------------------
+
+    def embed(
+        self,
+        texts: list[str],
+        *,
+        model: str = "nomic-embed-text",
+        timeout: float = 30.0,
+        cancel_event: threading.Event | None = None,
+    ) -> list[list[float]]:
+        """Genera embeddings de ``texts`` con /api/embed.
+
+        Sync (usa el AsyncRunner por debajo). Devuelve una lista de
+        vectores en el mismo orden que ``texts``. Lista vacia si
+        Ollama no devuelve ``embeddings``.
+
+        Modelo por defecto: nomic-embed-text (768 dims). Ver catalogo
+        de modelos en docs/modelos-probados.md.
+        """
+        if not texts:
+            return []
+        try:
+            return self._async_runner.submit(
+                self._embed_async(texts, model, timeout),
+                cancel_event=cancel_event,
+            )
+        except httpx.HTTPError as exc:
+            raise OllamaError(
+                f"No se pudieron generar embeddings: {exc}"
+            ) from exc
+        except TimeoutError as exc:
+            raise OllamaError(
+                "Ollama dejo de responder al generar embeddings."
+            ) from exc
+
+    async def _embed_async(
+        self,
+        texts: list[str],
+        model: str,
+        timeout: float,
+    ) -> list[list[float]]:
+        client = await self._get_client()
+        response = await client.post(
+            f"{self.host}/api/embed",
+            json={"model": model, "input": texts},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        data = response.json()
+        embeddings = data.get("embeddings")
+        if not isinstance(embeddings, list):
+            return []
+        # Cada item deberia ser list[float]. Filtramos None o no-listas.
+        return [
+            [float(x) for x in vec]
+            for vec in embeddings
+            if isinstance(vec, list)
+        ]
+
     def chat(
         self,
         model: str,

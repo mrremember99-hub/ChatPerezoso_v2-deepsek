@@ -787,3 +787,193 @@ def test_tool_system_prompt_mantiene_prohibiciones_clave():
     assert "PROHIBIDAS" in prompt
     assert "Nunca inventes nombres" in prompt
     assert "JSON de herramientas" in prompt
+
+
+# -- embeddings (C1) --------------------------------------------------------
+
+
+class _FakeEmbedResponse:
+    def __init__(self, payload, status=200):
+        self._payload = payload
+        self.status_code = status
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            import httpx
+            raise httpx.HTTPStatusError(
+                "boom", request=None, response=self,
+            )
+
+    def json(self):
+        return self._payload
+
+
+def _install_embed_fake(monkeypatch, *, payload=None, raises=None, assert_payload=None):
+    """Instala un FakeAsyncClient que responde a /api/embed.
+
+    Devuelve una lista donde el cliente guarda cada (url, json) para
+    inspeccionar despues.
+    """
+    import httpx
+
+    calls: list = []
+
+    class FakeAsyncClient:
+        def __init__(self, *a, **k):
+            self.is_closed = False
+
+        async def aclose(self):
+            self.is_closed = True
+
+        async def post(self, url, json=None, timeout=None):
+            calls.append((url, json))
+            if assert_payload is not None:
+                assert_payload(url, json)
+            if raises is not None:
+                raise raises
+            return _FakeEmbedResponse(payload or {})
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    return calls
+
+
+def test_embed_basico(monkeypatch):
+    calls = _install_embed_fake(
+        monkeypatch,
+        payload={"embeddings": [[0.1, 0.2], [0.3, 0.4]]},
+    )
+
+    client = OllamaClient()
+    try:
+        result = client.embed(["hola", "mundo"])
+    finally:
+        client.shutdown()
+
+    assert result == [[0.1, 0.2], [0.3, 0.4]]
+    assert len(calls) == 1
+    url, payload = calls[0]
+    assert url.endswith("/api/embed")
+    assert payload["model"] == "nomic-embed-text"
+    assert payload["input"] == ["hola", "mundo"]
+
+
+def test_embed_modelo_custom(monkeypatch):
+    calls = _install_embed_fake(
+        monkeypatch,
+        payload={"embeddings": [[1.0]]},
+    )
+
+    client = OllamaClient()
+    try:
+        client.embed(["x"], model="otro-embed")
+    finally:
+        client.shutdown()
+
+    assert calls[0][1]["model"] == "otro-embed"
+
+
+def test_embed_lista_vacia_no_llama(monkeypatch):
+    calls = _install_embed_fake(monkeypatch, payload={"embeddings": []})
+
+    client = OllamaClient()
+    try:
+        assert client.embed([]) == []
+    finally:
+        client.shutdown()
+
+    assert calls == []
+
+
+def test_embed_respuesta_sin_embeddings(monkeypatch):
+    _install_embed_fake(monkeypatch, payload={})
+
+    client = OllamaClient()
+    try:
+        assert client.embed(["x"]) == []
+    finally:
+        client.shutdown()
+
+
+def test_embed_embeddings_no_lista(monkeypatch):
+    _install_embed_fake(monkeypatch, payload={"embeddings": "no"})
+
+    client = OllamaClient()
+    try:
+        assert client.embed(["x"]) == []
+    finally:
+        client.shutdown()
+
+
+def test_embed_filtra_vectores_no_lista(monkeypatch):
+    _install_embed_fake(
+        monkeypatch,
+        payload={"embeddings": [[1.0, 2.0], None, "nope", [3.0]]},
+    )
+
+    client = OllamaClient()
+    try:
+        assert client.embed(["a", "b", "c", "d"]) == [[1.0, 2.0], [3.0]]
+    finally:
+        client.shutdown()
+
+
+def test_embed_http_error_lanza_ollama_error(monkeypatch):
+    import httpx as _httpx
+    from core.ollama import OllamaError
+
+    _install_embed_fake(
+        monkeypatch,
+        raises=_httpx.ConnectError("ollama caido"),
+    )
+
+    client = OllamaClient()
+    try:
+        with pytest.raises(OllamaError):
+            client.embed(["x"])
+    finally:
+        client.shutdown()
+
+
+def test_embed_convierte_a_float(monkeypatch):
+    _install_embed_fake(
+        monkeypatch,
+        payload={"embeddings": [[1, 2, 3]]},  # ints
+    )
+
+    client = OllamaClient()
+    try:
+        result = client.embed(["x"])
+    finally:
+        client.shutdown()
+
+    assert result == [[1.0, 2.0, 3.0]]
+    assert all(isinstance(v, float) for v in result[0])
+
+
+def test_embed_timeout_argumento(monkeypatch):
+    """El timeout se propaga a la llamada httpx."""
+    import httpx
+    seen = {}
+
+    class FakeResponse:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return {"embeddings": [[0.0]]}
+
+    class FakeAsyncClient:
+        def __init__(self, *a, **k):
+            self.is_closed = False
+        async def aclose(self): self.is_closed = True
+        async def post(self, url, json=None, timeout=None):
+            seen["timeout"] = timeout
+            return FakeResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    client = OllamaClient()
+    try:
+        client.embed(["x"], timeout=12.5)
+    finally:
+        client.shutdown()
+
+    assert seen["timeout"] == 12.5
