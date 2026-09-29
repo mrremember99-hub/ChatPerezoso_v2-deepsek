@@ -468,18 +468,18 @@ class MCPClient:
         is_error = getattr(result, "is_error", getattr(result, "isError", False))
         prefix = "ERROR MCP: " if is_error else ""
         content = getattr(result, "content", result)
-        if not isinstance(content, list):
-            return prefix + str(content)
-
-        parts: list[str] = []
-        for item in content:
-            if hasattr(item, "text"):
-                parts.append(str(item.text))
-            elif isinstance(item, dict) and "text" in item:
-                parts.append(str(item["text"]))
-            else:
-                parts.append(str(item))
-        text = prefix + "\n".join(parts)
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if hasattr(item, "text"):
+                    parts.append(str(item.text))
+                elif isinstance(item, dict) and "text" in item:
+                    parts.append(str(item["text"]))
+                else:
+                    parts.append(str(item))
+            text = prefix + "\n".join(parts)
+        else:
+            text = prefix + str(content)
         if len(text) > _MAX_RESULT_CHARS:
             text = (
                 text[:_MAX_RESULT_CHARS]
