@@ -262,6 +262,13 @@ class MCPClient:
 
         self._ready.wait(timeout=30)
         if not self._ready.is_set():
+            # X1.5a (auditoria externa 2026-09-29, P2#3): antes solo
+            # levantabamos. El hilo del loop seguia con _async_connect()
+            # pendiente y el subprocess MCP podia quedar huerfano. La
+            # UI ya declaraba error pero el proceso seguia vivo y, con
+            # reintentos, se acumulaban.
+            # close() es idempotente y detiene el loop + subprocess.
+            self.close()
             raise MCPError("Tiempo agotado al iniciar el servidor MCP.")
         if self._startup_error is not None:
             error = self._startup_error

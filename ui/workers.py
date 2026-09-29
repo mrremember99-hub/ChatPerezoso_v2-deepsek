@@ -175,6 +175,7 @@ class MCPWorker(QObject):
             tools = self.client.list_tools()
             self.finished.emit(self.server_id, self.client, tools)
         except MCPError as exc:
+            self._cleanup_client()
             self.error.emit(self.server_id, str(exc))
         except BaseException as exc:
             # Cualquier otra excepcion tambien debe llegar al
@@ -182,10 +183,23 @@ class MCPWorker(QObject):
             # inconsistente: el worker nunca emite signal, el
             # controller cree que sigue conectado, y la UI muestra
             # el servidor como activo mientras las llamadas fallan.
+            self._cleanup_client()
             self.error.emit(
                 self.server_id,
                 f"{type(exc).__name__}: {exc}",
             )
+
+    def _cleanup_client(self) -> None:
+        """X1.5b (auditoria externa 2026-09-29, P2#3): cerrar el
+        cliente MCP si el worker falla. Sin esto, el hilo del loop
+        asyncio y el subprocess MCP sobreviven al QThread.
+        Idempotente y silencioso: no debe tapar el error original."""
+        try:
+            close = getattr(self.client, "close", None)
+            if callable(close):
+                close()
+        except Exception:
+            pass
 
 
 class ChatWorker(QObject):
