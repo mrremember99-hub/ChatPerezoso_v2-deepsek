@@ -148,10 +148,17 @@ def run_eval(model: str, *, host: str, timeout: float) -> dict:
     runner = _import_runner()
     cases = runner.load_cases()
     by_id = {c["id"]: c for c in cases["cases"]}
+    missing = [cid for cid in CATALOG_CASE_IDS if cid not in by_id]
+    if missing:
+        print(
+            f"AVISO: casos del subset no encontrados en cases.json: {missing}",
+            file=sys.stderr,
+        )
     selected = [by_id[cid] for cid in CATALOG_CASE_IDS if cid in by_id]
     if not selected:
         return {
             "cases": [],
+            "missing_cases": missing,
             "summary": {"success": 0, "total": 0,
                         "avg_latency_s": 0.0, "avg_ttft_s": 0.0},
         }
@@ -170,6 +177,7 @@ def run_eval(model: str, *, host: str, timeout: float) -> dict:
     avg_ttft = sum(ttfts) / len(ttfts) if ttfts else 0.0
     return {
         "cases": results,
+        "missing_cases": missing,
         "summary": {
             "success": successes,
             "total": len(results),
