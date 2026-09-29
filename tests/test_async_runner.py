@@ -176,3 +176,55 @@ def test_timeout_interrupts_long_coroutine():
             runner.submit(co(), timeout=0.1)
     finally:
         runner.close()
+
+
+# ── X2.2: close fallido conserva handles ─────────────────────────
+# Auditoria externa 2026-09-29, P1#3.
+#
+# Antes, si thread.join() expiraba, se hacía _loop=None y _thread=None
+# igualmente. El llamante perdia la posibilidad de inspeccionar el
+# estado. Ahora solo se limpian si el cierre fue limpio.
+
+def test_close_failed_join_conserva_handles(monkeypatch):
+    runner = AsyncRunner()
+    try:
+        async def co():
+            return 1
+        runner.submit(co())
+        thread = runner._thread
+        assert thread is not None
+
+        # Simulamos un hilo que no muere: is_alive siempre True,
+        # join no-op.
+        monkeypatch.setattr(thread, "is_alive", lambda: True)
+        monkeypatch.setattr(thread, "join", lambda timeout=None: None)
+
+        ok = runner.close(timeout=0.1)
+
+        assert ok is False, "close debe reportar fallo"
+        assert runner._loop is not None, "handles conservados tras fallo"
+        assert runner._thread is not None
+        # Segundo close: _closed ya es True, devuelve True sin
+        # tocar los handles (que siguen ahi).
+        assert runner.close() is True
+        assert runner._loop is not None
+    finally:
+        # Cleanup real: restaurar metodos y esperar al hilo.
+        monkeypatch.undo()
+        if thread is not None:
+            thread.join(timeout=2)
+
+
+def test_close_limpio_libera_handles():
+    """Control: si el cierre es limpio, los handles se liberan."""
+    runner = AsyncRunner()
+
+    async def co():
+        return 1
+    runner.submit(co())
+    assert runner._thread is not None
+
+    ok = runner.close(timeout=3.0)
+    assert ok is True
+    assert runner._loop is None
+    assert runner._thread is None

@@ -65,3 +65,99 @@ def test_slot_signal_types_correct():
         r"@Slot\(str,\s*str\)\s*\n\s*def _on_error\b",
         src,
     ), "_on_error debe llevar @Slot(str, str)"
+
+
+# ── X2.2: shutdown conserva threads vivos ────────────────────────
+# Auditoria externa 2026-09-29, P2#7.
+#
+# Antes _shutdown_connections limpiaba todos los dicts aunque
+# quedaran threads vivos. Ahora solo se descartan los muertos.
+
+def test_shutdown_conserva_threads_vivos():
+    from ui.controllers.mcp_controller import MCPController
+
+    ctrl = MCPController.__new__(MCPController)
+
+    class FakeBridge:
+        def deactivate(self):
+            pass
+
+    class FakeClient:
+        def close(self):
+            pass
+
+    class FakeWorker:
+        def __init__(self):
+            self.client = FakeClient()
+
+    class StubbornThread:
+        def isRunning(self):
+            return True
+        def quit(self):
+            pass  # no responde: sigue vivo
+        def wait(self, ms):
+            return False  # timeout
+
+    class DeadThread:
+        def isRunning(self):
+            return False
+        def quit(self):
+            pass
+        def wait(self, ms):
+            return True
+
+    ctrl.bridge = FakeBridge()
+    ctrl._threads = {"vivo": StubbornThread(), "muerto": DeadThread()}
+    ctrl._workers = {"vivo": FakeWorker(), "muerto": FakeWorker()}
+    ctrl._configs = {"vivo": {}, "muerto": {}}
+    ctrl._dead = {"vivo", "muerto"}
+
+    ok = ctrl._shutdown_connections()
+    assert ok is False, "stubborn thread -> fallo reportado"
+
+    assert "vivo" in ctrl._threads
+    assert "muerto" not in ctrl._threads
+    assert "vivo" in ctrl._workers
+    assert "muerto" not in ctrl._workers
+    assert "vivo" in ctrl._configs
+    assert "muerto" not in ctrl._configs
+    assert "vivo" in ctrl._dead
+    assert "muerto" not in ctrl._dead
+
+
+def test_shutdown_limpio_libera_todo():
+    from ui.controllers.mcp_controller import MCPController
+
+    ctrl = MCPController.__new__(MCPController)
+
+    class FakeBridge:
+        def deactivate(self):
+            pass
+
+    class FakeWorker:
+        def __init__(self):
+            class C:
+                def close(self):
+                    pass
+            self.client = C()
+
+    class DeadThread:
+        def isRunning(self):
+            return False
+        def quit(self):
+            pass
+        def wait(self, ms):
+            return True
+
+    ctrl.bridge = FakeBridge()
+    ctrl._threads = {"a": DeadThread(), "b": DeadThread()}
+    ctrl._workers = {"a": FakeWorker(), "b": FakeWorker()}
+    ctrl._configs = {"a": {}, "b": {}}
+    ctrl._dead = {"a", "b"}
+
+    ok = ctrl._shutdown_connections()
+    assert ok is True
+    assert ctrl._threads == {}
+    assert ctrl._workers == {}
+    assert ctrl._configs == {}
+    assert ctrl._dead == set()

@@ -190,10 +190,25 @@ class MCPController(QObject):
                 )
                 ok = False
 
-        self._workers.clear()
-        self._threads.clear()
-        self._configs.clear()
-        self._dead.clear()
+        # X2.2 (auditoria externa 2026-09-29, P2#7): en vez de
+        # limpiar todo incondicionalmente, conservamos los threads
+        # que sigan vivos tras el presupuesto. Asi un segundo
+        # shutdown puede reintentar wait() sobre ellos; los que ya
+        # terminaron se descartan como hasta ahora.
+        vivos = {
+            sid for sid, th in self._threads.items()
+            if th.isRunning()
+        }
+        self._threads = {
+            s: t for s, t in self._threads.items() if s in vivos
+        }
+        self._workers = {
+            s: w for s, w in self._workers.items() if s in vivos
+        }
+        self._configs = {
+            s: c for s, c in self._configs.items() if s in vivos
+        }
+        self._dead = {d for d in self._dead if d in vivos}
         return ok
 
     def _connect(self, server_id, command, *, args=None, env=None):

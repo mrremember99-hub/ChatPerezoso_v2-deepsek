@@ -249,8 +249,15 @@ class AsyncRunner:
                         join_timeout,
                     )
                     ok = False
-        self._loop = None
-        self._thread = None
+        # X2.2 (auditoria externa 2026-09-29, P1#3): solo soltamos los
+        # handles si el cierre fue limpio. Si expiro el join, el
+        # llamante ya no podia ni inspeccionar ni reintentar: _loop y
+        # _thread se perdian. Ahora se conservan para diagnostico.
+        # Nota: _closed sigue siendo True, asi que un segundo close()
+        # devuelve True de inmediato sin re-cerrar.
+        if ok:
+            self._loop = None
+            self._thread = None
         return ok
 
     # -- ejecución -----------------------------------------------------------
