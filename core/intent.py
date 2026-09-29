@@ -19,6 +19,7 @@ import unicodedata
 
 import simplemma
 from dataclasses import dataclass
+from typing import ClassVar
 
 
 # F7-quater (2026-09-28): conjunto de tools de solo lectura.
@@ -296,7 +297,7 @@ class ToolIntentGate:
     el usuario escriba con tilde o sin ella.
     """
 
-    _RULES_REGISTRY: dict[str, IntentRule] = {}
+    _RULES_REGISTRY: ClassVar[dict[str, IntentRule]] = {}
 
     def __init__(self, rules: dict[str, IntentRule] | None = None):
         self.rules: dict[str, IntentRule] = dict(rules or {})

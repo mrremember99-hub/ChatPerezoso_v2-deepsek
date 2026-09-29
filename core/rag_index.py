@@ -293,7 +293,15 @@ class RagIndex:
                 continue
             try:
                 v = np.frombuffer(r["vector"], dtype=np.float32)
-            except Exception:
+            except (ValueError, TypeError) as exc:
+                # np.frombuffer lanza ValueError si el buffer no es
+                # multiplo del tamano del dtype (fila corrupta). No
+                # deberia pasar (lo escribimos nosotros), pero si
+                # pasa queremos verlo.
+                logger.warning(
+                    "Vector corrupto en symbol_id=%s: %s",
+                    r["id"], exc,
+                )
                 continue
             if v.shape[0] != dim:
                 continue
