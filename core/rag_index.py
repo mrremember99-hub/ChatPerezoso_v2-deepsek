@@ -13,6 +13,7 @@ calculo completo tarda < 10 ms. No hace falta ANN.
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -66,15 +67,49 @@ def _prefix_for(text: str, model: str, *, is_query: bool) -> str:
     return prefix + text
 
 
+def _humanize(text: str) -> str:
+    """Separa CamelCase, snake_case y UPPER en palabras naturales.
+
+    "Workspace.read_file" -> "workspace read file"
+    "MAX_READ_BYTES" -> "max read bytes"
+    "getUserId" -> "get user id"
+    """
+    # CamelCase -> Camel Case (antes de tocar snake_case)
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
+    # snake_case / UPPER_CASE
+    s = s.replace("_", " ")
+    # separadores de path
+    s = s.replace("/", " ").replace(".", " ").replace("-", " ")
+    return " ".join(s.lower().split())
+
+
+def _humanize_path(path: str) -> str:
+    """'core/workspace.py' -> 'core workspace'."""
+    if "." in path.rsplit("/", 1)[-1]:
+        path = path.rsplit(".", 1)[0]
+    return _humanize(path)
+
+
 def _chunk_text(symbol: Symbol, body: str) -> str:
     """Construye el texto que se embebe para un simbolo.
 
-    Incluye: ruta:nombre, firma, docstring y primeras lineas del
-    cuerpo. La ruta ayuda a desambiguar nombres repetidos en
-    archivos distintos; el cuerpo, a que la similitud funcione
-    por semantica, no solo por nombre.
+    C6a (2026-09-29): el nombre y la ruta se humanizan a palabras
+    naturales ("read_file" -> "read file"). Sin esto, nomic no
+    conecta "leer archivo" con read_file: el identificador crudo
+    no es semantico para el modelo.
+
+    Formato:
+        <ruta humanizada> | <nombre humanizado> <kind>
+        <ruta original>:<nombre original>
+        <firma>
+        <docstring>
+        <body truncado>
     """
-    parts = [f"{symbol.file}:{symbol.name} [{symbol.kind}]"]
+    header = (
+        f"{_humanize_path(symbol.file)} | "
+        f"{_humanize(symbol.name)} {symbol.kind}"
+    )
+    parts = [header, f"{symbol.file}:{symbol.name}"]
     if symbol.signature:
         parts.append(symbol.signature)
     if symbol.docstring:
@@ -139,6 +174,7 @@ class RagIndex:
             "WHERE (e.symbol_id IS NULL OR e.model != ?) "
             "  AND s.file NOT LIKE 'tests/%' "
             "  AND s.file NOT LIKE '%test_%' "
+            "  AND s.kind != 'constant' "
             "ORDER BY s.id"
         )
         params: list[Any] = [self.model]
@@ -323,9 +359,21 @@ class RagIndex:
         return int(n)
 
     def stats(self) -> dict:
+        """Contadores.
+
+        ``symbols`` refleja solo los elegibles para RAG: sin tests,
+        sin constantes. ``pending`` es cuantos de esos faltan por
+        indexar. Si quieres el total bruto, mira
+        ``ast_index.stats()``.
+        """
         cur = self.con.cursor()
         total_sym = int(
-            cur.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
+            cur.execute(
+                "SELECT COUNT(*) FROM symbols "
+                "WHERE file NOT LIKE 'tests/%' "
+                "  AND file NOT LIKE '%test_%' "
+                "  AND kind != 'constant'"
+            ).fetchone()[0]
         )
         total_emb = int(
             cur.execute(

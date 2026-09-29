@@ -190,6 +190,12 @@ class Workspace:
     # -- listar --------------------------------------------------------------
 
     def list_dir(self, path: str = ".", recursive: bool = False) -> str:
+        """Lista el contenido de una carpeta del workspace.
+
+        Con `recursive=True`, devuelve el arbol con indentacion
+        hasta 6 niveles. Con `recursive=False` (default), solo el
+        primer nivel.
+        """
         folder = self._path(path)
         if not folder.is_dir():
             raise WorkspaceError(f"No es una carpeta: {path}")
@@ -266,6 +272,13 @@ class Workspace:
         end_line: int | None = None,
         numbered: bool = False,
     ) -> str:
+        """Lee un archivo de texto del workspace.
+
+        Devuelve el contenido completo, o el rango de lineas
+        indicado con `start_line`/`end_line` (1-indexadas). Con
+        `numbered=True`, prefija cada linea con "N| " para que el
+        modelo pueda referirse a lineas concretas al editar.
+        """
         file = self._path(path)
         if not file.is_file():
             raise WorkspaceError(f"No es un archivo: {path}")
@@ -426,6 +439,11 @@ class Workspace:
         )
 
     def create_file(self, path: str, content: str = "") -> str:
+        """Crea un archivo nuevo con `content`.
+
+        Falla si el archivo ya existe: para sobrescribir usa
+        `write_file`, para cambios puntuales `edit_file`.
+        """
         _reject_shrink_marker(content)
         _reject_numbered_output(content)
         file = self._path(path)
@@ -447,6 +465,11 @@ class Workspace:
         return f"Archivo creado: {file.relative_to(self.root)}"
 
     def create_folder(self, path: str) -> str:
+        """Crea una carpeta nueva en el workspace.
+
+        Crea los directorios intermedios si faltan. Falla si la
+        carpeta ya existe.
+        """
         folder = self._path(path)
         if folder.exists():
             raise WorkspaceError(f"Ya existe: {path}")
@@ -454,6 +477,13 @@ class Workspace:
         return f"Carpeta creada: {folder.relative_to(self.root)}"
 
     def write_file(self, path: str, content: str) -> str:
+        """Escribe o reemplaza el contenido completo de un archivo.
+
+        Si el archivo no existe, lo crea. Si existe, lo sobrescribe
+        atomicamente (escribe a temp + rename). Rechaza reducir el
+        tamano mas de la mitad para evitar truncados accidentales
+        del modelo (F3-ter).
+        """
         _reject_shrink_marker(content)
         _reject_numbered_output(content)
         file = self._path(path)
@@ -539,6 +569,12 @@ class Workspace:
         )
 
     def delete_file(self, path: str) -> str:
+        """Borra un archivo del workspace.
+
+        Falla si no es un archivo (carpetas no se borran por esta
+        via). La aplicacion pide confirmacion al usuario antes de
+        llegar aqui.
+        """
         file = self._path(path)
         if not file.is_file():
             raise WorkspaceError(f"No es un archivo: {path}")

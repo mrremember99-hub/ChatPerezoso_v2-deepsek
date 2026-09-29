@@ -93,8 +93,11 @@ def test_chunk_text_incluye_metadata():
         signature="class User", docstring="Usuario.", end_line=5,
     )
     out = _chunk_text(s, "class User:\n    pass\n")
+    # Header humanizado (C6a)
+    assert "auth | user class" in out
+    # Original
     assert "auth.py:User" in out
-    assert "[class]" in out
+    # Firma, docstring, body
     assert "class User" in out
     assert "Usuario." in out
     assert "pass" in out
@@ -106,7 +109,7 @@ def test_chunk_text_sin_cuerpo_ni_docstring():
     s = Symbol(name="x", kind="function", file="a.py", line=1)
     out = _chunk_text(s, "")
     assert "a.py:x" in out
-    assert "[function]" in out
+    assert "x function" in out  # header humanizado (C6a)
 
 
 def test_chunk_text_trunca_body():
@@ -130,10 +133,11 @@ def test_index_pending_primera_vez(tmp_path):
     rag, idx, ollama = _make_rag(tmp_path)
     try:
         n = rag.index_pending()
-        # 6 simbolos: User, User.save, login, logout, suma, MAX
-        assert n == 6
+        # 5 simbolos: User, User.save, login, logout, suma
+        # (MAX es constante -> se salta desde C6a)
+        assert n == 5
         st = rag.stats()
-        assert st["embedded"] == 6
+        assert st["embedded"] == 5
         assert st["pending"] == 0
         # 1 llamada a embed (batch unico)
         assert len(ollama.calls) == 1
@@ -145,7 +149,7 @@ def test_index_pending_primera_vez(tmp_path):
 def test_index_pending_idempotente(tmp_path):
     rag, idx, ollama = _make_rag(tmp_path)
     try:
-        assert rag.index_pending() == 6
+        assert rag.index_pending() == 5
         # segunda vez: 0, no re-embebe
         assert rag.index_pending() == 0
         assert len(ollama.calls) == 1
@@ -158,8 +162,8 @@ def test_index_pending_limit(tmp_path):
     try:
         assert rag.index_pending(limit=3) == 3
         assert rag.stats()["embedded"] == 3
-        assert rag.index_pending() == 3
-        assert rag.stats()["embedded"] == 6
+        assert rag.index_pending() == 2
+        assert rag.stats()["embedded"] == 5
     finally:
         idx.close()
 
@@ -263,7 +267,7 @@ def test_query_top_k_mayor_que_total(tmp_path):
     try:
         rag.index_pending()
         hits = rag.query("x", k=100)
-        assert len(hits) == 6  # todos
+        assert len(hits) == 5  # todos los elegibles
     finally:
         idx.close()
 
@@ -294,7 +298,8 @@ def test_invalidate_file(tmp_path):
     try:
         rag.index_pending()
         n = rag.invalidate_file("math.py")
-        assert n == 2  # suma + MAX
+        # Solo suma (MAX es constante -> no se indexo).
+        assert n == 1
         assert rag.stats()["embedded"] == 4
     finally:
         idx.close()
@@ -315,7 +320,7 @@ def test_cleanup_orphans(tmp_path):
         idx.con.commit()
         n = rag.cleanup_orphans()
         assert n == 1
-        assert rag.stats()["embedded"] == 6
+        assert rag.stats()["embedded"] == 5
     finally:
         idx.close()
 
@@ -328,13 +333,14 @@ def test_stats(tmp_path):
     try:
         st = rag.stats()
         assert st["model"] == DEFAULT_MODEL
-        assert st["symbols"] == 6
+        # 5 elegibles (MAX constante excluida)
+        assert st["symbols"] == 5
         assert st["embedded"] == 0
-        assert st["pending"] == 6
+        assert st["pending"] == 5
         rag.index_pending(limit=2)
         st = rag.stats()
         assert st["embedded"] == 2
-        assert st["pending"] == 4
+        assert st["pending"] == 3
     finally:
         idx.close()
 
@@ -420,8 +426,8 @@ def test_index_pending_salta_archivos_de_tests(tmp_path):
         # Solo produccion (no test_algo).
         assert n == 1
         st = rag.stats()
-        # stats cuenta symbols sin filtro: 2 (test_algo + produccion).
-        assert st["symbols"] == 2
+        # stats tambien filtra tests desde C6a.
+        assert st["symbols"] == 1
         assert st["embedded"] == 1
     finally:
         idx.close()
@@ -481,5 +487,69 @@ def test_query_lleva_prefijo_nomic(tmp_path):
         rag.query("como se guarda")
         assert seen_queries, "query no se embebio"
         assert seen_queries[0] == "search_query: como se guarda"
+    finally:
+        idx.close()
+
+
+# ── C6a: humanizacion + skip constantes ──────────────────────────
+
+
+def test_humanize_snake_case():
+    from core.rag_index import _humanize
+    assert _humanize("read_file") == "read file"
+    assert _humanize("MAX_READ_BYTES") == "max read bytes"
+
+
+def test_humanize_camel_case():
+    from core.rag_index import _humanize
+    assert _humanize("getUserId") == "get user id"
+    assert _humanize("OllamaClient") == "ollama client"
+
+
+def test_humanize_path():
+    from core.rag_index import _humanize_path
+    assert _humanize_path("core/workspace.py") == "core workspace"
+    assert _humanize_path("auth.py") == "auth"
+
+
+def test_humanize_symbol_dotted():
+    from core.rag_index import _humanize
+    assert _humanize("Workspace.read_file") == "workspace read file"
+
+
+def test_chunk_text_lleva_header_humanizado():
+    from core.ast_index import Symbol
+
+    s = Symbol(
+        name="Workspace.read_file", kind="method",
+        file="core/workspace.py", line=1,
+        signature="def read_file(path)",
+    )
+    out = _chunk_text(s, "return text")
+    # Header: "core workspace | workspace read file method"
+    assert "core workspace" in out
+    assert "workspace read file method" in out
+    # Original preservado
+    assert "core/workspace.py:Workspace.read_file" in out
+
+
+def test_index_pending_salta_constantes(tmp_path):
+    root = tmp_path / "ws"; root.mkdir()
+    (root / "x.py").write_text(
+        "MAX = 10\n"
+        "def f():\n    return 1\n",
+        encoding="utf-8",
+    )
+    from core.ast_index import AstIndex
+    idx = AstIndex(root, db_path=tmp_path / "idx.sqlite")
+    idx.refresh()
+    ollama = FakeOllama()
+    rag = RagIndex(root, ollama=ollama, ast_index=idx)
+    try:
+        n = rag.index_pending()
+        # Solo f(), MAX se salta.
+        assert n == 1
+        st = rag.stats()
+        assert st["symbols"] == 1
     finally:
         idx.close()
