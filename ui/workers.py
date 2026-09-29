@@ -11,6 +11,7 @@ from PySide6.QtCore import QObject, Signal
 from core.ollama import OllamaCancelled, OllamaClient, OllamaError
 from core.tool_result import ToolResult
 from plugins.mcp import MCPError
+from plugins.shell import is_command_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -393,6 +394,13 @@ class ChatWorker(QObject):
         # `ejecutar_comando` solo se auto-aprueba si el usuario activó
         # explícitamente la extensión (`auto_approve_shell`).
         auto = self._is_auto_approved(name)
+        # Bloque E: con autopilot+shell ON, solo auto-aprobar los
+        # comandos que pasen la allowlist. Un comando fuera de la
+        # lista (rm, mv, git push, pip install...) degrada a
+        # confirmacion manual en lugar de ejecutarse sin dialogo.
+        if auto and name == "ejecutar_comando":
+            if not is_command_allowed(arguments.get("command", "")):
+                auto = False
 
         if requires and not auto:
             # _request_confirmation devuelve también el tiempo REAL de
