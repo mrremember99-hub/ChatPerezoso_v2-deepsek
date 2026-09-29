@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# Instalación de ChatPerezoso en un venv aislado.
-# Uso: ./setup.sh [--dev] [--mcp]
+# Instalación de ChatPerezoso sobre el Python global (Homebrew 3.12).
+#
+# Sin venv: es una decisión de diseño del proyecto. El código se
+# instala en modo editable en el Python del sistema, lo que registra
+# los entry points de los plugins y permite `python3 main.py` desde
+# cualquier directorio.
+#
+# Uso: ./setup.sh [--dev] [--mcp] [--all]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,48 +18,48 @@ for arg in "$@"; do
   case "$arg" in
     --dev) WITH_DEV=1 ;;
     --mcp) WITH_MCP=1 ;;
+    --all) WITH_DEV=1; WITH_MCP=1 ;;
     *) echo "Opción desconocida: $arg" >&2; exit 1 ;;
   esac
 done
 
 PY="${PYTHON:-python3}"
 if ! command -v "$PY" >/dev/null 2>&1; then
-  echo "✗ Python no encontrado. Instala Python 3.11 o superior." >&2
+  echo "✗ Python no encontrado. Instala Python 3.12:" >&2
+  echo "    brew install python@3.12" >&2
   exit 1
 fi
 
-echo "→ Creando entorno virtual en .venv"
-"$PY" -m venv .venv
-# shellcheck disable=SC1091
-source .venv/bin/activate
+PY_VER=$("$PY" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+echo "→ Python $PY_VER en $(command -v "$PY")"
 
-echo "→ Actualizando pip"
-python -m pip install --upgrade pip >/dev/null
-
-echo "→ Instalando dependencias base"
-pip install -r requirements.txt
-
-if [ "$WITH_MCP" -eq 1 ]; then
-  echo "→ Instalando dependencias MCP"
-  pip install -r plugins/mcp/requirements.txt
+EXTRAS=""
+if [ "$WITH_DEV" -eq 1 ] && [ "$WITH_MCP" -eq 1 ]; then
+  EXTRAS="[dev,mcp]"
+elif [ "$WITH_DEV" -eq 1 ]; then
+  EXTRAS="[dev]"
+elif [ "$WITH_MCP" -eq 1 ]; then
+  EXTRAS="[mcp]"
 fi
 
-if [ "$WITH_DEV" -eq 1 ]; then
-  echo "→ Instalando dependencias de desarrollo"
-  pip install -r requirements-dev.txt
-fi
+echo "→ Instalando ChatPerezoso en modo editable${EXTRAS:+ con extras $EXTRAS}"
 
-echo "→ Instalando el proyecto en modo editable (entry points de plugins)"
-pip install -e .
+# --break-system-packages: el Python de Homebrew está marcado como
+# "externally managed" (PEP 668). En este proyecto personal no usamos
+# venv por decisión de diseño (ver handoff).
+"$PY" -m pip install --break-system-packages --upgrade pip >/dev/null
+"$PY" -m pip install --break-system-packages -e ".${EXTRAS}"
 
-cat <<EOF
+cat <<MSG
 
 ✓ Instalación completada.
 
 Para arrancar:
-    source .venv/bin/activate
-    python bootstrap.py
+    python3 main.py
 
-Para diagnóstico sin arrancar:
-    python bootstrap.py --check
-EOF
+Diagnóstico sin arrancar:
+    python3 bootstrap.py --check
+
+Tests:
+    pytest -q tests/
+MSG

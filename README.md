@@ -9,15 +9,14 @@ Cliente de escritorio para Ollama. PySide6 + httpx + asyncio. Núcleo pequeño, 
 ```bash
 git clone <repo> chatperezoso
 cd chatperezoso
-./setup.sh --mcp
-source .venv/bin/activate
-python bootstrap.py
+./setup.sh --all
+python3 main.py
 ```
 
 ### Desarrollo
 
 ```bash
-pip install -e ".[dev]"
+pip install --break-system-packages -e ".[dev]"
 ```
 
 El extra `dev` instala `ruff`, `mypy`, `pytest`, `pytest-qt`, `pytest-timeout`.
