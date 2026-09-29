@@ -134,15 +134,16 @@ _MYPY_RELEVANT_CODES: frozenset[str] = frozenset({
 # el mismo error dos veces y entraba en bucle. Con la sugerencia, el
 # modelo tiene la pista concreta y puede corregir en una ronda.
 #
-# Cada sugerencia es corta (~150 chars max) para no inflar el prompt.
+# Cada sugerencia es corta (<300 chars, lo verifica
+# test_sugerencias_son_cortas) para no inflar el prompt.
 # ─────────────────────────────────────────────────────────────────────
 
 _RUFF_SUGGESTIONS: dict[str, str] = {
     "F821": (
-        "Sugerencia: causas comunes: (1) 'except ... as X' borra X al "
-        "salir del bloque (Python 3), y un lambda posterior falla — "
-        "captura el valor antes: 'msg = str(X); lambda: f(msg)'; "
-        "(2) import olvidado; (3) typo."
+        "Sugerencia: causas: (1) 'except ... as X' borra X (captura "
+        "'msg = str(X)' antes del lambda diferido); (2) import "
+        "olvidado; (3) typo; (4) orden: variable usada antes de "
+        "definirse — la asignacion va arriba del uso."
     ),
     "F811": (
         "Sugerencia: renombra la definicion o elimina la anterior."

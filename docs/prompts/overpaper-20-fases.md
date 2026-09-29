@@ -50,6 +50,15 @@ Cuando una fase pida localizar código existente, usa
 semántica) ANTES de abrir el archivo a ciegas. Cita en tu
 respuesta el resultado que devolvieron.
 
+9. TAMAÑO DE LA EDICIÓN — ESCRIBE, NO INSERTES.
+Cambios grandes (bloques nuevos, secciones enteras, reorganizar):
+reescribe el archivo completo con `escribir_archivo`.
+Reserva `insertar_en_archivo` / `editar_archivo` para cambios
+pequeños y bien localizados. Regla práctica: si el bloque nuevo
+tiene más de 5 líneas o introduce una variable nueva que otras
+partes del archivo van a usar, usa `escribir_archivo`. En caso
+de duda, `escribir_archivo`.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 [ESTADO DEL WORKSPACE]

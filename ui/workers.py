@@ -448,9 +448,17 @@ class ChatWorker(QObject):
         return tool_result.to_text()
 
     # Nombres de tools que disparan verificación automática.
-    _VERIFY_AFTER: frozenset[str] = frozenset(
-        {"crear_archivo", "escribir_archivo"}
-    )
+    _VERIFY_AFTER: frozenset[str] = frozenset({
+        "crear_archivo",
+        "escribir_archivo",
+        # OVERPAPER run #3: insertar/editar tambien pueden romper
+        # sintaxis (F821 por orden de definicion, por ejemplo). El
+        # verificador post-tool solo cubria las 2 primeras; los
+        # cambios via insertar_en_archivo pasaban sin verificar y
+        # el error se acumulaba hasta el siguiente escribir_archivo.
+        "insertar_en_archivo",
+        "editar_archivo",
+    })
     # Claves aceptadas para identificar el archivo escrito.
     _PATH_KEYS: tuple[str, ...] = ("archivo", "nombre", "path", "ruta")
 
