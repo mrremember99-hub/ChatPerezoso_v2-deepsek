@@ -6,6 +6,13 @@ imprime un informe detallado. No modifica nada.
 
 Uso:
     python scripts/health_check.py
+
+Exit code:
+    0 si todas las secciones estan OK.
+    1 si alguna seccion detecto un problema real (parseo fallido,
+      workspace inexistente, Ollama no accesible, etc.).
+    El informe visual no cambia; esto solo permite componer el
+    script en `cmd && otro` o en un CI informal.
 """
 from __future__ import annotations
 
@@ -27,32 +34,33 @@ def section(title: str) -> None:
     print("─" * max(len(title), 40))
 
 
-def check_config() -> None:
+def check_config() -> bool:
     section("Configuración")
     config_file = ROOT / "config.json"
     if not config_file.exists():
         line("config.json", "no existe (se creará al arrancar)")
-        return
+        return True
     try:
         data = json.loads(config_file.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         line("config.json", f"ERROR: {exc}")
-        return
+        return False
     for key in ("ollama_host", "model", "workspace", "current_agent"):
         line(key, str(data.get(key, "—")))
+    return True
 
 
-def check_agents() -> None:
+def check_agents() -> bool:
     section("Agentes")
     agents_file = ROOT / "agents.json"
     if not agents_file.exists():
         line("agents.json", "no existe (se generarán defaults)")
-        return
+        return True
     try:
         data = json.loads(agents_file.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         line("agents.json", f"ERROR: {exc}")
-        return
+        return False
     agents = data.get("agents", [])
     line("total", str(len(agents)))
     for agent in agents:
@@ -62,9 +70,10 @@ def check_agents() -> None:
         else:
             tools = f"{len(allowed)} explícitas"
         line(f"· {agent.get('name', '?')}", tools)
+    return True
 
 
-def check_workspace() -> None:
+def check_workspace() -> bool:
     section("Workspace")
     config_file = ROOT / "config.json"
     workspace = ROOT / "workspace"
@@ -79,6 +88,7 @@ def check_workspace() -> None:
     line("es carpeta", "sí" if workspace.is_dir() else "NO")
     line("legible", "sí" if workspace.is_dir() else "—")
     line("escribible", "sí" if workspace.is_dir() and _writable(workspace) else "—")
+    return workspace.exists() and workspace.is_dir()
 
 
 def _writable(path: Path) -> bool:
@@ -106,32 +116,36 @@ def check_mcp() -> None:
                      f"{'activo' if s.get('enabled') else 'inactivo'}")
         except (OSError, ValueError) as exc:
             line("mcp_servers.json", f"ERROR: {exc}")
+            return False
     line("SDK mcp instalado", "sí" if _module_exists("mcp") else "no")
     line("npx disponible", shutil.which("npx") or "no")
+    return True
 
 
-def check_plugins() -> None:
+def check_plugins() -> bool:
     section("Plugins")
     try:
         from importlib.metadata import entry_points
         eps = list(entry_points(group="chatperezoso.plugins"))
         if not eps:
             line("entry points", "ninguno (instala con `pip install -e .`)")
-            return
+            return False
         line("entry points", str(len(eps)))
         for ep in eps:
             line(f"· {ep.name}", ep.value)
+        return True
     except Exception as exc:
         line("entry points", f"ERROR: {exc}")
+        return False
 
 
-def check_ollama() -> None:
+def check_ollama() -> bool:
     section("Ollama")
     try:
         import httpx
     except ImportError:
         line("cliente httpx", "no instalado")
-        return
+        return False
     host = "http://localhost:11434"
     config_file = ROOT / "config.json"
     if config_file.exists():
@@ -151,11 +165,13 @@ def check_ollama() -> None:
             line(f"· {m}", "")
         if len(models) > 5:
             line("...", f"y {len(models) - 5} más")
+        return True
     except Exception as exc:
         line("estado", f"no accesible: {exc}")
+        return False
 
 
-def check_local_state() -> None:
+def check_local_state() -> bool:
     section("Estado local")
     for name in ("config.json", "agents.json", "mcp_servers.json",
                  "history.json"):
@@ -165,6 +181,7 @@ def check_local_state() -> None:
             line(name, f"existe · {size} bytes")
         else:
             line(name, "no existe")
+    return True
 
 
 def _module_exists(name: str) -> bool:
@@ -175,14 +192,28 @@ def _module_exists(name: str) -> bool:
 def main() -> int:
     print("\n\033[1mChatPerezoso · Health Check\033[0m")
     print(f"  Raíz: {ROOT}")
-    check_config()
-    check_agents()
-    check_workspace()
-    check_mcp()
-    check_plugins()
-    check_ollama()
-    check_local_state()
+    # X2.3b (auditoria externa 2026-09-29, P3#4): recogemos el
+    # resultado de cada check y devolvemos 1 si alguno fallo. La
+    # salida visual no cambia; esto permite usarlo en `&&` o CI
+    # informal.
+    resultados = [
+        ("config", check_config()),
+        ("agentes", check_agents()),
+        ("workspace", check_workspace()),
+        ("mcp", check_mcp()),
+        ("plugins", check_plugins()),
+        ("ollama", check_ollama()),
+        ("estado local", check_local_state()),
+    ]
     print()
+    fallos = [nombre for nombre, ok in resultados if not ok]
+    if fallos:
+        print(
+            f"  \033[1mResultado:\033[0m "
+            f"problemas en: {', '.join(fallos)}"
+        )
+        return 1
+    print("  \033[1mResultado:\033[0m todo OK")
     return 0
 
 
