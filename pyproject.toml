@@ -19,6 +19,9 @@ dependencies = [
     # `pip install .` en venv limpio fallaba.
     "simplemma>=2.0.0",
     "parso>=0.8.4",
+    # C2c (2026-09-29): RAG sobre AST index. Cosine brute-force
+    # con numpy. Dependencia dura desde C2b.
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]

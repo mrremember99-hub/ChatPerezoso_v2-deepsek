@@ -659,7 +659,7 @@ class OllamaClient:
         texts: list[str],
         *,
         model: str = "nomic-embed-text",
-        timeout: float = 30.0,
+        timeout: float = 120.0,
         cancel_event: threading.Event | None = None,
     ) -> list[list[float]]:
         """Genera embeddings de ``texts`` con /api/embed.
@@ -670,6 +670,9 @@ class OllamaClient:
 
         Modelo por defecto: nomic-embed-text (768 dims). Ver catalogo
         de modelos en docs/modelos-probados.md.
+
+        Timeout por defecto 120s: el primer batch tras un cold start
+        (modelo no cargado en RAM) puede tardar 30-60s en M-series.
         """
         if not texts:
             return []
@@ -679,8 +682,11 @@ class OllamaClient:
                 cancel_event=cancel_event,
             )
         except httpx.HTTPError as exc:
+            # Algunos httpx.HTTPError (ej. ReadTimeout sin request
+            # adjunto) tienen str() vacio. Incluir el tipo si pasa.
+            detail = str(exc) or type(exc).__name__
             raise OllamaError(
-                f"No se pudieron generar embeddings: {exc}"
+                f"No se pudieron generar embeddings: {detail}"
             ) from exc
         except TimeoutError as exc:
             raise OllamaError(
