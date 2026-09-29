@@ -231,6 +231,19 @@ class SearchClient:
             dirs[:] = sorted(d for d in dirs if d not in _SKIP_DIRS)
             for name in sorted(files):
                 file = Path(current_dir) / name
+                # X1.4 (auditoria externa 2026-09-29, P2#1): un
+                # symlink a un fichero (no dir) pasa el walk y luego
+                # se lee entero. os.walk(followlinks=False) solo
+                # evita DESCENDER en symlinks a directorio, no
+                # ficheros symlink. Resolvemos y comprobamos que el
+                # destino sigue dentro del workspace. Workspace._path
+                # ya aplica esta politica; search estaba fuera.
+                if file.is_symlink():
+                    try:
+                        resolved = file.resolve()
+                        resolved.relative_to(self.root)
+                    except (OSError, ValueError):
+                        continue
                 suffix = file.suffix.lower()
                 if suffix in _BINARY_EXTENSIONS:
                     continue

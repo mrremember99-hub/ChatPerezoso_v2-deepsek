@@ -258,3 +258,92 @@ except SearchError:
     assert result.stderr == "", (
         f"re2 contaminó stderr: {result.stderr!r}"
     )
+
+
+# ── X1.4: symlinks ────────────────────────────────────────────────
+
+
+def _symlinks_supported() -> bool:
+    """macOS/Linux soportan symlinks; algunos CI sin privilegios no."""
+    import tempfile
+    from pathlib import Path
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            (d / "target").write_text("x")
+            (d / "link").symlink_to(d / "target")
+        return True
+    except (OSError, NotImplementedError):
+        return False
+
+
+@pytest.mark.skipif(
+    not _symlinks_supported(), reason="symlinks no soportados"
+)
+def test_search_ignora_symlink_a_fichero_externo(tmp_path):
+    """Auditoria externa 2026-09-29, P2#1: un symlink dentro del
+    workspace apuntando a un fichero externo no debe leerse.
+
+    os.walk(followlinks=False) solo evita DESCENDER en symlinks a
+    directorio; los symlinks a FICHERO pasan y luego se abren.
+    """
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    outside = tmp_path / "secreto.txt"
+    outside.write_text("TOKEN_SECRETO_FUERA\n", encoding="utf-8")
+
+    (workspace / "legitimo.txt").write_text(
+        "contenido del workspace\n", encoding="utf-8"
+    )
+    (workspace / "peligro.txt").symlink_to(outside)
+
+    result = SearchClient(workspace).search("TOKEN_SECRETO_FUERA")
+
+    assert "sin coincidencias" in result
+    assert "secreto" not in result.lower() or "TOKEN_SECRETO" not in result
+
+
+@pytest.mark.skipif(
+    not _symlinks_supported(), reason="symlinks no soportados"
+)
+def test_search_encuentra_fichero_normal_aunque_haya_symlink(tmp_path):
+    """El fix no debe romper ficheros reales: si hay un legítimo con
+    la misma query, se encuentra."""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    outside = tmp_path / "externo.txt"
+    outside.write_text("frase compartida\n", encoding="utf-8")
+    (workspace / "interno.txt").write_text(
+        "frase compartida\n", encoding="utf-8"
+    )
+    (workspace / "link.txt").symlink_to(outside)
+
+    result = SearchClient(workspace).search("frase compartida")
+
+    assert "interno.txt" in result
+    # Y NO aparece el contenido del symlink externo (mismo texto,
+    # pero la ruta reportada no debe ser "link.txt").
+    assert "link.txt" not in result
+
+
+@pytest.mark.skipif(
+    not _symlinks_supported(), reason="symlinks no soportados"
+)
+def test_search_lee_symlink_a_fichero_interno(tmp_path):
+    """Un symlink que apunta DENTRO del workspace sí se lee. Es la
+    misma política que Workspace._path: symlink válido mientras el
+    destino resuelto siga bajo el root."""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "real.txt").write_text(
+        "contenido compartido\n", encoding="utf-8"
+    )
+    (workspace / "alias.txt").symlink_to(workspace / "real.txt")
+
+    result = SearchClient(workspace).search("contenido compartido")
+
+    # Encontrado (a través del real o del alias, da igual cuál de
+    # los dos salga primero en el walk; lo importante es que no se
+    # excluya el symlink interno).
+    assert "coincidencia" in result
+    assert "sin coincidencias" not in result
