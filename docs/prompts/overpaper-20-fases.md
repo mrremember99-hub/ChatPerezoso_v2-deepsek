@@ -10,9 +10,10 @@ Cuando vayas a leer o escribir un archivo, emite la tool call
 DIRECTAMENTE en el mismo turno. Un "voy a..." sin tool call =
 fase fallida.
 
-2. LECTURA OBLIGATORIA ANTES DE ESCRIBIR.
-Antes de escribir_archivo sobre un archivo existente, DEBES
-haberlo leído con leer_archivo. Si no existe, crear_archivo.
+2. LECTURA OBLIGATORIA ANTES DE MODIFICAR.
+Antes de escribir_archivo, insertar_en_archivo O editar_archivo
+sobre un archivo existente, DEBES haberlo leído con
+leer_archivo. Si no existe, crear_archivo.
 
 3. UNA SOLA VERIFICACIÓN. NO REINTENTES EN BUCLE.
 Al final de cada fase ejecuta el comando de verificación UNA vez.
