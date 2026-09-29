@@ -50,6 +50,10 @@ GIT_READONLY_SUBCOMMANDS: frozenset[str] = frozenset({
 # venv (crea entorno), http.server (abre puerto), etc.
 PYTHON_READONLY_MODULES: frozenset[str] = frozenset({
     "pytest", "unittest", "json.tool", "pydoc",
+    # Verificacion de sintaxis: escriben solo .pyc en __pycache__/,
+    # nunca tocan el .py fuente. Mismo criterio que pytest, que
+    # tambien genera .pyc al importar los modulos de test.
+    "py_compile", "compileall",
 })
 
 # Flags de find que ejecutan comandos o escriben ficheros.

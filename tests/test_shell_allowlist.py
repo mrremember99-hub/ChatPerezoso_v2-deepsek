@@ -46,6 +46,10 @@ from plugins.shell.allowlist import is_command_allowed  # noqa: E402
     "python script.py",
     "python3 script.py",
     "python -m json.tool data.json",
+    "python -m py_compile gui.py",
+    "python3 -m py_compile core_processor.py",
+    "python -m compileall .",
+    "python3 -m compileall -q gui.py",
     # find sin flags peligrosos
     "find . -name '*.py'",
     "find . -type f -name '*.md'",
@@ -151,6 +155,8 @@ def test_git_mutantes_denegados(cmd):
     "python3 -m pip install foo",
     "python -m venv .venv",
     "python -m http.server",
+    "python -m black --check .",
+    "python -m ruff check .",
 ])
 def test_python_peligrosos_denegados(cmd):
     assert is_command_allowed(cmd) is False, f"NO deberia permitirse: {cmd}"
