@@ -1,0 +1,379 @@
+"""Tests de core/rag_index.py — sin red, embedder fake."""
+from __future__ import annotations
+
+import struct
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from core.ast_index import AstIndex, close_all as ast_close_all
+from core.rag_index import (
+    DEFAULT_MODEL,
+    RagHit,
+    RagIndex,
+    _chunk_text,
+    close_all,
+    get_rag_index,
+)
+
+
+# ── fake embedder ─────────────────────────────────────────────────
+
+
+class FakeOllama:
+    """Devuelve vectores deterministas a partir del hash del texto.
+
+    Texto identico -> vector identico. Texto distinto -> vector
+    distinto (casi siempre). Sirve para verificar que query()
+    ordena por similitud sin necesitar Ollama real.
+    """
+
+    def __init__(self, dim: int = 8):
+        self.dim = dim
+        self.calls: list[tuple[list[str], str]] = []
+
+    def embed(self, texts, *, model=DEFAULT_MODEL, timeout=30.0,
+              cancel_event=None):
+        self.calls.append((list(texts), model))
+        out = []
+        for t in texts:
+            h = abs(hash(t))
+            rng = np.random.default_rng(h)
+            v = rng.standard_normal(self.dim).astype(np.float32)
+            n = float(np.linalg.norm(v)) or 1.0
+            out.append((v / n).tolist())
+        return out
+
+
+def _ws(tmp_path):
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "auth.py").write_text(
+        '"""Modulo de autenticacion."""\n'
+        "class User:\n"
+        "    '''Usuario del sistema.'''\n"
+        "    def save(self):\n"
+        "        '''Persiste el usuario en la base de datos.'''\n"
+        "        return True\n"
+        "def login(username, password):\n"
+        "    '''Valida credenciales y devuelve un token.'''\n"
+        "    return 'token'\n"
+        "def logout(token):\n"
+        "    '''Invalida el token.'''\n"
+        "    return True\n",
+        encoding="utf-8",
+    )
+    (root / "math.py").write_text(
+        "def suma(a, b):\n"
+        "    '''Suma dos numeros.'''\n"
+        "    return a + b\n"
+        "MAX = 100\n",
+        encoding="utf-8",
+    )
+    return root
+
+
+def _make_rag(tmp_path, model=DEFAULT_MODEL):
+    root = _ws(tmp_path)
+    idx = AstIndex(root, db_path=tmp_path / "idx.sqlite")
+    idx.refresh()
+    ollama = FakeOllama()
+    return RagIndex(root, ollama=ollama, ast_index=idx), idx, ollama
+
+
+# ── _chunk_text ───────────────────────────────────────────────────
+
+
+def test_chunk_text_incluye_metadata():
+    from core.ast_index import Symbol
+
+    s = Symbol(
+        name="User", kind="class", file="auth.py", line=1,
+        signature="class User", docstring="Usuario.", end_line=5,
+    )
+    out = _chunk_text(s, "class User:\n    pass\n")
+    assert "auth.py:User" in out
+    assert "[class]" in out
+    assert "class User" in out
+    assert "Usuario." in out
+    assert "pass" in out
+
+
+def test_chunk_text_sin_cuerpo_ni_docstring():
+    from core.ast_index import Symbol
+
+    s = Symbol(name="x", kind="function", file="a.py", line=1)
+    out = _chunk_text(s, "")
+    assert "a.py:x" in out
+    assert "[function]" in out
+
+
+def test_chunk_text_trunca_body():
+    from core.ast_index import Symbol
+
+    # Usamos un caracter que no aparezca en la metadata para no
+    # contar de mas (el nombre del simbolo contiene "x" si lo usamos).
+    s = Symbol(name="fn", kind="function", file="a.py", line=1,
+               end_line=1)
+    body = "Z" * 5000
+    out = _chunk_text(s, body)
+    # Exactamente MAX_BODY_CHARS del cuerpo, ni uno mas.
+    assert out.count("Z") == 800
+
+
+# ── index_pending ─────────────────────────────────────────────────
+
+
+def test_index_pending_primera_vez(tmp_path):
+    rag, idx, ollama = _make_rag(tmp_path)
+    try:
+        n = rag.index_pending()
+        # 6 simbolos: User, User.save, login, logout, suma, MAX
+        assert n == 6
+        st = rag.stats()
+        assert st["embedded"] == 6
+        assert st["pending"] == 0
+        # 1 llamada a embed (batch unico)
+        assert len(ollama.calls) == 1
+        assert ollama.calls[0][1] == DEFAULT_MODEL
+    finally:
+        idx.close()
+
+
+def test_index_pending_idempotente(tmp_path):
+    rag, idx, ollama = _make_rag(tmp_path)
+    try:
+        assert rag.index_pending() == 6
+        # segunda vez: 0, no re-embebe
+        assert rag.index_pending() == 0
+        assert len(ollama.calls) == 1
+    finally:
+        idx.close()
+
+
+def test_index_pending_limit(tmp_path):
+    rag, idx, _ = _make_rag(tmp_path)
+    try:
+        assert rag.index_pending(limit=3) == 3
+        assert rag.stats()["embedded"] == 3
+        assert rag.index_pending() == 3
+        assert rag.stats()["embedded"] == 6
+    finally:
+        idx.close()
+
+
+def test_index_pending_batch_size(tmp_path):
+    rag, idx, ollama = _make_rag(tmp_path)
+    try:
+        rag.index_pending(batch_size=2)
+        # 6 simbolos / 2 por batch = 3 llamadas
+        assert len(ollama.calls) == 3
+    finally:
+        idx.close()
+
+
+def test_index_pending_error_parcial(tmp_path):
+    """Si embed falla a mitad, se conserva lo indexado."""
+    from core.ollama import OllamaError
+
+    root = _ws(tmp_path)
+    idx = AstIndex(root, db_path=tmp_path / "idx.sqlite")
+    idx.refresh()
+
+    call_count = {"n": 0}
+
+    class HalfBrokenOllama:
+        def __init__(self):
+            self.dim = 8
+
+        def embed(self, texts, *, model=DEFAULT_MODEL, **kw):
+            call_count["n"] += 1
+            if call_count["n"] > 1:
+                raise OllamaError("boom")
+            out = []
+            for t in texts:
+                rng = np.random.default_rng(abs(hash(t)))
+                v = rng.standard_normal(self.dim).astype(np.float32)
+                v /= np.linalg.norm(v) or 1.0
+                out.append(v.tolist())
+            return out
+
+    rag = RagIndex(root, ollama=HalfBrokenOllama(), ast_index=idx)
+    try:
+        n = rag.index_pending(batch_size=2)
+        # solo el primer batch (2 simbolos) paso
+        assert n == 2
+    finally:
+        idx.close()
+
+
+# ── query ─────────────────────────────────────────────────────────
+
+
+def test_query_devuelve_hits(tmp_path):
+    rag, idx, _ = _make_rag(tmp_path)
+    try:
+        rag.index_pending()
+        hits = rag.query("login", k=3)
+        assert len(hits) == 3
+        assert all(isinstance(h, RagHit) for h in hits)
+        # ordenados por score descendente
+        scores = [h.score for h in hits]
+        assert scores == sorted(scores, reverse=True)
+    finally:
+        idx.close()
+
+
+def test_query_texto_vacio(tmp_path):
+    rag, idx, _ = _make_rag(tmp_path)
+    try:
+        rag.index_pending()
+        assert rag.query("") == []
+        assert rag.query("   ") == []
+    finally:
+        idx.close()
+
+
+def test_query_kind_filter(tmp_path):
+    rag, idx, _ = _make_rag(tmp_path)
+    try:
+        rag.index_pending()
+        hits = rag.query("x", k=10, kind="class")
+        assert all(h.symbol.kind == "class" for h in hits)
+    finally:
+        idx.close()
+
+
+def test_query_sin_indice(tmp_path):
+    root = _ws(tmp_path)
+    idx = AstIndex(root, db_path=tmp_path / "idx.sqlite")
+    idx.refresh()
+    rag = RagIndex(root, ollama=FakeOllama(), ast_index=idx)
+    try:
+        # no indexamos -> query no encuentra nada
+        assert rag.query("login") == []
+    finally:
+        idx.close()
+
+
+def test_query_top_k_mayor_que_total(tmp_path):
+    rag, idx, _ = _make_rag(tmp_path)
+    try:
+        rag.index_pending()
+        hits = rag.query("x", k=100)
+        assert len(hits) == 6  # todos
+    finally:
+        idx.close()
+
+
+def test_query_embed_falla_devuelve_vacio(tmp_path):
+    from core.ollama import OllamaError
+
+    root = _ws(tmp_path)
+    idx = AstIndex(root, db_path=tmp_path / "idx.sqlite")
+    idx.refresh()
+
+    class BrokenOllama:
+        def embed(self, texts, **kw):
+            raise OllamaError("down")
+
+    rag = RagIndex(root, ollama=BrokenOllama(), ast_index=idx)
+    try:
+        assert rag.query("login") == []
+    finally:
+        idx.close()
+
+
+# ── invalidate / cleanup ──────────────────────────────────────────
+
+
+def test_invalidate_file(tmp_path):
+    rag, idx, _ = _make_rag(tmp_path)
+    try:
+        rag.index_pending()
+        n = rag.invalidate_file("math.py")
+        assert n == 2  # suma + MAX
+        assert rag.stats()["embedded"] == 4
+    finally:
+        idx.close()
+
+
+def test_cleanup_orphans(tmp_path):
+    rag, idx, _ = _make_rag(tmp_path)
+    try:
+        rag.index_pending()
+        # Inserto un embedding huerfano a mano.
+        blob = struct.pack("8f", *([0.0] * 8))
+        idx.con.execute(
+            "INSERT INTO embeddings"
+            "(symbol_id, model, dim, vector, indexed_at) "
+            "VALUES (99999, ?, 8, ?, 0.0)",
+            (DEFAULT_MODEL, blob),
+        )
+        idx.con.commit()
+        n = rag.cleanup_orphans()
+        assert n == 1
+        assert rag.stats()["embedded"] == 6
+    finally:
+        idx.close()
+
+
+# ── stats / cache ─────────────────────────────────────────────────
+
+
+def test_stats(tmp_path):
+    rag, idx, _ = _make_rag(tmp_path)
+    try:
+        st = rag.stats()
+        assert st["model"] == DEFAULT_MODEL
+        assert st["symbols"] == 6
+        assert st["embedded"] == 0
+        assert st["pending"] == 6
+        rag.index_pending(limit=2)
+        st = rag.stats()
+        assert st["embedded"] == 2
+        assert st["pending"] == 4
+    finally:
+        idx.close()
+
+
+def test_get_rag_index_reutiliza(tmp_path):
+    root = _ws(tmp_path)
+    close_all()
+    a = get_rag_index(root, ollama=FakeOllama())
+    b = get_rag_index(root, ollama=FakeOllama())
+    assert a is b
+    close_all()
+
+
+def test_get_rag_index_modelo_distinto_recrea(tmp_path):
+    root = _ws(tmp_path)
+    close_all()
+    a = get_rag_index(root, ollama=FakeOllama(), model="model-a")
+    b = get_rag_index(root, ollama=FakeOllama(), model="model-b")
+    assert a is not b
+    assert b.model == "model-b"
+    close_all()
+
+
+def test_close_all_limpia_cache(tmp_path):
+    root = _ws(tmp_path)
+    close_all()
+    a = get_rag_index(root, ollama=FakeOllama())
+    close_all()
+    b = get_rag_index(root, ollama=FakeOllama())
+    assert a is not b
+    close_all()
+
+
+# ── aislamiento ───────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _isolate_ast_cache(tmp_path, monkeypatch):
+    from core import ast_index as ai
+    monkeypatch.setattr(ai, "CACHE_DIR", tmp_path / "ast_cache")
+    yield
+    ast_close_all()
+    close_all()
