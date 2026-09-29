@@ -364,10 +364,14 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    base = args.output or str(
-        ROOT / "scripts" /
-        f"eval_tools_{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-    )
+    if args.output:
+        base = args.output
+    else:
+        out_dir = ROOT / "scripts" / "eval" / "results"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        base = str(
+            out_dir / f"eval_tools_{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        )
 
     variants = ["actual"] if args.variant == "actual" else (
         ["reduced"] if args.variant == "reduced" else ["actual", "reduced"]

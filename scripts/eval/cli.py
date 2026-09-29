@@ -51,9 +51,20 @@ def _load_success_count(path: str) -> tuple[int, int]:
     return 0, 0
 
 
+_SUITE_PREFIX: dict[str, tuple[str, ...]] = {
+    "baseline": ("baseline_*.json",),
+    "tools": ("eval_tools_*_actual.json", "eval_tools_*.json"),
+}
+
+
 def _find_latest_run(suite: str) -> str | None:
-    results = sorted((EVAL_DIR / "results").glob(f"{suite}_*.json"))
-    return str(results[-1]) if results else None
+    results_dir = EVAL_DIR / "results"
+    patterns = _SUITE_PREFIX.get(suite, (f"{suite}_*.json",))
+    for pattern in patterns:
+        matches = sorted(results_dir.glob(pattern))
+        if matches:
+            return str(matches[-1])
+    return None
 
 
 def cmd_run(args: argparse.Namespace) -> int:
