@@ -11,14 +11,6 @@ from PySide6.QtWidgets import QApplication, QFileDialog
 
 from core.agents import Agent, AgentStore
 from core.ast_index import get_index
-from core.rag_index import get_rag_index
-from core.shutdown import (
-    SHUTDOWN_BUDGET_SECONDS,
-    remaining,
-)
-
-from ..chat_state import ChatState
-from ..workers import CapabilitiesWorker
 from core.composite_tools import (
     CachedToolProvider,
     CompositeToolProvider,
@@ -28,23 +20,29 @@ from core.config import AppConfig
 from core.history import HistoryStore
 from core.mcp_servers import MCPServerStore
 from core.ollama import OllamaClient
-from core.prompt_phases import detect_phases
 from core.plugins_registry import (
     discover_plugin_factories,
     instantiate_plugins,
+)
+from core.prompt_phases import detect_phases
+from core.rag_index import get_rag_index
+from core.shutdown import (
+    SHUTDOWN_BUDGET_SECONDS,
+    remaining,
 )
 from core.tools import ToolRegistry
 from core.workspace import Workspace, WorkspaceError
 from plugins.mcp import MCPToolBridge
 
+from ..chat_state import ChatState
 from ..views.dialogs import warn
 from ..views.main_window import MainWindow
+from ..workers import CapabilitiesWorker
 from .agent_controller import AgentController
 from .chat_controller import ChatController
 from .diagnostics_controller import DiagnosticsController
 from .mcp_controller import MCPController
 from .model_controller import ModelController
-
 
 # Herramientas cuyos resultados se cachean durante unos segundos.
 # Son de solo lectura: ejecutarlas dos veces con los mismos argumentos
@@ -435,6 +433,7 @@ class AppController(QObject):
     def _on_no_tool_calling_detected(self, model_name: str) -> None:
         """Aviso tras varios fallos de tool calling del modelo."""
         from core.models_config import VERIFIED_TOOL_MODELS
+
         from ..views.dialogs import no_tool_calling_dialog
 
         chosen = no_tool_calling_dialog(

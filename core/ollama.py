@@ -7,31 +7,30 @@ import logging
 import re
 import shlex
 import threading
-from collections.abc import Iterable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Callable
+from typing import Any
 
 import httpx
 
+from . import token_calibration
 from .async_runner import AsyncRunner, _CancelledByEvent
+from .context_window import ContextWindow, RequestTokenCache
+from .intent import ToolIntentGate, _lemma
+from .model_capabilities import get_capabilities
+from .models_config import get_override
 from .stream_events import (
     StreamEvent,
     StreamFinished,
     TextDelta,
     ToolCallsDelta,
 )
-from .intent import ToolIntentGate, _lemma
-from .context_window import ContextWindow, RequestTokenCache
-from . import token_calibration
-from .model_capabilities import get_capabilities
-from .models_config import get_override
 from .tool_strategies import (
-    RoundResult,
     NativeToolStrategy,
+    RoundResult,
     XmlToolStrategy,
     authorize_and_execute,
 )
-
 
 logger = logging.getLogger(__name__)
 

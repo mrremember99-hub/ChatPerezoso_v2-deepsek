@@ -1,33 +1,31 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 from PySide6.QtWidgets import QWidget
 
-import logging
-
 from core.context_window import ContextWindow
-from core.session_summary import (
-    SessionSummary,
-    build_summary_prompt,
-    format_summary_block,
-)
 from core.history import AsyncHistoryWriter, HistoryStore
-from core.ollama import is_textual_tool_failure
-from core.models_config import is_verified_tool_model
 from core.model_capabilities import is_model_available
-from core.tool_provider import ToolProvider
+from core.models_config import is_verified_tool_model
+from core.ollama import is_textual_tool_failure
 from core.prompt_phases import (
     DetectedPhases,
     build_phase_prompt,
     detect_phases,
 )
-from core.tool_result import ToolResult
+from core.session_summary import (
+    SessionSummary,
+    build_summary_prompt,
+    format_summary_block,
+)
 from core.shutdown import remaining
+from core.tool_provider import ToolProvider
+from core.tool_result import ToolResult
 
 from ..chat_state import ChatState
-
 from ..rendering import ChatRenderer
 from ..views.dialogs import confirm_tool
 from ..workers import ChatWorker

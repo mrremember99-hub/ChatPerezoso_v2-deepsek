@@ -26,7 +26,6 @@ import numpy as np
 from .ast_index import AstIndex, Symbol, get_index
 from .ollama import OllamaClient, OllamaError
 
-
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "nomic-embed-text"
@@ -45,7 +44,7 @@ NOMIC_QUERY_PREFIX = "search_query: "
 # desplazando al codigo de produccion.
 _SKIP_INDEX_PREFIXES = ("tests/", "test_")
 
-_RAG_CACHE: dict[Path, "RagIndex"] = {}
+_RAG_CACHE: dict[Path, RagIndex] = {}
 _RAG_CACHE_LOCK = threading.Lock()
 
 

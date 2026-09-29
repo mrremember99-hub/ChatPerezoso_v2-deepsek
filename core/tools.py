@@ -7,7 +7,6 @@ from typing import Any
 from .intent import IntentRule
 from .workspace import Workspace, WorkspaceError
 
-
 logger = logging.getLogger(__name__)
 
 

@@ -16,11 +16,10 @@ from __future__ import annotations
 
 import re
 import unicodedata
-
-import simplemma
 from dataclasses import dataclass
 from typing import ClassVar
 
+import simplemma
 
 # F7-quater (2026-09-28): conjunto de tools de solo lectura.
 # Con piloto automatico activo (auto_approve=True), el gate NO
@@ -170,7 +169,6 @@ _POSTPROC: dict[str, str] = {
     "escribio": "escribir", "encontro": "encontrar",
 }
 from typing import Any
-
 
 MCP_ACTION_VERBS: tuple[str, ...] = (
     "usa", "usar", "utiliza", "utilizar", "llama", "llamar",
@@ -396,7 +394,7 @@ class ToolIntentGate:
         return False
 
     def _assistant_mentions_rule_verb(
-        self, rule: "IntentRule", assistant_text: str
+        self, rule: IntentRule, assistant_text: str
     ) -> bool:
         """True si el assistant menciono algun verbo de la regla.
 

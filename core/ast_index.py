@@ -26,12 +26,11 @@ import hashlib
 import sqlite3
 import threading
 import time
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator
 
 from .workspace import _SKIP_DIRS
-
 
 CACHE_DIR = Path.home() / ".cache" / "chatperezoso"
 _MAX_DOCSTRING = 200
@@ -63,11 +62,11 @@ class Symbol:
 # por ToolRegistry, snapshot y (en el futuro) el RAG. Evita abrir la
 # misma conexion SQLite dos veces y garantiza que el indice que
 # consulta buscar_simbolo es el mismo que refresca el snapshot.
-_INDEX_CACHE: dict[Path, "AstIndex"] = {}
+_INDEX_CACHE: dict[Path, AstIndex] = {}
 _INDEX_CACHE_LOCK = threading.Lock()
 
 
-def get_index(root: Path) -> "AstIndex":
+def get_index(root: Path) -> AstIndex:
     """Devuelve el AstIndex compartido para ``root`` (uno por proceso).
 
     Cache module-level thread-safe. La primera llamada abre la
@@ -507,11 +506,7 @@ class AstIndex:
                 if method.startswith("_") and not method.startswith("__"):
                     continue
                 out.append(f"    {sig}")
-            elif kind == KIND_CLASS:
-                if dots != 0:
-                    continue
-                out.append(f"  {sig}")
-            elif kind == KIND_FUNCTION:
+            elif kind == KIND_CLASS or kind == KIND_FUNCTION:
                 if dots != 0:
                     continue
                 out.append(f"  {sig}")
@@ -547,7 +542,7 @@ class AstIndex:
         except sqlite3.Error:
             pass
 
-    def __enter__(self) -> "AstIndex":
+    def __enter__(self) -> AstIndex:
         return self
 
     def __exit__(self, *exc) -> None:
