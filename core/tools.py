@@ -508,7 +508,11 @@ class ToolRegistry:
 
         for field in spec["required"]:
             if field not in arguments:
-                return f"ERROR: falta el argumento requerido: {field}"
+                params = ", ".join(spec["properties"].keys())
+                return (
+                    f"ERROR: falta el argumento requerido: {field}. "
+                    f"Firma esperada de {name}: ({params})."
+                )
 
         for field in arguments:
             if field not in spec["properties"]:
