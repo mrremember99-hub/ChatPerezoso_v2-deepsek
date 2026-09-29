@@ -6,6 +6,7 @@ import time
 
 from PySide6.QtWidgets import QApplication
 
+from core.shutdown import close_auxiliary_caches
 from ui.controllers.app_controller import AppController
 
 # Switch de mascara (auditoria 2026-09-27, rediseno visual v2).
@@ -72,6 +73,10 @@ def main() -> int:
     ).start()
 
     controller.shutdown()
+    # Caches compartidos fuera del arbol de controllers (AstIndex,
+    # futuro _RAG_CACHE, etc.). Despues del controller para no
+    # cerrar el indice mientras el RAG aun lo consulta.
+    close_auxiliary_caches()
     return exit_code
 
 

@@ -27,7 +27,7 @@ El extra `dev` instala `ruff`, `mypy`, `pytest`, `pytest-qt`, `pytest-timeout`.
 |---|---|---|
 | Python | ≥ 3.11 | 3.12.14 en desarrollo |
 | PySide6 | ≥ 6.6 | Última estable: 6.11.1 (mayo 2026) |
-| httpx | ≥ 0.27 | Cliente HTTP async |
+| httpx | ≥ 0.27 | Cliente HTTP (async en ollama, sync en capabilities) |
 | psutil | ≥ 5.9 | Métricas de sistema |
 | regex | ≥ 2024.5.15 | Fallback de búsqueda |
 | google-re2 | ≥ 1.1 | Motor preferido (lineal, sin ReDoS) |

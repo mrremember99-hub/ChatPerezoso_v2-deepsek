@@ -7,7 +7,10 @@ cuanto queda del presupuesto total para repartirlo entre fases.
 """
 from __future__ import annotations
 
+import logging
 import time
+
+logger = logging.getLogger(__name__)
 
 # Presupuesto total de shutdown. Menor que el watchdog de
 # main.py (SHUTDOWN_GRACE_SECONDS), para que el watchdog solo
@@ -25,3 +28,19 @@ def remaining(deadline: float | None, *, default: float) -> float:
     if deadline is None:
         return default
     return max(0.0, deadline - time.monotonic())
+
+
+def close_auxiliary_caches() -> None:
+    """Cierra caches compartidos que no pertenecen a ningun controller.
+
+    Se llama desde main.py DESPUES de controller.shutdown(): durante
+    el cierre del controller, el RAG puede seguir consultando el
+    AstIndex. Cualquier fallo se registra con log pero no propaga:
+    un cache que no cierra no debe abortar el shutdown de la app.
+    """
+    from core import ast_index
+
+    try:
+        ast_index.close_all()
+    except Exception:
+        logger.exception("close_auxiliary_caches: fallo cerrando ast_index")
