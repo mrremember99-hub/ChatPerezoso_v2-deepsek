@@ -113,6 +113,13 @@ def run_case(case: dict, *, host: str, model: str, timeout: float) -> dict:
 
     # -- Validaciones heuristicas --
     failures = result["failures"]
+    if final_chunk is None:
+        # El servidor cerro la conexion sin emitir el chunk final
+        # {"done": true}. Puede ser timeout, crash o un proxy
+        # cortando. El stream es incompleto: el resultado no puede
+        # contar como success, y el diagnostico debe ser explicito
+        # en vez de "success=False sin failure".
+        failures.append("stream_incomplete_no_done")
     if not response_text and not result["tool_calls"]:
         failures.append("empty_response")
     if result["done_reason"] == "length":
