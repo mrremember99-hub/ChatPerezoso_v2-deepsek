@@ -692,6 +692,47 @@ El detector tiene que evitar falsos positivos. **No son bucles**:
 **Regla**: el detector nunca dispara si dos llamadas "repetidas"
 tienen **resultados distintos**.
 
+### 3.8. Como activar loop detection (S1-ter)
+
+El codigo de deteccion esta implementado (S1) e integrado en el
+worker (S1-bis). Para activarlo en una sesion real:
+
+1. Editar `config.json`:
+
+       "loop_detection_enabled": true
+
+2. Relanzar la app. Al construir el `ChatWorker`, el
+   `ChatController` inyecta un `LoopDetector` con la `LoopPolicy`
+   por defecto.
+
+3. Cuando el detector dispare, el usuario ve narraciones:
+
+   · "Loop leve (generic_repeat): mismo tool+args 3 veces" — warning
+   · "Loop detectado (ping_pong): patron alternante 3 ciclos. El
+     agente deberia cambiar de estrategia." — corrective
+   · "Loop abortado (generic_repeat): max_corrective_attempts=3
+     superado. Sesion cancelada automaticamente." — abort
+
+4. El flag es **OFF por defecto**. En un `config.json` sin la
+   clave, `AppConfig.load()` aplica el default `False` y el
+   comportamiento es identico al de antes de S1-ter.
+
+### 3.9. Que NO hace todavia el loop detector
+
+En S1-ter el detector **no inyecta el prompt correctivo al modelo**.
+Solo emite senales Qt que la UI muestra como narraciones. La
+auto-recuperacion (el modelo recibe el correctivo y cambia de
+estrategia sin intervencion del usuario) requiere que el harness
+controle el ciclo del modelo, lo cual es S4 (session).
+
+Lo que S1-ter ya consigue:
+
+- Si el agente entra en bucle de warning/corrective, el usuario
+  **lo ve** en el chat.
+- Si el bucle escala a abort (8 repeticiones o 3 correctives
+  consecutivos), el worker se **cancela automaticamente**. Ya no
+  hay que matar el run a mano.
+
 ---
 
 *Continúa en §4 Durable execution.*

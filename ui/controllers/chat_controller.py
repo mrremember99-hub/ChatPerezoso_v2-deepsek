@@ -140,6 +140,9 @@ class ChatController(QObject):
         # Extensión opt-in: si True, `ejecutar_comando` también se
         # auto-aprueba. Requiere `_auto_approve=True` para tener efecto.
         self._auto_approve_shell = False
+        # Harness v3 S1-ter: si True, se inyecta un LoopDetector en
+        # el ChatWorker. OFF por defecto: cero cambios visibles.
+        self._loop_detection_enabled = False
         # Hook de verificación post-escritura. Callable o None.
         self._verificador_hook: Any = None
         # Cola de prompts para envío secuencial. Vacía = no hay cola.
@@ -574,6 +577,13 @@ class ChatController(QObject):
         if self._worker is not None:
             self._worker.auto_approve_shell = enabled
 
+    def set_loop_detection_enabled(self, enabled: bool) -> None:
+        """Activa/desactiva loop detection para el proximo worker.
+
+        No afecta al worker en curso: se aplica al siguiente.
+        """
+        self._loop_detection_enabled = bool(enabled)
+
     def set_verificador_hook(self, hook: Any) -> None:
         """Registra el callable de verificación post-escritura.
 
@@ -746,6 +756,13 @@ class ChatController(QObject):
             system_prompt or "",
             getattr(self, "_auto_approve", False),
         )
+        # Harness v3 S1-ter: construir detector si esta activo.
+        loop_detector = None
+        if self._loop_detection_enabled:
+            from core.harness.loop import LoopDetector
+            from core.harness.policy import LoopPolicy
+            loop_detector = LoopDetector(LoopPolicy())
+
         self._thread = QThread(self)
         self._worker = ChatWorker(
             self.client,
@@ -761,6 +778,7 @@ class ChatController(QObject):
             summary_model=self._summary_model,
             summary_prompt=summary_prompt,
             summary_new_index=summary_new_index,
+            loop_detector=loop_detector,
         )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
@@ -771,6 +789,11 @@ class ChatController(QObject):
         self._worker.tool_auto_approved.connect(self._on_tool_auto_approved)
         self._worker.metrics_updated.connect(self._on_worker_metrics)
         self._worker.summary_ready.connect(self._on_summary_ready)
+        # Harness v3 S1-ter: señales de loop detection. Solo se
+        # emiten si hay detector inyectado.
+        self._worker.loop_warning.connect(self._on_loop_warning)
+        self._worker.loop_corrective.connect(self._on_loop_corrective)
+        self._worker.loop_aborted.connect(self._on_loop_aborted)
         self._worker.finished.connect(self._on_done)
         self._worker.error.connect(self._on_error)
         self._worker.cancelled.connect(self._on_cancelled)
@@ -1093,6 +1116,29 @@ class ChatController(QObject):
         """
         self.renderer.insert_narration(
             f"Auto-aprobado: {name}", active=False
+        )
+
+    def _on_loop_warning(self, detector: str, reason: str) -> None:
+        """El LoopDetector detecto un patron repetitivo (leve)."""
+        self.renderer.insert_narration(
+            f"Loop leve ({detector}): {reason}",
+            active=False,
+        )
+
+    def _on_loop_corrective(self, detector: str, reason: str) -> None:
+        """El LoopDetector pide un cambio de estrategia."""
+        self.renderer.insert_narration(
+            f"Loop detectado ({detector}): {reason}. "
+            "El agente deberia cambiar de estrategia.",
+            active=False,
+        )
+
+    def _on_loop_aborted(self, detector: str, reason: str) -> None:
+        """El LoopDetector aborto la sesion. El worker se cancelo."""
+        self.renderer.insert_narration(
+            f"Loop abortado ({detector}): {reason}. "
+            "Sesion cancelada automaticamente.",
+            active=False,
         )
 
     def _on_summary_ready(self, raw: str, new_index: int) -> None:
