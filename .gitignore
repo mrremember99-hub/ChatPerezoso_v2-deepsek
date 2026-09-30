@@ -63,3 +63,6 @@ scripts/eval_tools_*.json
 .vscode/
 models_catalog.json
 scripts/eval/results/catalog/
+
+# Dossiers de auditoria externa (foto de fecha, no versionar)
+audit/
