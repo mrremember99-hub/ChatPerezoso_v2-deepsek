@@ -16,8 +16,8 @@ import json
 import secrets
 import sqlite3
 import threading
-from collections.abc import Iterator
-from dataclasses import asdict, dataclass
+from collections.abc import Iterable, Iterator
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -553,3 +553,296 @@ class IdempotencyRegistry:
 
     def __exit__(self, *exc: object) -> None:
         self.close()
+
+
+# ══════════════ S2-c: Resume (fold + plan) ══════════════
+
+
+@dataclass
+class HarnessState:
+    """Estado reconstruido de un run desde event log + checkpoint.
+
+    No es frozen: fold_events lo muta en sitio. Para devolverlo
+    al exterior conviene copiarlo (dataclasses.replace).
+    """
+
+    run_id: str
+    started: bool = False
+    ended: bool = False
+    end_reason: str = ""
+    current_step: int = -1
+    last_event_seq: int = 0
+    messages: list[dict] = field(default_factory=list)
+    last_tool_call: dict | None = None
+    pending_confirmation: str | None = None
+    loop_correctives_count: int = 0
+    loop_aborted: bool = False
+    last_verification: dict | None = None
+    last_error: str | None = None
+    last_warning: str | None = None
+    # Hashes del ultimo checkpoint (si hubo). Vacio si no.
+    agent_spec_hash: str = ""
+    policy_hash: str = ""
+
+
+_MAX_MESSAGES_IN_STATE = 20
+
+
+def state_from_checkpoint(snap: CheckpointSnapshot) -> HarnessState:
+    """Convierte un CheckpointSnapshot en HarnessState inicial."""
+    return HarnessState(
+        run_id=snap.run_id,
+        started=True,
+        current_step=snap.step_index,
+        last_event_seq=snap.last_event_seq,
+        messages=list(snap.messages_summary[-_MAX_MESSAGES_IN_STATE:]),
+        loop_correctives_count=snap.correctives_count,
+        last_verification=(
+            {"issues": list(snap.verification_issues)}
+            if snap.verification_issues else None
+        ),
+        agent_spec_hash=snap.agent_spec_hash,
+        policy_hash=snap.policy_hash,
+    )
+
+
+def fold_events(
+    events: Iterable[Event],
+    initial: HarnessState | None = None,
+) -> HarnessState:
+    """Reduce eventos a un HarnessState.
+
+    Funcion pura: no lee DB. Testeable con listas sinteticas.
+
+    Uso tipico:
+        state = fold_events(log.read(run_id))
+        state = fold_events(log.read(run_id, since_seq=X), initial=base)
+    """
+    state = initial or HarnessState(run_id="")
+    for e in events:
+        state.last_event_seq = max(state.last_event_seq, e.seq)
+        kind = e.kind
+        if kind == "run_started":
+            state.started = True
+            if not state.run_id:
+                state.run_id = e.run_id
+        elif kind == "run_ended":
+            state.ended = True
+            state.end_reason = str(getattr(e, "reason", ""))
+        elif kind == "step_started":
+            state.current_step = int(getattr(e, "step_index", -1))
+        elif kind == "message_completed":
+            role = str(getattr(e, "role", ""))
+            content = str(getattr(e, "content", ""))
+            state.messages.append({"role": role, "content": content})
+            if len(state.messages) > _MAX_MESSAGES_IN_STATE:
+                state.messages = state.messages[
+                    -_MAX_MESSAGES_IN_STATE:
+                ]
+        elif kind == "tool_call_requested":
+            state.last_tool_call = {
+                "call_id": str(getattr(e, "call_id", "")),
+                "tool_name": str(getattr(e, "tool_name", "")),
+                "arguments": dict(getattr(e, "arguments", {})),
+                "auto_approved": bool(
+                    getattr(e, "auto_approved", False)
+                ),
+            }
+        elif kind == "tool_call_completed":
+            # Limpia el "en vuelo" solo si coincide el call_id.
+            if (
+                state.last_tool_call
+                and state.last_tool_call.get("call_id")
+                == str(getattr(e, "call_id", ""))
+            ):
+                state.last_tool_call = None
+        elif kind == "confirmation_requested":
+            state.pending_confirmation = str(
+                getattr(e, "call_id", "")
+            )
+        elif kind == "confirmation_resolved":
+            if (
+                state.pending_confirmation
+                == str(getattr(e, "call_id", ""))
+            ):
+                state.pending_confirmation = None
+        elif kind == "loop_corrective_prompt":
+            state.loop_correctives_count += 1
+        elif kind == "loop_aborted":
+            state.loop_aborted = True
+        elif kind == "verification_run":
+            state.last_verification = {
+                "call_id": str(getattr(e, "call_id", "")),
+                "target": str(getattr(e, "target", "")),
+                "issues": list(getattr(e, "issues", [])),
+            }
+        elif kind == "harness_error":
+            state.last_error = str(getattr(e, "message", ""))
+        elif kind == "harness_warning":
+            state.last_warning = str(
+                getattr(e, "warning_kind", "")
+            )
+    return state
+
+
+# ── Carga de estado (IO) ─────────────────────────────────────────
+
+
+def load_state(
+    log: EventLog,
+    cm: CheckpointManager,
+    run_id: str,
+) -> HarnessState:
+    """Reconstruye el estado de un run desde log + ultimo checkpoint.
+
+    Optimizacion: si hay checkpoint, no re-lee todo el log; solo
+    los eventos posteriores al `last_event_seq` del checkpoint.
+    """
+    snap = cm.get_latest(run_id)
+    if snap is None:
+        return fold_events(log.read(run_id))
+
+    base = state_from_checkpoint(snap)
+    rest = log.read(run_id, since_seq=snap.last_event_seq)
+    return fold_events(rest, initial=base)
+
+
+# ── Deteccion de inconsistencias ─────────────────────────────────
+
+
+@dataclass(frozen=True)
+class Inconsistency:
+    kind: str       # "policy_changed" | "agent_changed" | ...
+    severity: str   # "warning" | "critical"
+    message: str
+
+
+def detect_inconsistencies(
+    state: HarnessState,
+    *,
+    current_agent_spec_hash: str = "",
+    current_policy_hash: str = "",
+) -> list[Inconsistency]:
+    """Compara hashes del checkpoint con la config actual.
+
+    Un cambio de policy o de agente invalida el checkpoint: el
+    run continuo con otra config, asi que reanudarlo tal cual
+    seria inconsistente. Se emite como critical.
+    """
+    out: list[Inconsistency] = []
+    if (
+        state.policy_hash
+        and current_policy_hash
+        and state.policy_hash != current_policy_hash
+    ):
+        out.append(Inconsistency(
+            kind="policy_changed",
+            severity="critical",
+            message=(
+                "policy_hash cambio entre sesiones "
+                f"({state.policy_hash[:8]} != "
+                f"{current_policy_hash[:8]})"
+            ),
+        ))
+    if (
+        state.agent_spec_hash
+        and current_agent_spec_hash
+        and state.agent_spec_hash != current_agent_spec_hash
+    ):
+        out.append(Inconsistency(
+            kind="agent_changed",
+            severity="critical",
+            message=(
+                "agent_spec_hash cambio entre sesiones "
+                f"({state.agent_spec_hash[:8]} != "
+                f"{current_agent_spec_hash[:8]})"
+            ),
+        ))
+    return out
+
+
+# ── Plan de resume ───────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ResumePlan:
+    """Decision de resume para un run.
+
+    action:
+      · "nothing"        — run terminado, nada que hacer
+      · "start"          — run no empezado, empezar de cero
+      · "resolve_pending"— hay ops pending; resolverlas antes
+      · "continue"       — continuar desde from_step
+      · "abort"          — no se puede reanudar (inconsistencias)
+
+    from_step:
+      · Indice del step desde el que continuar (si action="continue").
+      · -1 si no aplica.
+
+    pending_ops:
+      · Claves de ops en estado pending (si action="resolve_pending").
+      · Lista vacia en otros casos.
+    """
+
+    action: str
+    from_step: int = -1
+    pending_ops: list[str] = field(default_factory=list)
+    reason: str = ""
+
+
+def plan_resume(
+    state: HarnessState,
+    ir: IdempotencyRegistry | None = None,
+    *,
+    inconsistencies: list[Inconsistency] | None = None,
+) -> ResumePlan:
+    """Decide que hacer con un run interrumpido.
+
+    Orden de comprobaciones:
+      1. Inconsistencias criticas -> abort.
+      2. Run terminado            -> nothing.
+      3. Run no empezado          -> start.
+      4. Ops pending              -> resolve_pending.
+      5. Resto                    -> continue desde current_step.
+    """
+    # 1. Inconsistencias criticas abortan.
+    if inconsistencies:
+        critical = [
+            i for i in inconsistencies if i.severity == "critical"
+        ]
+        if critical:
+            return ResumePlan(
+                action="abort",
+                reason="; ".join(i.message for i in critical),
+            )
+
+    # 2. Ya termino.
+    if state.ended:
+        return ResumePlan(
+            action="nothing",
+            reason=f"run terminado ({state.end_reason})",
+        )
+
+    # 3. No empezo.
+    if not state.started:
+        return ResumePlan(
+            action="start",
+            reason="run sin RunStarted",
+        )
+
+    # 4. Ops pending.
+    if ir is not None:
+        pending = ir.list_pending(state.run_id)
+        if pending:
+            return ResumePlan(
+                action="resolve_pending",
+                pending_ops=list(pending),
+                reason=f"{len(pending)} op(s) pending",
+            )
+
+    # 5. Continuar.
+    return ResumePlan(
+        action="continue",
+        from_step=state.current_step,
+        reason=f"continuar desde step {state.current_step}",
+    )
