@@ -83,7 +83,7 @@ class EventLog:
         )
         self._con.row_factory = sqlite3.Row
         self._con.execute("PRAGMA journal_mode=WAL;")
-        self._con.execute("PRAGMA synchronous=NORMAL;")
+        self._con.execute("PRAGMA synchronous=FULL;")
         self._con.execute("PRAGMA busy_timeout=5000;")
         with self._lock:
             self._con.executescript(_SCHEMA)
@@ -282,7 +282,7 @@ class CheckpointManager:
         )
         self._con.row_factory = sqlite3.Row
         self._con.execute("PRAGMA journal_mode=WAL;")
-        self._con.execute("PRAGMA synchronous=NORMAL;")
+        self._con.execute("PRAGMA synchronous=FULL;")
         self._con.execute("PRAGMA busy_timeout=5000;")
         with self._lock:
             self._con.executescript(_SCHEMA)
@@ -463,7 +463,7 @@ class IdempotencyRegistry:
         )
         self._con.row_factory = sqlite3.Row
         self._con.execute("PRAGMA journal_mode=WAL;")
-        self._con.execute("PRAGMA synchronous=NORMAL;")
+        self._con.execute("PRAGMA synchronous=FULL;")
         self._con.execute("PRAGMA busy_timeout=5000;")
         with self._lock:
             self._con.executescript(_SCHEMA)
