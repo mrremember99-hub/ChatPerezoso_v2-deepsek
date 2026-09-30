@@ -361,6 +361,11 @@ class RightPanel(QWidget):
         self._busy = busy
         self._render_mcp_buttons()
 
+    # El usuario pidio borrar un archivo desde el arbol. El
+    # controller decide que hacer (pasa por el gate de
+    # confirmacion de borrar_archivo).
+    delete_requested = Signal(str)
+
     def set_workspace(self, path: str | Path | None) -> None:
         """Fija la raiz del arbol de archivos al workspace activo.
 
@@ -416,7 +421,15 @@ class RightPanel(QWidget):
         path = self._path_for_index(index)
         if path is None:
             return
+        menu = self._build_file_menu(path)
+        menu.exec(self.workspace_tree.viewport().mapToGlobal(pos))
 
+    def _build_file_menu(self, path: Path) -> QMenu:
+        """Construye el menu contextual para una ruta.
+
+        Extraido de _on_tree_context_menu para poder testearlo sin
+        simular clicks (QTest con viewport pos es fragil).
+        """
         menu = QMenu(self.workspace_tree)
         if path.is_file():
             act_open = menu.addAction("Abrir con app externa")
@@ -433,8 +446,14 @@ class RightPanel(QWidget):
         act_copy.triggered.connect(
             lambda _=False, p=path: self._copy_path(p)
         )
-
-        menu.exec(self.workspace_tree.viewport().mapToGlobal(pos))
+        # UI backlog: borrar archivos desde el arbol. La senal la
+        # consume el controller, que pasa por el gate de
+        # confirmacion de borrar_archivo (nunca auto-aprobado).
+        act_delete = menu.addAction("Borrar")
+        act_delete.triggered.connect(
+            lambda _=False, p=path: self.delete_requested.emit(str(p))
+        )
+        return menu
 
     @staticmethod
     def _reveal_in_finder(path: Path) -> None:
