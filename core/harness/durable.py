@@ -534,6 +534,21 @@ class IdempotencyRegistry:
             ).fetchall()
         return [r["key"] for r in rows]
 
+    def pending_call_ids(self, run_id: str) -> list[tuple[str, str]]:
+        """P2#2: [(key, call_id)] de ops pending.
+
+        Necesario para reconciliar `last_tool_call` (call_id del
+        ToolCallRequested) con la fila del registry.
+        """
+        with self._lock:
+            cur = self._con.cursor()
+            rows = cur.execute(
+                "SELECT key, call_id FROM executed_ops "
+                "WHERE run_id = ? AND state = 'pending'",
+                (run_id,),
+            ).fetchall()
+        return [(r["key"], r["call_id"]) for r in rows]
+
     def clear(self, run_id: str) -> int:
         with self._lock:
             cur = self._con.cursor()
@@ -586,6 +601,24 @@ class HarnessState:
 
 
 _MAX_MESSAGES_IN_STATE = 20
+
+# P2#2 (auditoria externa): prefijos de tools que son seguras de
+# reintentar (read-only). Coincide con las tools declaradas en
+# core/tools.py + los plugins git read-only.
+_IDEMPOTENT_TOOL_PREFIXES: tuple[str, ...] = (
+    "leer_", "listar_", "buscar_",
+    "git_status", "git_log", "git_diff", "git_show",
+)
+
+
+def is_idempotent_tool(tool_name: str) -> bool:
+    """True si reintentar la tool es seguro.
+
+    Heuristica por prefijo. Los providers pueden declarar un
+    atributo `idempotent` en el futuro; cuando exista, este
+    helper debe consultarlo primero (P2#2).
+    """
+    return tool_name.startswith(_IDEMPOTENT_TOOL_PREFIXES)
 
 
 def state_from_checkpoint(snap: CheckpointSnapshot) -> HarnessState:
@@ -787,6 +820,12 @@ class ResumePlan:
     action: str
     from_step: int = -1
     pending_ops: list[str] = field(default_factory=list)
+    # P2#2: si la pending corresponde a una tool en vuelo
+    # (ToolCallRequested sin Completed), aqui va el call_id.
+    pending_call_id: str = ""
+    # P2#2: True si la op es segura de reintentar. False -> el
+    # caller debe marcar failed para no re-ejecutar side effects.
+    idempotent: bool = True
     reason: str = ""
 
 
@@ -830,13 +869,41 @@ def plan_resume(
             reason="run sin RunStarted",
         )
 
-    # 4. Ops pending.
+    # 4. Ops pending (P2#2: reconciliar con last_tool_call).
     if ir is not None:
-        pending = ir.list_pending(state.run_id)
+        pending = ir.pending_call_ids(state.run_id)
         if pending:
+            ltc = state.last_tool_call
+            if ltc is not None:
+                ltc_call_id = str(ltc.get("call_id", ""))
+                tool_name = str(ltc.get("tool_name", ""))
+                match = next(
+                    (
+                        (k, cid) for k, cid in pending
+                        if cid == ltc_call_id
+                    ),
+                    None,
+                )
+                if match is not None:
+                    idem = is_idempotent_tool(tool_name)
+                    return ResumePlan(
+                        action="resolve_pending",
+                        pending_ops=[match[0]],
+                        pending_call_id=ltc_call_id,
+                        idempotent=idem,
+                        reason=(
+                            f"tool {tool_name!r} en vuelo (pending): "
+                            + (
+                                "reintentar (idempotent)"
+                                if idem
+                                else "marcar failed (side effects)"
+                            )
+                        ),
+                    )
+            # Sin match 1:1: resolver todos sin clasificar.
             return ResumePlan(
                 action="resolve_pending",
-                pending_ops=list(pending),
+                pending_ops=[k for k, _ in pending],
                 reason=f"{len(pending)} op(s) pending",
             )
 
