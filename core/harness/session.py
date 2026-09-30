@@ -3,18 +3,24 @@
 Spec: docs/harness-v3.md §1, §4.
 
 Estado de slices:
-  S4-a (este)  — step() sin tool calls. ModelClient protocol.
-  S4-b         — ciclo completo con tool calls + confirmaciones.
+  S4-a         — step() sin tool calls. ModelClient protocol.
+  S4-b (este)  — ciclo completo con tool calls + idempotencia.
   S4-c         — integracion con LoopDetector + HealthMonitor +
-                 EventLog + CheckpointManager.
+                 confirmaciones bloqueantes.
 """
 from __future__ import annotations
 
+import secrets
 import threading
+import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
 
+from core.harness.durable import (
+    IdempotencyRegistry,
+    idempotency_key,
+)
 from core.harness.events import (
     Event,
     HarnessError,
@@ -24,6 +30,8 @@ from core.harness.events import (
     RunStarted,
     StepEnded,
     StepStarted,
+    ToolCallCompleted,
+    ToolCallRequested,
 )
 from core.harness.model import ModelClient
 from core.harness.policy import HarnessConfig
@@ -37,7 +45,9 @@ class HarnessSession:
     """Sesion de agente. Orquesta el ciclo de un step.
 
     Uso:
-        session = HarnessSession(config, model_client=client)
+        session = HarnessSession(
+            config, model_client=client, tool_registry=registry,
+        )
         for event in session.step("hola"):
             render(event)
     """
@@ -49,23 +59,27 @@ class HarnessSession:
         model_client: ModelClient,
         tool_registry: Any = None,
         event_log: Any = None,
+        idempotency: IdempotencyRegistry | None = None,
     ) -> None:
         self.config = config
         self.model_client = model_client
         self.tool_registry = tool_registry
         self.event_log = event_log
+        self.idempotency = idempotency
         self._seq = 0
         self._step_index = -1
         self._run_started = False
         self._messages: list[dict[str, Any]] = []
         self._cancel = threading.Event()
         self._errors: list[str] = []
+        self._step_failed = False
 
     # -- API ---------------------------------------------------------
 
     def step(self, user_message: str) -> Iterator[Event]:
-        """Ejecuta un step completo. Emite eventos segun ocurren."""
+        """Ejecuta un step completo (modelo + tool calls)."""
         self._cancel.clear()
+        self._step_failed = False
 
         if not self._run_started:
             self._run_started = True
@@ -83,82 +97,31 @@ class HarnessSession:
         )
         yield self._emit(StepStarted, step_index=step_index)
 
-        text_parts: list[str] = []
-        tool_call: dict | None = None
-        error: str | None = None
-
+        fatal: str | None = None
         try:
-            for delta in self.model_client.chat(
-                list(self._messages),
-                tools=None,  # S4-a: sin tools todavia
-                stream=True,
-                cancel_event=self._cancel,
-            ):
-                if delta.kind == "text":
-                    text_parts.append(delta.text)
-                    yield self._emit(
-                        MessageDelta,
-                        role="assistant",
-                        content=delta.text,
-                    )
-                elif delta.kind == "tool_call":
-                    tool_call = delta.tool_call
-                    break
-                elif delta.kind == "done":
-                    if delta.text and not text_parts:
-                        text_parts.append(delta.text)
-                        yield self._emit(
-                            MessageDelta,
-                            role="assistant",
-                            content=delta.text,
-                        )
+            yield from self._agent_loop(step_index)
         except Exception as exc:  # noqa: BLE001
-            error = str(exc) or type(exc).__name__
+            fatal = str(exc) or type(exc).__name__
 
-        full_text = "".join(text_parts)
-        if full_text:
-            yield self._emit(
-                MessageCompleted, role="assistant", content=full_text,
-            )
-            self._messages.append(
-                {"role": "assistant", "content": full_text},
-            )
-
-        if error is not None:
-            self._errors.append(error)
+        if fatal is not None:
+            self._errors.append(fatal)
             yield self._emit(
                 HarnessError,
                 component="model",
-                message=error,
+                message=fatal,
                 recoverable=False,
             )
             yield self._emit(
                 StepEnded, step_index=step_index, outcome="failed",
             )
             yield self._emit(
-                RunEnded, reason="error", summary=error,
+                RunEnded, reason="error", summary=fatal,
             )
             return
 
-        if tool_call is not None:
-            msg = (
-                "tool calls no soportadas en S4-a "
-                "(planificado para S4-b)"
-            )
-            self._errors.append(msg)
-            yield self._emit(
-                HarnessError,
-                component="model",
-                message=msg,
-                recoverable=True,
-            )
-            yield self._emit(
-                StepEnded, step_index=step_index, outcome="failed",
-            )
-            return
-
+        outcome = "failed" if self._step_failed else "ok"
         yield self._emit(
-            StepEnded, step_index=step_index, outcome="ok",
+            StepEnded, step_index=step_index, outcome=outcome,
         )
 
     def cancel(self) -> None:
@@ -166,7 +129,7 @@ class HarnessSession:
         self._cancel.set()
 
     def resume(self) -> Iterator[Event]:
-        """Reanuda desde el ultimo checkpoint. S4-a: no-op."""
+        """Reanuda desde el ultimo checkpoint. S4-b: no-op."""
         return
         yield  # pragma: no cover
 
@@ -189,9 +152,213 @@ class HarnessSession:
         return None
 
     def resolve_confirmation(self, _response: Any) -> None:
-        """S4-a: no-op. Confirmaciones en S4-b."""
+        """S4-b: no-op. Confirmaciones bloqueantes en S4-c."""
 
-    # -- internos ----------------------------------------------------
+    # -- loop interno ------------------------------------------------
+
+    def _agent_loop(self, step_index: int) -> Iterator[Event]:
+        """Itera modelo -> tool calls -> modelo hasta que el modelo
+        termine o se exceda max_tool_rounds.
+        """
+        for _round in range(self.config.max_tool_rounds):
+            text_parts: list[str] = []
+            tool_call: dict | None = None
+
+            for delta in self.model_client.chat(
+                list(self._messages),
+                tools=None,
+                stream=True,
+                cancel_event=self._cancel,
+            ):
+                if delta.kind == "text":
+                    text_parts.append(delta.text)
+                    yield self._emit(
+                        MessageDelta,
+                        role="assistant",
+                        content=delta.text,
+                    )
+                elif delta.kind == "tool_call":
+                    tool_call = delta.tool_call
+                    break
+                elif delta.kind == "done":
+                    if delta.text and not text_parts:
+                        text_parts.append(delta.text)
+                        yield self._emit(
+                            MessageDelta,
+                            role="assistant",
+                            content=delta.text,
+                        )
+
+            full_text = "".join(text_parts)
+            if full_text:
+                yield self._emit(
+                    MessageCompleted,
+                    role="assistant",
+                    content=full_text,
+                )
+                self._messages.append(
+                    {"role": "assistant", "content": full_text},
+                )
+
+            if tool_call is None:
+                return  # el modelo no pide nada mas: step ok
+
+            yield from self._execute_tool_call(tool_call, step_index)
+
+        # Excedido max_tool_rounds.
+        msg = (
+            f"max_tool_rounds={self.config.max_tool_rounds} superado"
+        )
+        self._errors.append(msg)
+        self._step_failed = True
+        yield self._emit(
+            HarnessError,
+            component="session",
+            message=msg,
+            recoverable=True,
+        )
+
+    def _execute_tool_call(
+        self, tool_call: dict, step_index: int,
+    ) -> Iterator[Event]:
+        """Ejecuta una tool call y emite Requested/Completed."""
+        if not isinstance(tool_call, dict):
+            yield self._emit(
+                HarnessError,
+                component="session",
+                message=f"tool_call malformado: {tool_call!r}",
+                recoverable=True,
+            )
+            return
+
+        name = str(tool_call.get("name", ""))
+        raw_args = tool_call.get("arguments", {})
+        arguments: dict = (
+            dict(raw_args) if isinstance(raw_args, dict) else {}
+        )
+        if not name:
+            yield self._emit(
+                HarnessError,
+                component="session",
+                message="tool_call sin 'name'",
+                recoverable=True,
+            )
+            return
+
+        call_id = f"tc_{secrets.token_hex(6)}"
+
+        # Gate minimo S4-b.
+        requires = False
+        if self.tool_registry is not None:
+            try:
+                requires = bool(
+                    self.tool_registry.requires_confirmation(name),
+                )
+            except Exception:  # noqa: BLE001
+                requires = False
+
+        auto_approved = (not requires) or self.config.auto_approve
+
+        yield self._emit(
+            ToolCallRequested,
+            call_id=call_id,
+            tool_name=name,
+            arguments=arguments,
+            auto_approved=auto_approved,
+        )
+
+        # Gate minimo: si requiere y no hay auto_approve, denegar.
+        if requires and not self.config.auto_approve:
+            result = (
+                "OPERACIÓN CANCELADA: la tool requiere confirmación "
+                "explícita del usuario. El harness S4-b no soporta "
+                "confirmaciones bloqueantes todavía; la tool no se "
+                "ha ejecutado."
+            )
+            yield self._emit(
+                ToolCallCompleted,
+                call_id=call_id,
+                tool_name=name,
+                status="cancelled",
+                summary=result[:120],
+                detail=result,
+                duration_ms=0,
+            )
+            self._messages.append({"role": "tool", "content": result})
+            return
+
+        # Idempotencia.
+        key: str | None = None
+        if self.idempotency is not None:
+            key = idempotency_key(
+                self.config.run_id, step_index, call_id,
+            )
+            state = self.idempotency.get_state(key)
+            if state == "completed":
+                cached = self.idempotency.get_result(key)
+                result = str(cached) if cached is not None else ""
+                yield self._emit(
+                    ToolCallCompleted,
+                    call_id=call_id,
+                    tool_name=name,
+                    status="ok",
+                    summary=result[:120],
+                    detail=result,
+                    duration_ms=0,
+                )
+                self._messages.append(
+                    {"role": "tool", "content": result},
+                )
+                return
+            self.idempotency.mark_pending(
+                key, self.config.run_id, "tool_call", call_id,
+            )
+
+        # Ejecutar.
+        start = time.monotonic()
+        status = "ok"
+        result = ""
+        try:
+            if self.tool_registry is None:
+                result = (
+                    "ERROR: harness sin tool_registry; no se puede "
+                    f"ejecutar {name}."
+                )
+                status = "error"
+            else:
+                result = self.tool_registry.call(
+                    name,
+                    arguments,
+                    allow_destructive=auto_approved,
+                    cancel_event=self._cancel,
+                )
+                if isinstance(result, str) and result.startswith(
+                    "ERROR",
+                ):
+                    status = "error"
+        except Exception as exc:  # noqa: BLE001
+            status = "error"
+            result = f"ERROR: {exc}"
+        duration_ms = int((time.monotonic() - start) * 1000)
+
+        if self.idempotency is not None and key is not None:
+            if status == "ok":
+                self.idempotency.mark_completed(key, result)
+            else:
+                self.idempotency.mark_failed(key)
+
+        yield self._emit(
+            ToolCallCompleted,
+            call_id=call_id,
+            tool_name=name,
+            status=status,
+            summary=result[:120],
+            detail=result,
+            duration_ms=duration_ms,
+        )
+        self._messages.append({"role": "tool", "content": result})
+
+    # -- emision -----------------------------------------------------
 
     def _emit(self, cls: type[Event], **kwargs: Any) -> Event:
         self._seq += 1

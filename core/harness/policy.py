@@ -104,3 +104,13 @@ class HarnessConfig:
     durable_enabled: bool = False
     schema_compilation_enabled: bool = False
     completion_verification_enabled: bool = False
+
+    # S4-b: limite de rondas del ciclo de agente por step. Cada
+    # ronda es una llamada al modelo + sus tool calls. 15 es el
+    # mismo default que core.ollama.chat.
+    max_tool_rounds: int = 15
+    # S4-b: si True, las tools que requieren confirmacion se
+    # auto-aprueban (allow_destructive=True). Coherente con
+    # ChatWorker.auto_approve. Sin UI, el gate bloqueante real
+    # es S4-c.
+    auto_approve: bool = False

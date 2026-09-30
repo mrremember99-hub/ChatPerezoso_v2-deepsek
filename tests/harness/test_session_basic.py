@@ -121,7 +121,10 @@ def test_seqs_monotonos(tmp_path):
 # ── Tool calls (no soportadas en S4-a) ───────────────────────────
 
 
-def test_tool_call_emite_error_y_failed(tmp_path):
+def test_tool_call_sin_registry_emite_completed_con_error(tmp_path):
+    """S4-b: sin tool_registry, la tool call no se ejecuta; se emite
+    ToolCallCompleted con status='error' y el mensaje se guarda
+    como rol tool en el historial."""
     model = _FakeModel([
         ModelDelta(kind="text", text="voy a "),
         ModelDelta(
@@ -133,12 +136,13 @@ def test_tool_call_emite_error_y_failed(tmp_path):
     events = list(s.step("leé x"))
 
     kinds = [e.kind for e in events]
-    assert "harness_error" in kinds
-    err = next(e for e in events if e.kind == "harness_error")
-    assert err.component == "model"
-    assert "S4-a" in err.message
-    ended = next(e for e in events if e.kind == "step_ended")
-    assert ended.outcome == "failed"
+    assert "tool_call_requested" in kinds
+    assert "tool_call_completed" in kinds
+    completed = next(
+        e for e in events if e.kind == "tool_call_completed"
+    )
+    assert completed.status == "error"
+    assert "tool_registry" in completed.detail
 
 
 def test_excepcion_modelo_emite_error_y_run_ended(tmp_path):
