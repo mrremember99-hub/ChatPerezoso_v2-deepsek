@@ -787,8 +787,17 @@ class ChatController(QObject):
             _Path(tempfile.gettempdir()) / "cp_harness" / run_id
         )
 
+        # S6-b-2: sin limite de output, qwen3 puede generar
+        # hasta agotar contexto (UX horrible). El legacy no lo
+        # necesita porque el modelo para solo, pero el harness
+        # anade tools + system prompt mas grandes y a veces no.
+        # Solo aplica si el config no fijo num_predict.
+        _HARNESS_NUM_PREDICT = 2048
+        _opts = dict(options or {})
+        if not _opts.get("num_predict"):
+            _opts["num_predict"] = _HARNESS_NUM_PREDICT
         adapter = OllamaAdapter(
-            self.client, model=model, options=options,
+            self.client, model=model, options=_opts,
         )
         cfg = HarnessConfig(
             run_id=run_id,
