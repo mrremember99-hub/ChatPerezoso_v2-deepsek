@@ -109,6 +109,31 @@ class HarnessSession:
 
     # -- API ---------------------------------------------------------
 
+    def load_history(
+        self, messages: list[dict[str, Any]],
+    ) -> None:
+        """Precarga el historico conversacional en _messages.
+
+        Solo se aceptan roles user/assistant/tool. El system
+        prompt va por AgentSpec.system_prompt (P2#6); mensajes
+        system en el historico se descartan silenciosamente
+        para no duplicar o pisar el prompt del agente.
+
+        Copia defensiva: no se retienen referencias a los
+        dicts del argumento. No reinicia _seq ni _step_index.
+        """
+        allowed = {"user", "assistant", "tool"}
+        for m in messages:
+            if not isinstance(m, dict):
+                continue
+            role = m.get("role")
+            if role not in allowed:
+                continue
+            self._messages.append({
+                "role": role,
+                "content": str(m.get("content", "")),
+            })
+
     def step(self, user_message: str) -> Iterator[Event]:
         """Ejecuta un step completo (modelo + tool calls).
 
