@@ -123,3 +123,31 @@ def test_build_harness_worker_inyecta_handler():
     assert session._messages == []
     assert worker._user_message == "hola"
 
+
+
+def test_harness_config_recibe_auto_approve():
+    """S7-c: el HarnessConfig hereda auto_approve del controller."""
+    ctrl = _make_ctrl()
+    ctrl._auto_approve = True
+    ctrl._auto_approve_shell = True
+    ctrl.messages = [{"role": "user", "content": "hola"}]
+    ctrl._loop_detection_enabled = False
+
+    worker = ctrl._build_harness_worker("m1", None, "sys")
+
+    cfg = worker._session.config
+    assert cfg.auto_approve is True
+    assert cfg.auto_approve_shell is True
+
+
+def test_harness_session_recibe_command_allowed():
+    """S7-c: la session consulta la allowlist del shell."""
+    from plugins.shell import is_command_allowed
+
+    ctrl = _make_ctrl()
+    ctrl.messages = [{"role": "user", "content": "hola"}]
+    ctrl._loop_detection_enabled = False
+
+    worker = ctrl._build_harness_worker("m1", None, "sys")
+
+    assert worker._session.command_allowed is is_command_allowed

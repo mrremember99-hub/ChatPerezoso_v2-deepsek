@@ -760,6 +760,7 @@ class ChatController(QObject):
             ModelSpec,
         )
         from core.harness.session import HarnessSession
+        from plugins.shell import is_command_allowed
 
         from ..harness_worker import HarnessWorker
 
@@ -796,6 +797,12 @@ class ChatController(QObject):
             agent=AgentSpec(
                 name="chat", system_prompt=system_prompt or "",
             ),
+            auto_approve=bool(
+                getattr(self, "_auto_approve", False),
+            ),
+            auto_approve_shell=bool(
+                getattr(self, "_auto_approve_shell", False),
+            ),
         )
         session = HarnessSession(
             cfg,
@@ -803,6 +810,7 @@ class ChatController(QObject):
             tool_registry=self.tools,
             loop_detector=self._make_loop_detector(),
             confirmation_handler=None,
+            command_allowed=is_command_allowed,
         )
 
         # Localizar el ultimo mensaje user: todo lo anterior va
