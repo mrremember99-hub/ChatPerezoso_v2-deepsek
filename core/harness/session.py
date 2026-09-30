@@ -24,6 +24,10 @@ from core.harness.durable import (
 from core.harness.events import (
     Event,
     HarnessError,
+    HealthSnapshot,
+    LoopAborted,
+    LoopCorrectivePrompt,
+    LoopWarning,
     MessageCompleted,
     MessageDelta,
     RunEnded,
@@ -33,6 +37,8 @@ from core.harness.events import (
     ToolCallCompleted,
     ToolCallRequested,
 )
+from core.harness.health import HealthMonitor
+from core.harness.loop import CorrectivePromptBuilder, LoopDetector
 from core.harness.model import ModelClient
 from core.harness.policy import HarnessConfig
 
@@ -60,12 +66,20 @@ class HarnessSession:
         tool_registry: Any = None,
         event_log: Any = None,
         idempotency: IdempotencyRegistry | None = None,
+        loop_detector: LoopDetector | None = None,
+        health_monitor: HealthMonitor | None = None,
     ) -> None:
         self.config = config
         self.model_client = model_client
         self.tool_registry = tool_registry
         self.event_log = event_log
         self.idempotency = idempotency
+        self.loop_detector = loop_detector
+        self.health_monitor = health_monitor
+        self._corrective_builder = CorrectivePromptBuilder()
+        # Contadores para health monitoring dentro del step en curso.
+        self._step_error_count = 0
+        self._step_findings_count = 0
         self._seq = 0
         self._step_index = -1
         self._run_started = False
@@ -80,6 +94,8 @@ class HarnessSession:
         """Ejecuta un step completo (modelo + tool calls)."""
         self._cancel.clear()
         self._step_failed = False
+        self._step_error_count = 0
+        self._step_findings_count = 0
 
         if not self._run_started:
             self._run_started = True
@@ -201,9 +217,15 @@ class HarnessSession:
                 )
 
             if tool_call is None:
+                yield from self._observe_health(step_index)
                 return  # el modelo no pide nada mas: step ok
 
             yield from self._execute_tool_call(tool_call, step_index)
+
+            # Si el loop detector aborto, cortamos el ciclo.
+            if self._cancel.is_set() or self._step_failed:
+                yield from self._observe_health(step_index)
+                return
 
         # Excedido max_tool_rounds.
         msg = (
@@ -357,6 +379,105 @@ class HarnessSession:
             duration_ms=duration_ms,
         )
         self._messages.append({"role": "tool", "content": result})
+
+        # S4-c-mini: observar el par (tool, args, result) por si es
+        # un bucle. Los errores tambien cuentan para health.
+        if status == "error":
+            self._step_error_count += 1
+        yield from self._observe_loop(
+            name, arguments, result, status,
+        )
+
+    # -- loop + health (S4-c-mini) -----------------------------------
+
+    def _observe_loop(
+        self,
+        name: str,
+        arguments: dict,
+        result: str,
+        status: str,
+    ) -> Iterator[Event]:
+        """Alimenta al LoopDetector y emite los eventos resultantes."""
+        if self.loop_detector is None:
+            return
+        try:
+            decision = self.loop_detector.observe(
+                name,
+                arguments,
+                result=result,
+                result_summary=result[:120],
+            )
+        except Exception as exc:  # noqa: BLE001
+            yield self._emit(
+                HarnessError,
+                component="session",
+                message=f"loop_detector.observe fallo: {exc}",
+                recoverable=True,
+            )
+            return
+
+        action = decision.action
+        if action == "warning":
+            yield self._emit(
+                LoopWarning,
+                detector=decision.detector,
+                signature=decision.signature,
+                count=decision.count,
+            )
+        elif action == "corrective":
+            prompt = self._corrective_builder.build(decision)
+            self._messages.append(
+                {"role": "system", "content": prompt},
+            )
+            yield self._emit(
+                LoopCorrectivePrompt,
+                prompt=prompt,
+                detector=decision.detector,
+            )
+        elif action == "abort":
+            self._step_failed = True
+            self._cancel.set()
+            yield self._emit(
+                LoopAborted,
+                detector=decision.detector,
+                reason=decision.reason,
+            )
+
+    def _observe_health(self, step_index: int) -> Iterator[Event]:
+        """Alimenta al HealthMonitor con las 4 metricas disponibles."""
+        if self.health_monitor is None:
+            return
+        # Solo errores del step cuentan como findings por ahora.
+        findings = self._step_findings_count
+        coverage = 0.0  # sin parser de fases todavia
+        tokens = 0  # no expuesto por el Protocol ModelClient
+        errors = self._step_error_count
+        try:
+            result = self.health_monitor.step(
+                findings_count=findings,
+                coverage_score=coverage,
+                total_tokens=tokens,
+                error_count=errors,
+            )
+        except Exception as exc:  # noqa: BLE001
+            yield self._emit(
+                HarnessError,
+                component="session",
+                message=f"health_monitor.step fallo: {exc}",
+                recoverable=True,
+            )
+            return
+        if not result.signals:
+            return
+        yield self._emit(
+            HealthSnapshot,
+            step_index=result.step_index,
+            findings_count=findings,
+            coverage_score=coverage,
+            total_tokens=tokens,
+            error_count=errors,
+            signals=list(result.signals),
+        )
 
     # -- emision -----------------------------------------------------
 
