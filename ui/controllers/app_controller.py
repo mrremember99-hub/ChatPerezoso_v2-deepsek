@@ -35,7 +35,7 @@ from core.workspace import Workspace, WorkspaceError
 from plugins.mcp import MCPToolBridge
 
 from ..chat_state import ChatState
-from ..views.dialogs import warn
+from ..views.dialogs import confirm_tool, warn
 from ..views.main_window import MainWindow
 from ..workers import CapabilitiesWorker
 from .agent_controller import AgentController
@@ -294,6 +294,13 @@ class AppController(QObject):
         )
         self.view.right_panel.queue_move_requested.connect(
             self._on_queue_move
+        )
+        # UI backlog: menu contextual del arbol. El controller
+        # confirma explicitamente y llama a la tool con
+        # allow_destructive=True (borrar_archivo NUNCA se
+        # auto-aprueba por ChatWorker).
+        self.view.right_panel.delete_requested.connect(
+            self._on_delete_requested
         )
         self.chat_ctrl.metrics_updated.connect(self.diagnostics_ctrl.set_metrics)
         # Badge de contexto (Hueco 4): se actualiza cada vez que
@@ -745,6 +752,33 @@ class AppController(QObject):
         clipboard = QApplication.clipboard()
         clipboard.setText(text)
         self.view.set_status("Respuesta copiada")
+
+    def _on_delete_requested(self, path_str: str) -> None:
+        """El usuario pidio borrar un archivo desde el arbol.
+
+        Pasa por confirm_tool (mismo dialogo que usa el modelo) y
+        llama a la tool con allow_destructive=True. La tool
+        borrar_archivo esta en _CONFIRMATION_REQUIRED y NUNCA se
+        auto-aprueba desde el ChatWorker; aqui el usuario ya
+        confirmo explicitamente.
+        """
+        ok = confirm_tool(
+            self.view, "borrar_archivo", {"path": path_str},
+        )
+        if not ok:
+            self.view.set_status("Borrado cancelado")
+            return
+
+        result = self.tools.call(
+            "borrar_archivo",
+            {"path": path_str},
+            allow_destructive=True,
+        )
+        name = Path(path_str).name
+        if result.startswith("ERROR"):
+            self.view.set_status(f"Error borrando: {result[:80]}")
+        else:
+            self.view.set_status(f"Borrado: {name}")
 
     @Slot(object)
     def _on_state_changed(self, state: ChatState) -> None:
