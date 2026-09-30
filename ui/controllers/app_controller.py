@@ -255,7 +255,6 @@ class AppController(QObject):
         s.workspace_change_requested.connect(self._choose_workspace)
 
         cp.message_submitted.connect(self._on_message_submitted)
-        cp.send_all_requested.connect(self._on_send_all_requested)
         cp.cancel_requested.connect(self.chat_ctrl.cancel)
         cp.regenerate_requested.connect(self._on_regenerate)
         cp.copy_requested.connect(self._on_copy_last_response)
@@ -634,6 +633,12 @@ class AppController(QObject):
 
     @Slot()
     def _on_message_submitted(self) -> None:
+        """Envia el input. Decide entre 1 mensaje o cola.
+
+        El boton "Enviar" es un superconjunto del antiguo "Enviar
+        todo": si el texto contiene cabeceras FASE N o separadores
+        ---/===, se orquesta; si no, un solo turno.
+        """
         # Verificar el modelo ANTES de consumir el input. Si Ollama
         # no responde o el usuario no ha elegido modelo, el texto
         # se perderia en el clear() de take_input().
@@ -644,26 +649,7 @@ class AppController(QObject):
         text = self.view.chat_panel.take_input()
         if not text:
             return
-        agent = self.agent_ctrl.active_agent()
-        self.chat_ctrl.send_user_input(
-            text,
-            model,
-            self._effective_options(agent),
-            agent.system_prompt,
-        )
-
-    @Slot()
-    def _on_send_all_requested(self) -> None:
-        # Mismo orden que _on_message_submitted: verificar modelo
-        # antes de consumir el input.
-        model = self.view.sidebar.current_model()
-        if not model:
-            self.view.set_status("Selecciona un modelo antes de enviar")
-            return
-        text = self.view.chat_panel.take_input()
-        if not text:
-            return
-        # Orquestación determinista: si el texto contiene headers
+        # Orquestacion determinista: si el texto contiene headers
         # FASE N consecutivos desde 1, delegar en send_user_input
         # (preamble + snapshot fresco por fase) en lugar de partir
         # por separadores --- / ===. Evita que split_prompts cuente

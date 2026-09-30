@@ -16,7 +16,7 @@ pytest.importorskip("PySide6")
 def _make_app_controller(text: str):
     """AppController sin pasar por __init__, con view y controllers mock.
 
-    Solo se monta lo mínimo que toca ``_on_send_all_requested``.
+    Solo se monta lo mínimo que toca ``_on_message_submitted``.
     """
     from ui.controllers.app_controller import AppController
 
@@ -40,7 +40,7 @@ def _make_app_controller(text: str):
 def test_send_all_con_fases_delega_en_send_user_input():
     prompt = "FASE 1 — algo\n\nFASE 2 — otra cosa\n"
     ctrl = _make_app_controller(prompt)
-    ctrl._on_send_all_requested()
+    ctrl._on_message_submitted()
 
     ctrl.chat_ctrl.send_user_input.assert_called_once()
     ctrl.chat_ctrl.enqueue.assert_not_called()
@@ -52,7 +52,7 @@ def test_send_all_con_fases_delega_en_send_user_input():
 def test_send_all_con_fases_no_toca_el_input_si_modelo_vacio():
     ctrl = _make_app_controller("FASE 1 — a\n\nFASE 2 — b\n")
     ctrl.view.sidebar.current_model.return_value = None
-    ctrl._on_send_all_requested()
+    ctrl._on_message_submitted()
 
     ctrl.chat_ctrl.send_user_input.assert_not_called()
     ctrl.chat_ctrl.enqueue.assert_not_called()
@@ -64,7 +64,7 @@ def test_send_all_con_fases_no_toca_el_input_si_modelo_vacio():
 def test_send_all_sin_fases_usa_split_prompts_y_enqueue():
     prompt = "uno\n---\ndos\n---\ntres"
     ctrl = _make_app_controller(prompt)
-    ctrl._on_send_all_requested()
+    ctrl._on_message_submitted()
 
     ctrl.chat_ctrl.send_user_input.assert_not_called()
     ctrl.chat_ctrl.enqueue.assert_called_once()
@@ -73,7 +73,7 @@ def test_send_all_sin_fases_usa_split_prompts_y_enqueue():
 
 def test_send_all_sin_fases_un_solo_prompt_usa_send():
     ctrl = _make_app_controller("una sola cosa")
-    ctrl._on_send_all_requested()
+    ctrl._on_message_submitted()
 
     ctrl.chat_ctrl.send_user_input.assert_not_called()
     ctrl.chat_ctrl.enqueue.assert_not_called()
