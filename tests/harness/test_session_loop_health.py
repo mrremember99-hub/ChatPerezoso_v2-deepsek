@@ -152,8 +152,11 @@ def test_loop_abort_cancela_y_falla(tmp_path):
     events = list(s.step("repite"))
     kinds = [e.kind for e in events]
     assert "loop_aborted" in kinds
-    assert s._cancel.is_set()
     ended = next(e for e in events if e.kind == "step_ended")
+    # P2#10: _cancel ya no se comprueba DESPUES del step; el
+    # finally de step() lo limpia para que un cancel viejo no
+    # contamine el siguiente step. Lo que importa es el outcome:
+    # _step_failed (loop abort) -> "failed", no "cancelled".
     assert ended.outcome == "failed"
 
 

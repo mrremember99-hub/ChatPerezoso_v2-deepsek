@@ -119,10 +119,15 @@ class HarnessSession:
             yield from self._step_impl(user_message)
         finally:
             self._step_in_progress = False
+            # P2#10: limpiar el flag AL FINAL del step. Antes se
+            # limpiaba al PRINCIPIO de _step_impl, asi que un
+            # cancel() llamado justo antes de step() se perdia.
+            # El caller del siguiente step decide si quiere
+            # cancelar antes de empezar (flag visible).
+            self._cancel.clear()
 
     def _step_impl(self, user_message: str) -> Iterator[Event]:
         """Cuerpo de step(). Extraido para envolver con el flag."""
-        self._cancel.clear()
         self._step_failed = False
         self._step_error_count = 0
         self._step_findings_count = 0
@@ -151,6 +156,16 @@ class HarnessSession:
             MessageCompleted, role="user", content=user_message,
         )
 
+        # P2#10: si el usuario cancelo antes/durante la apertura
+        # del step, salir sin llamar al modelo. Outcome cancelled.
+        if self._cancel.is_set():
+            yield self._emit(
+                StepEnded,
+                step_index=step_index,
+                outcome="cancelled",
+            )
+            return
+
         fatal: str | None = None
         try:
             yield from self._agent_loop(step_index)
@@ -174,7 +189,17 @@ class HarnessSession:
             # aunque la app siguiera viva y pudiera reintentar.
             return
 
-        outcome = "failed" if self._step_failed else "ok"
+        # P2#10: failed tiene prioridad sobre cancelled.
+        # Un abort del loop detector setea _cancel Y _step_failed;
+        # eso es un fallo controlado del harness, no una
+        # cancelacion del usuario. Solo "cancelled" puro (usuario
+        # pidio parar, sin fallo) da ese outcome.
+        if self._step_failed:
+            outcome = "failed"
+        elif self._cancel.is_set():
+            outcome = "cancelled"
+        else:
+            outcome = "ok"
         yield self._emit(
             StepEnded, step_index=step_index, outcome=outcome,
         )
@@ -287,6 +312,12 @@ class HarnessSession:
             if tool_call is None:
                 yield from self._observe_health(step_index)
                 return  # el modelo no pide nada mas: step ok
+
+            # P2#10: si el usuario cancelo mientras el modelo
+            # generaba, no ejecutar la tool.
+            if self._cancel.is_set():
+                yield from self._observe_health(step_index)
+                return
 
             yield from self._execute_tool_call(
                 tool_call, step_index, round_index,
