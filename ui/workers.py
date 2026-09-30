@@ -8,6 +8,7 @@ from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
+from core.harness.loop import LoopDetector
 from core.ollama import OllamaCancelled, OllamaClient, OllamaError
 from core.tool_result import ToolResult
 from plugins.mcp import MCPError
@@ -219,6 +220,13 @@ class ChatWorker(QObject):
     # Resumen de sesion generado al final del turno (D1).
     # raw_text, new_index (len(messages) en el momento del send).
     summary_ready = Signal(str, int)
+    # Harness v3 S1-bis: señales de loop detection.
+    # Emitidas si un LoopDetector fue inyectado. Sin detector, no
+    # se emiten (la UI no las necesita conectar).
+    # (detector, reason)
+    loop_warning = Signal(str, str)
+    loop_corrective = Signal(str, str)
+    loop_aborted = Signal(str, str)
 
     def __init__(
         self,
@@ -235,6 +243,7 @@ class ChatWorker(QObject):
         summary_model: str = "",
         summary_prompt: str = "",
         summary_new_index: int = 0,
+        loop_detector: LoopDetector | None = None,
     ):
         super().__init__()
         self.client = client
@@ -245,6 +254,9 @@ class ChatWorker(QObject):
         self.system_prompt = system_prompt
         self.auto_approve = auto_approve
         self.auto_approve_shell = auto_approve_shell
+        # Harness v3 S1-bis: detector opcional. Si es None, el
+        # worker funciona como antes (sin loop detection).
+        self._loop_detector = loop_detector
         # Hook opcional post-escritura. Recibe la ruta relativa del
         # archivo y devuelve texto con errores de sintaxis, o cadena
         # vacía si todo está bien. Si es None, no se verifica.
@@ -407,9 +419,12 @@ class ChatWorker(QObject):
         # cada intento con args malformados, timeout de 10 min, bucle.
         if auto and name == "ejecutar_comando":
             cmd = arguments.get("command", "")
-            if isinstance(cmd, str) and cmd.strip():
-                if not is_command_allowed(cmd):
-                    auto = False
+            if (
+                isinstance(cmd, str)
+                and cmd.strip()
+                and not is_command_allowed(cmd)
+            ):
+                auto = False
 
         if requires and not auto:
             # _request_confirmation devuelve también el tiempo REAL de
@@ -444,8 +459,42 @@ class ChatWorker(QObject):
             # nombre de la tool.
             tool_result.metadata["arguments"] = dict(arguments)
         tool_result = self._maybe_verify(name, arguments, tool_result)
+        # Harness v3 S1-bis: observar el tool call para detectar bucles.
+        # Sin detector inyectado, no-op.
+        self._observe_for_loop(name, arguments, tool_result)
         self.tool_result.emit(tool_result)
         return tool_result.to_text()
+
+    def _observe_for_loop(
+        self, name: str, arguments: dict, tool_result: ToolResult,
+    ) -> None:
+        """Alimenta al LoopDetector y emite señales segun la decision.
+
+        No inyecta nada al modelo: eso requiere parchear client.chat()
+        y se hara en S4 cuando el harness tenga su propio ciclo.
+        Por ahora: warning + corrective emiten señal (UI puede
+        mostrarla), abort cancela el worker.
+        """
+        if self._loop_detector is None:
+            return
+        try:
+            decision = self._loop_detector.observe(
+                name,
+                arguments,
+                result=tool_result.detail or tool_result.summary,
+                result_summary=tool_result.summary or "",
+            )
+        except Exception:  # noqa: BLE001
+            # Nunca romper el flujo por un fallo del detector.
+            logger.exception("LoopDetector.observe fallo")
+            return
+        if decision.action == "warning":
+            self.loop_warning.emit(decision.detector, decision.reason)
+        elif decision.action == "corrective":
+            self.loop_corrective.emit(decision.detector, decision.reason)
+        elif decision.action == "abort":
+            self.loop_aborted.emit(decision.detector, decision.reason)
+            self.cancel()
 
     # Nombres de tools que disparan verificación automática.
     _VERIFY_AFTER: frozenset[str] = frozenset({
