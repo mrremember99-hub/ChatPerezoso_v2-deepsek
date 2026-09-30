@@ -44,7 +44,11 @@ def _fmt_type(spec: dict) -> str:
     raw = spec.get("type", "")
     if isinstance(raw, list):
         # Union types: "string|null" -> "s?"
-        parts = [_TYPE_ABBREV.get(t, t) for t in raw if t != "null"]
+        parts: list[str] = [
+            _TYPE_ABBREV.get(t, t)
+            for t in raw
+            if isinstance(t, str) and t != "null"
+        ]
         nullable = "null" in raw
         s = "|".join(parts) if parts else "?"
         return f"{s}?" if nullable else s
