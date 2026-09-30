@@ -188,8 +188,8 @@ class HarnessSession:
             tool_call: dict | None = None
 
             for delta in self.model_client.chat(
-                list(self._messages),
-                tools=None,
+                self._build_messages(),
+                tools=self._tool_definitions(),
                 stream=True,
                 cancel_event=self._cancel,
             ):
@@ -275,6 +275,35 @@ class HarnessSession:
             return
 
         call_id = f"tc_{secrets.token_hex(6)}"
+
+        # P2#6: AgentSpec.allowed_tools tambien se hace cumplir al
+        # ejecutar. El filtro de _tool_definitions solo oculta las
+        # tools al modelo; un modelo que alucine una tool fuera de
+        # allowed_tools la ejecutaria sin este guard.
+        if not self._is_tool_allowed(name):
+            msg = (
+                f"ERROR: herramienta no permitida para este agente: "
+                f"{name}"
+            )
+            yield self._emit(
+                ToolCallRequested,
+                call_id=call_id,
+                tool_name=name,
+                arguments=arguments,
+                auto_approved=False,
+            )
+            yield self._emit(
+                ToolCallCompleted,
+                call_id=call_id,
+                tool_name=name,
+                status="error",
+                summary=msg[:120],
+                detail=msg,
+                duration_ms=0,
+            )
+            self._messages.append({"role": "tool", "content": msg})
+            self._step_error_count += 1
+            return
 
         # Gate minimo S4-b.
         requires = False
@@ -556,6 +585,58 @@ class HarnessSession:
             error_count=errors,
             signals=list(result.signals),
         )
+
+    # -- contexto enviado al modelo (P2#6) -------------------------
+
+    _MCP_WILDCARD = "mcp__*"
+
+    def _build_messages(self) -> list[dict[str, Any]]:
+        """System prompt del agente + historial.
+
+        El system prompt no se guarda en `_messages` para no
+        duplicarlo en cada ronda ni meterlo en el fold de eventos.
+        """
+        prompt = self.config.agent.system_prompt
+        if not prompt:
+            return list(self._messages)
+        return [
+            {"role": "system", "content": prompt},
+            *self._messages,
+        ]
+
+    def _is_tool_allowed(self, name: str) -> bool:
+        """True si la tool esta en AgentSpec.allowed_tools.
+
+        None = todas. Se acepta el wildcard "mcp__*" para los
+        tools MCP, coherente con FilteredToolProvider.
+        """
+        allowed = self.config.agent.allowed_tools
+        if allowed is None:
+            return True
+        if name in allowed:
+            return True
+        return (
+            self._MCP_WILDCARD in allowed
+            and name.startswith("mcp__")
+        )
+
+    def _tool_definitions(self) -> list[dict[str, Any]] | None:
+        """Schemas de las tools ofrecidas al modelo, ya filtrados."""
+        getter = getattr(self.tool_registry, "definitions", None)
+        if not callable(getter):
+            return None
+        try:
+            defs = list(getter())
+        except Exception:  # noqa: BLE001
+            return None
+        out = [
+            d for d in defs
+            if isinstance(d, dict)
+            and self._is_tool_allowed(
+                str(d.get("function", {}).get("name", "")),
+            )
+        ]
+        return out or None
 
     # -- emision -----------------------------------------------------
 
