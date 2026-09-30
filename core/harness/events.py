@@ -7,7 +7,7 @@ el kind al dict plano para persistir en el event log (SQLite).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from typing import Any, ClassVar
 
 
@@ -38,18 +38,63 @@ class Event:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Event:
-        """Reconstruye un evento desde su dict plano.
+        """Reconstruye un evento desde su dict plano. Tolerante
+        (auditoria externa P2#17).
 
-        Requiere la clave `kind` para elegir la subclase.
+        Reglas:
+          - kind desconocido -> UnknownEvent con el raw guardado.
+          - campos desconocidos -> ignorados.
+          - campos faltantes o mal formados -> UnknownEvent.
+
+        Antes: cualquier `kind` o campo raro lanzaba excepcion y
+        rompia `fold_events` de todo el run. Un cambio de
+        dataclass o un evento añadido por otra version dejaba el
+        log ilegible a posteriori.
         """
         kind = data.get("kind")
+        seq = data.get("seq", 0)
+        run_id = data.get("run_id", "")
+        ts = data.get("ts", "")
         if not isinstance(kind, str) or not kind:
-            raise ValueError("evento sin 'kind'")
+            return UnknownEvent(
+                seq=int(seq) if isinstance(seq, int) else 0,
+                run_id=str(run_id),
+                ts=str(ts),
+                original_kind="",
+                raw=dict(data),
+            )
         sub = cls._registry.get(kind)
         if sub is None:
-            raise ValueError(f"kind desconocido: {kind!r}")
-        payload = {k: v for k, v in data.items() if k != "kind"}
-        return sub(**payload)
+            return UnknownEvent(
+                seq=int(seq) if isinstance(seq, int) else 0,
+                run_id=str(run_id),
+                ts=str(ts),
+                original_kind=kind,
+                raw=dict(data),
+            )
+        # Filtrar campos desconocidos: si la dataclass gano o
+        # perdio campos entre versiones, el payload viejo puede
+        # traer extras.
+        allowed = {f.name for f in fields(sub)}
+        payload = {
+            k: v for k, v in data.items()
+            if k != "kind" and k in allowed
+        }
+        try:
+            return sub(**payload)
+        except (TypeError, ValueError):
+            return UnknownEvent(
+                seq=int(seq) if isinstance(seq, int) else 0,
+                run_id=str(run_id),
+                ts=str(ts),
+                original_kind=kind,
+                raw=dict(data),
+            )
+
+    @classmethod
+    def registry(cls) -> dict[str, type[Event]]:
+        """Copia del registro kind -> subclase."""
+        return dict(cls._registry)
 
 
 # ── Ciclo de vida ──────────────────────────────────────────
@@ -225,3 +270,19 @@ class HarnessWarning(Event):
     kind: ClassVar[str] = "harness_warning"
     warning_kind: str     # "resume_with_changes" | ...
     details: list[dict[str, Any]]
+
+
+# ── Fallback para eventos no reconocidos ─────────────────────────
+
+@dataclass(frozen=True, kw_only=True)
+class UnknownEvent(Event):
+    """Envoltorio para eventos cuyo `kind` no esta registrado.
+
+    No deberia aparecer en uso normal. Sirve para que
+    `from_dict` no rompa `fold_events` si el log tiene eventos
+    de otra version del harness (auditoria P2#17).
+    """
+
+    kind: ClassVar[str] = "unknown"
+    original_kind: str = ""
+    raw: dict[str, Any] = field(default_factory=dict)

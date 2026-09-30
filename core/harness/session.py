@@ -11,6 +11,7 @@ Estado de slices:
 from __future__ import annotations
 
 import hashlib
+import logging
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -43,6 +44,8 @@ from core.harness.health import HealthMonitor
 from core.harness.loop import CorrectivePromptBuilder, LoopDetector
 from core.harness.model import ModelClient
 from core.harness.policy import HarnessConfig
+
+_logger = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
@@ -760,12 +763,14 @@ class HarnessSession:
         """Crea el evento, lo persiste si hay log, y devuelve el
         evento con el seq REAL del log (auditoria P2#15).
 
-        Sin event_log: `self._seq` local, monotono por sesion.
-        Con event_log: el seq viene de SQLite AUTOINCREMENT. Es
-        el unico autoritativo para `events(since_seq)` y para el
-        `last_event_seq` de checkpoints. Antes de este fix, dos
-        runs en el mismo log mezclaban dominios de seq: uno decia
-        [1..5] y el otro [6..10] sobre las mismas filas.
+        P2#14: si `event_log.append` falla (DB caida, disco lleno,
+        permisos), NO se propaga la excepcion. Antes, un fallo de
+        append dentro de `_emit` escapaba de `step()`: el except
+        re-emitia `HarnessError`, volvia a fallar en append, y la
+        excepcion salia sin capturar. Ahora se loggea y se
+        continua: el evento se emite en memoria aunque no quede
+        persistido. El evento real se ve en las señales, el
+        historial de la app sigue funcionando.
         """
         self._seq += 1
         event = cls(
@@ -775,7 +780,12 @@ class HarnessSession:
             **kwargs,
         )
         if self.event_log is not None:
-            real_seq = self.event_log.append(event)
-            if real_seq > 0 and real_seq != event.seq:
-                event = _dc_replace(event, seq=real_seq)
+            try:
+                real_seq = self.event_log.append(event)
+                if real_seq > 0 and real_seq != event.seq:
+                    event = _dc_replace(event, seq=real_seq)
+            except Exception:  # noqa: BLE001
+                _logger.exception(
+                    "EventLog.append fallo; el evento no se persistio"
+                )
         return event

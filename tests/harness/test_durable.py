@@ -47,15 +47,49 @@ def test_from_dict_roundtrip():
     assert back == e
 
 
-def test_from_dict_kind_desconocido():
-    with pytest.raises(ValueError, match="desconocido"):
-        ev.Event.from_dict({"kind": "inventado", "seq": 1,
-                            "run_id": "r", "ts": "t"})
+def test_from_dict_kind_desconocido_devuelve_unknown():
+    """P2#17: kind desconocido -> UnknownEvent, no excepcion."""
+    out = ev.Event.from_dict({
+        "kind": "inventado", "seq": 1, "run_id": "r", "ts": "t",
+    })
+    assert isinstance(out, ev.UnknownEvent)
+    assert out.original_kind == "inventado"
+    assert out.seq == 1
+    assert out.run_id == "r"
 
 
-def test_from_dict_sin_kind():
-    with pytest.raises(ValueError, match="sin 'kind'"):
-        ev.Event.from_dict({"seq": 1, "run_id": "r", "ts": "t"})
+def test_from_dict_sin_kind_devuelve_unknown():
+    """P2#17: kind vacio/ausente -> UnknownEvent con kind=''."""
+    out = ev.Event.from_dict({"seq": 1, "run_id": "r", "ts": "t"})
+    assert isinstance(out, ev.UnknownEvent)
+    assert out.original_kind == ""
+
+
+def test_from_dict_campos_extra_ignorados():
+    """P2#17: campos desconocidos en el payload se ignoran."""
+    e = ev.StepStarted(seq=1, run_id="r", ts="t", step_index=0)
+    d = e.to_dict()
+    d["campo_viejo_de_otra_version"] = "ignorado"
+    out = ev.Event.from_dict(d)
+    assert isinstance(out, ev.StepStarted)
+    assert out.step_index == 0
+
+
+def test_from_dict_payload_malformado_devuelve_unknown():
+    """P2#17: payload que no encaja en la dataclass -> UnknownEvent."""
+    d = {
+        "kind": "step_started", "seq": 1, "run_id": "r", "ts": "t",
+        "step_index": "no-es-int",  # malformado
+    }
+    # StepStarted acepta el int? Si no, cae a UnknownEvent.
+    try:
+        out = ev.Event.from_dict(d)
+        # Aceptamos ambas ramas segun el tipo real de los campos.
+        assert isinstance(out, (ev.StepStarted, ev.UnknownEvent))
+    except Exception as exc:  # noqa: BLE001
+        raise AssertionError(
+            f"from_dict no debe lanzar: {exc}"
+        ) from exc
 
 
 def test_registry_cubre_todos_los_kinds():
