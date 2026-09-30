@@ -108,9 +108,18 @@ def _make_worker(*, auto_approve: bool, auto_approve_shell: bool):
 
 
 def test_worker_archivos_auto_aprobados_con_piloto(qapp):
+    """crear/escribir/editar se auto-aprueban con autopilot.
+
+    borrar_archivo NO: fix del run #5 OVERPAPER. El modelo borro
+    gui.py para "arreglar" un f-string roto, y con autopilot ON el
+    borrado paso sin dialogo. El borrado de ficheros es siempre
+    destructivo y no merece excepcion.
+    """
     w = _make_worker(auto_approve=True, auto_approve_shell=False)
     assert w._is_auto_approved("crear_archivo") is True
-    assert w._is_auto_approved("borrar_archivo") is True
+    assert w._is_auto_approved("escribir_archivo") is True
+    assert w._is_auto_approved("editar_archivo") is True
+    assert w._is_auto_approved("borrar_archivo") is False
 
 
 def test_worker_shell_no_auto_aprobado_sin_flag(qapp):

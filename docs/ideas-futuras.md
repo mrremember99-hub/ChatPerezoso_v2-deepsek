@@ -34,6 +34,14 @@ slices o a la deuda tecnica de `docs/harness-v3.md`.
 
 ## Harness v3 (post S1-ter)
 
+- **S1-ter no cubre bucles funcionales (run #5 OVERPAPER)**: el
+  detector actual busca repeticion de `(tool, args)`. En el run #5
+  el modelo corrigio errores de sintaxis sin repetir la misma
+  llamada (escribir con error -> leer -> editar -> OK). Cada
+  intento usaba tools/args distintos, asi que S1-ter no disparo.
+  El bucle "verificar -> reparar -> verificar -> reparar" es el
+  caso que cubre VRR-Stop (S5). NO es bug de S1-ter.
+
 - **Dialogo de confirmacion sin motivo (Overpaper run #2)**:
   cuando un comando cae a confirmacion por allowlist, el dialogo
   no lo dice. Requiere ampliar `Signal(str, object)` a

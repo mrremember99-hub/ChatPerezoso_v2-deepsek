@@ -392,10 +392,18 @@ class ChatWorker(QObject):
             `auto_approve` y `auto_approve_shell` están activos.
             Doble puerta por si un llamante futuro construye el worker
             sin la cascada correcta.
+          - `borrar_archivo` NUNCA se auto-aprueba, ni con autopilot.
+            Run #5 OVERPAPER: el modelo "arregló" un f-string roto
+            borrando gui.py para reescribir desde cero. Con autopilot
+            ON el borrado pasó sin diálogo. El borrado de ficheros es
+            la operación más destructiva del workspace y no merece
+            excepción. Coherente con la política del shell.
           - El resto se auto-aprueba con `auto_approve`.
         """
         if name == "ejecutar_comando":
             return self.auto_approve and self.auto_approve_shell
+        if name == "borrar_archivo":
+            return False
         return self.auto_approve
 
     def _call_tool(self, name: str, arguments: dict) -> str:
