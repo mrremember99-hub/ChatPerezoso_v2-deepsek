@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import html
+import re
+import time
 
 from PySide6.QtGui import QColor, QTextBlockFormat, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import QTextEdit
@@ -11,6 +13,13 @@ from core.tool_result import ToolResult
 from .. import design
 from .markdown_renderer import to_html
 from .palette import V1_PALETTE, RendererPalette
+
+
+# UI backlog: detecta "FASE N VERIFICADA" en el texto del modelo.
+# El prompt OVERPAPER lo emite al cerrar cada fase. La narración
+# [FN · MM:SS] se inserta al lado, sin contaminar la respuesta.
+_PHASE_VERIFIED_RE = re.compile(r"FASE\s+(\d+)\s+VERIFICADA")
+_DETECT_BUFFER_CHARS = 80
 
 
 class PlainTextRenderer:
@@ -42,6 +51,13 @@ class PlainTextRenderer:
         self._in_code_fence: bool = False
         # Estado del bloque "cola de prompts". Se rellena al encolar
         # y se actualiza in-place cada vez que un prompt avanza.
+
+        # UI backlog: timestamp por fase. _session_start se fija en
+        # el primer on_text (cuando el modelo empieza a responder).
+        # _detect_buffer acumula los ultimos N chars para detectar
+        # "FASE N VERIFICADA" aunque llegue partido entre deltas.
+        self._session_start: float | None = None
+        self._detect_buffer: str = ""
 
     # -- compatibilidad con el protocolo ChatRenderer ---------------------
     # El protocolo declara response_text y response_start como
@@ -178,9 +194,17 @@ class PlainTextRenderer:
         if not text:
             return
 
+        if self._session_start is None:
+            self._session_start = time.monotonic()
+
         self._response_parts.append(text)
         self._segment_parts.append(text)
         self._segment_chars += len(text)
+
+        # UI backlog: detectar cierre de fase. Se hace sobre el
+        # buffer de deteccion (independiente del buffer de render)
+        # para no afectar a la logica de troceo.
+        self._detect_phase_verified(text)
 
         # Limpiar el prefijo del asistente (encabezados tipo
         # "**PEREZOSO**") solo mientras el segmento es corto. Una vez
@@ -209,6 +233,30 @@ class PlainTextRenderer:
         if crossed_paragraph or just_closed_fence:
             self.reset_response_segment()
 
+
+    def _detect_phase_verified(self, text: str) -> None:
+        """Detecta 'FASE N VERIFICADA' y emite narracion [FN · MM:SS].
+
+        El texto puede llegar partido entre deltas; se acumulan los
+        ultimos _DETECT_BUFFER_CHARS chars para cubrir ese caso.
+        Tras un match, se limpia el buffer para no re-emitir.
+        """
+        if self._session_start is None:
+            return
+        self._detect_buffer = (
+            self._detect_buffer + text
+        )[-_DETECT_BUFFER_CHARS:]
+        m = _PHASE_VERIFIED_RE.search(self._detect_buffer)
+        if not m:
+            return
+        self._detect_buffer = ""
+        elapsed = time.monotonic() - self._session_start
+        mm, ss = divmod(int(elapsed), 60)
+        phase = m.group(1)
+        self.insert_narration(
+            f"F{phase} \u00b7 {mm:02d}:{ss:02d}",
+            active=False,
+        )
 
     def _append_plain_text(self, text: str) -> None:
         """Aplica el texto acumulado al documento. Antiguo on_text."""
