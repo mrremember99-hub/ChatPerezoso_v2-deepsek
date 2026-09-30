@@ -20,11 +20,36 @@ class Event:
     ts: str
     kind: ClassVar[str] = "event"
 
+    # Registro de subclases por kind. Se rellena automaticamente
+    # via __init_subclass__ al declarar cada subclase.
+    _registry: ClassVar[dict[str, type[Event]]] = {}
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        kind = cls.__dict__.get("kind")
+        if isinstance(kind, str) and kind:
+            Event._registry[kind] = cls
+
     def to_dict(self) -> dict[str, Any]:
         """Representacion plana para el event log."""
         d = {f.name: getattr(self, f.name) for f in fields(self)}
         d["kind"] = type(self).kind
         return d
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Event:
+        """Reconstruye un evento desde su dict plano.
+
+        Requiere la clave `kind` para elegir la subclase.
+        """
+        kind = data.get("kind")
+        if not isinstance(kind, str) or not kind:
+            raise ValueError("evento sin 'kind'")
+        sub = cls._registry.get(kind)
+        if sub is None:
+            raise ValueError(f"kind desconocido: {kind!r}")
+        payload = {k: v for k, v in data.items() if k != "kind"}
+        return sub(**payload)
 
 
 # ── Ciclo de vida ──────────────────────────────────────────
