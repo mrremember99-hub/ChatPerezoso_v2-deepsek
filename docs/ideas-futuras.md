@@ -42,6 +42,20 @@ slices o a la deuda tecnica de `docs/harness-v3.md`.
   El bucle "verificar -> reparar -> verificar -> reparar" es el
   caso que cubre VRR-Stop (S5). NO es bug de S1-ter.
 
+- **Bootstrap diagnostico miente sobre el workspace**: `bootstrap.py`
+  hardcodea `ROOT / "workspace"` y nunca lee `config.json`. El
+  diagnostico muestra una ruta distinta a la que el ChatWorker usa
+  realmente. Identificado en run #3 OVERPAPER, sigue pendiente.
+  Fix: leer `AppConfig.load().workspace`. Coste: ~15 min.
+
+- **Guard "Reduccion drastica" en escribir_archivo**: bloquea
+  reescrituras que reducen >80% del tamano del archivo. Util en
+  casos reales (run #5: modelo intento borrar gui.py), pero
+  bloquea reinicios legitimos si el workspace no se limpio antes.
+  Valorar relajar con flag `force=true` (requiere confirmacion) o
+  dejarlo como esta. Por ahora: se documenta y se limpia el
+  workspace a mano. Coste: ~30 min si se implementa.
+
 - **Dialogo de confirmacion sin motivo (Overpaper run #2)**:
   cuando un comando cae a confirmacion por allowlist, el dialogo
   no lo dice. Requiere ampliar `Signal(str, object)` a
