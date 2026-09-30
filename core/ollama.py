@@ -1974,6 +1974,54 @@ class OllamaClient:
                 "Operación cancelada por el usuario."
             ) from None
 
+    def chat_once(
+        self,
+        model: str,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        options: dict[str, Any] | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Una sola ronda contra Ollama. Sin bucle, sin ejecucion
+        de tools, sin gate de intencion. El harness controla todo
+        eso (S6). Este metodo es solo transporte.
+
+        A diferencia de `chat()` (que itera hasta max_rounds,
+        ejecuta tools via on_tool y devuelve el texto final como
+        str), `chat_once()` expone la respuesta cruda de UNA
+        ronda. El llamante consume dicts planos:
+
+            {"kind": "text", "text": str}
+                Fragmento de texto visible (puede haber varios).
+            {"kind": "tool_call", "tool_call": {...}}
+                Tool call nativo del modelo (0 o mas).
+            {"kind": "done"}
+                Cierre. Siempre el ultimo.
+
+        OllamaClient no conoce `ModelDelta` del harness: mantiene
+        separacion de capas (auditoria externa P2#24, opcion A1).
+        El adapter traduce estos dicts a ModelDelta.
+
+        Raises:
+            OllamaCancelled: si `cancel_event` se setea.
+            OllamaError: si la ronda falla (HTTP, timeout, etc.).
+        """
+        message = self._stream(
+            model,
+            messages,
+            tools,
+            None,
+            cancel_event=cancel_event,
+            options=options,
+        )
+        content = message.get("content", "")
+        if isinstance(content, str) and content:
+            yield {"kind": "text", "text": content}
+        for tc in message.get("tool_calls") or []:
+            yield {"kind": "tool_call", "tool_call": tc}
+        yield {"kind": "done"}
+
     async def iter_ollama_events(
         self,
         payload: dict[str, Any],
