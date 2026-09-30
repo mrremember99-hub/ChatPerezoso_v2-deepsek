@@ -406,6 +406,55 @@ class HarnessSession:
             )
             return
 
+        # P2#2 (auditoria externa): idempotencia ANTES del gate.
+        #
+        # 1. Si la op ya esta completed (reintento de un step
+        #    anterior tras crash), devolvemos el resultado
+        #    cacheado sin volver a pedir confirmacion.
+        # 2. Si hay que ejecutar, marcamos pending ANTES del
+        #    dialogo. Si el proceso muere durante la
+        #    confirmacion, resume() ve la op como pending y sabe
+        #    que habia una tool en vuelo.
+        #
+        # Antes: mark_pending iba despues del gate, asi que un
+        # crash durante el dialogo de confirmacion no dejaba
+        # rastro y la tool se re-ejecutaba en el siguiente run.
+        key: str | None = None
+        if self.idempotency is not None:
+            key = idempotency_key(
+                self.config.run_id, step_index, call_id,
+            )
+            state = self.idempotency.get_state(key)
+            if state == "completed":
+                cached = self.idempotency.get_result(key)
+                result = str(cached) if cached is not None else ""
+                self._messages.append(
+                    {"role": "tool", "content": result},
+                )
+                yield self._emit(
+                    ToolCallRequested,
+                    call_id=call_id,
+                    tool_name=name,
+                    arguments=arguments,
+                    auto_approved=True,
+                )
+                yield self._emit(
+                    MessageCompleted, role="tool", content=result,
+                )
+                yield self._emit(
+                    ToolCallCompleted,
+                    call_id=call_id,
+                    tool_name=name,
+                    status="ok",
+                    summary=result[:120],
+                    detail=result,
+                    duration_ms=0,
+                )
+                return
+            self.idempotency.mark_pending(
+                key, self.config.run_id, "tool_call", call_id,
+            )
+
         # Gate minimo S4-b.
         requires = False
         if self.tool_registry is not None:
@@ -468,6 +517,8 @@ class HarnessSession:
 
         if handler_error is not None:
             err_msg = f"ERROR: {handler_error}"
+            if self.idempotency is not None and key is not None:
+                self.idempotency.mark_failed(key)
             self._messages.append(
                 {"role": "tool", "content": err_msg},
             )
@@ -486,6 +537,8 @@ class HarnessSession:
             return
 
         if denial_reason is not None:
+            if self.idempotency is not None and key is not None:
+                self.idempotency.mark_failed(key)
             self._messages.append(
                 {"role": "tool", "content": denial_reason},
             )
@@ -509,6 +562,8 @@ class HarnessSession:
                 "OPERACIÓN CANCELADA POR EL USUARIO: la tool "
                 "requiere confirmación y fue denegada."
             )
+            if self.idempotency is not None and key is not None:
+                self.idempotency.mark_failed(key)
             self._messages.append(
                 {"role": "tool", "content": result},
             )
@@ -526,35 +581,7 @@ class HarnessSession:
             )
             return
 
-        # Idempotencia.
-        key: str | None = None
-        if self.idempotency is not None:
-            key = idempotency_key(
-                self.config.run_id, step_index, call_id,
-            )
-            state = self.idempotency.get_state(key)
-            if state == "completed":
-                cached = self.idempotency.get_result(key)
-                result = str(cached) if cached is not None else ""
-                self._messages.append(
-                    {"role": "tool", "content": result},
-                )
-                yield self._emit(
-                    MessageCompleted, role="tool", content=result,
-                )
-                yield self._emit(
-                    ToolCallCompleted,
-                    call_id=call_id,
-                    tool_name=name,
-                    status="ok",
-                    summary=result[:120],
-                    detail=result,
-                    duration_ms=0,
-                )
-                return
-            self.idempotency.mark_pending(
-                key, self.config.run_id, "tool_call", call_id,
-            )
+        # P2#2: el pending ya se marco arriba (antes del gate).
 
         # Ejecutar.
         start = time.monotonic()
