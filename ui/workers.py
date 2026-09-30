@@ -17,10 +17,7 @@ from plugins.shell import is_command_allowed
 logger = logging.getLogger(__name__)
 
 
-# Tiempo máximo que un worker espera una confirmación del usuario.
-# Sin límite, un cierre de ventana dejaba el worker colgado.
-CONFIRMATION_TIMEOUT_SECONDS = 600  # 10 minutos
-
+from core.approval import CONFIRMATION_TIMEOUT_SECONDS  # noqa: E402,F401
 
 # Cap real del buffer de streaming. push() bloquea al productor
 # hasta que el consumidor drene o el cancel_event se active. Los

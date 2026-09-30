@@ -25,6 +25,12 @@ from typing import Any
 NEVER_AUTO_APPROVE: frozenset[str] = frozenset({"borrar_archivo"})
 SHELL_TOOL = "ejecutar_comando"
 
+# Timeout del dialogo de confirmacion. Sin limite, un cierre de
+# ventana dejaba el worker colgado. Vive aqui (no en ui/workers)
+# para desacoplar UI y harness: ambos lo importan de la misma
+# fuente unica.
+CONFIRMATION_TIMEOUT_SECONDS = 600  # 10 minutos
+
 
 def is_auto_approved(
     name: str,
