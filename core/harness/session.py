@@ -95,11 +95,29 @@ class HarnessSession:
         self._cancel = threading.Event()
         self._errors: list[str] = []
         self._step_failed = False
+        self._step_in_progress = False
 
     # -- API ---------------------------------------------------------
 
     def step(self, user_message: str) -> Iterator[Event]:
-        """Ejecuta un step completo (modelo + tool calls)."""
+        """Ejecuta un step completo (modelo + tool calls).
+
+        No reentrante (auditoria P2#16): dos step() concurrentes
+        comparten _messages, _step_index, _seq y _cancel. El
+        segundo detecta el flag y falla limpio.
+        """
+        if self._step_in_progress:
+            raise RuntimeError(
+                "HarnessSession.step() no es reentrante"
+            )
+        self._step_in_progress = True
+        try:
+            yield from self._step_impl(user_message)
+        finally:
+            self._step_in_progress = False
+
+    def _step_impl(self, user_message: str) -> Iterator[Event]:
+        """Cuerpo de step(). Extraido para envolver con el flag."""
         self._cancel.clear()
         self._step_failed = False
         self._step_error_count = 0
@@ -320,6 +338,11 @@ class HarnessSession:
                 f"ERROR: herramienta no permitida para este agente: "
                 f"{name}"
             )
+            # P2#16: mutar el estado ANTES de los yields. Si el
+            # consumidor abandona el generador, el log y las
+            # señales deben reflejar un estado consistente.
+            self._messages.append({"role": "tool", "content": msg})
+            self._step_error_count += 1
             yield self._emit(
                 ToolCallRequested,
                 call_id=call_id,
@@ -336,8 +359,6 @@ class HarnessSession:
                 detail=msg,
                 duration_ms=0,
             )
-            self._messages.append({"role": "tool", "content": msg})
-            self._step_error_count += 1
             return
 
         # Gate minimo S4-b.
@@ -402,6 +423,9 @@ class HarnessSession:
 
         if handler_error is not None:
             err_msg = f"ERROR: {handler_error}"
+            self._messages.append(
+                {"role": "tool", "content": err_msg},
+            )
             yield self._emit(
                 ToolCallCompleted,
                 call_id=call_id,
@@ -411,12 +435,12 @@ class HarnessSession:
                 detail=err_msg,
                 duration_ms=0,
             )
-            self._messages.append(
-                {"role": "tool", "content": err_msg},
-            )
             return
 
         if denial_reason is not None:
+            self._messages.append(
+                {"role": "tool", "content": denial_reason},
+            )
             yield self._emit(
                 ToolCallCompleted,
                 call_id=call_id,
@@ -426,9 +450,6 @@ class HarnessSession:
                 detail=denial_reason,
                 duration_ms=0,
             )
-            self._messages.append(
-                {"role": "tool", "content": denial_reason},
-            )
             return
 
         if not auto_approved:
@@ -436,6 +457,9 @@ class HarnessSession:
             result = (
                 "OPERACIÓN CANCELADA POR EL USUARIO: la tool "
                 "requiere confirmación y fue denegada."
+            )
+            self._messages.append(
+                {"role": "tool", "content": result},
             )
             yield self._emit(
                 ToolCallCompleted,
@@ -445,9 +469,6 @@ class HarnessSession:
                 summary=result[:120],
                 detail=result,
                 duration_ms=0,
-            )
-            self._messages.append(
-                {"role": "tool", "content": result},
             )
             return
 
@@ -461,6 +482,9 @@ class HarnessSession:
             if state == "completed":
                 cached = self.idempotency.get_result(key)
                 result = str(cached) if cached is not None else ""
+                self._messages.append(
+                    {"role": "tool", "content": result},
+                )
                 yield self._emit(
                     ToolCallCompleted,
                     call_id=call_id,
@@ -469,9 +493,6 @@ class HarnessSession:
                     summary=result[:120],
                     detail=result,
                     duration_ms=0,
-                )
-                self._messages.append(
-                    {"role": "tool", "content": result},
                 )
                 return
             self.idempotency.mark_pending(
@@ -511,6 +532,7 @@ class HarnessSession:
             else:
                 self.idempotency.mark_failed(key)
 
+        self._messages.append({"role": "tool", "content": result})
         yield self._emit(
             ToolCallCompleted,
             call_id=call_id,
@@ -520,7 +542,6 @@ class HarnessSession:
             detail=result,
             duration_ms=duration_ms,
         )
-        self._messages.append({"role": "tool", "content": result})
 
         # S4-c-mini: observar el par (tool, args, result) por si es
         # un bucle. Los errores tambien cuentan para health.
