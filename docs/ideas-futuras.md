@@ -24,6 +24,14 @@ slices o a la deuda tecnica de `docs/harness-v3.md`.
   esta en `_CONFIRMATION_REQUIRED`; el borrado desde UI debe
   pasar por el mismo gate de confirmacion. Coste: ~20 min.
 
+- **Timestamps por fase**: cuando el modelo cierra una fase
+  ("FASE N VERIFICADA"), mostrar al lado el tiempo transcurrido
+  desde el inicio (o desde la fase anterior). Util para detectar
+  fases lentas y para comparar runs. Encaja con el event log de
+  S2: cada StepEnded ya tendra `ts`, solo hay que restar.
+  Coste: ~15 min (parser + renderer). Esperar a S2 para no
+  duplicar logica de tiempo.
+
 ## Harness v3 (post S1-ter)
 
 - **Dialogo de confirmacion sin motivo (Overpaper run #2)**:
