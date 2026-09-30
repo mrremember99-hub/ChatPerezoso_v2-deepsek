@@ -75,6 +75,24 @@ def result_signature(result: Any) -> str:
     return hashlib.sha256(s.encode()).hexdigest()[:12]
 
 
+def _trailing_cycles(seq: list[str], period: int) -> int:
+    """Ciclos completos consecutivos de longitud `period` al final.
+
+    P2#7: contar sobre todo el buffer, no sobre una ventana acotada
+    por period*min_repeats. Sin esto, ping_pong nunca escalaba a
+    corrective (3 ciclos) ni a abort (4): la ventana solo veia 2.
+    """
+    if period < 1 or len(seq) < period:
+        return 0
+    pattern = seq[-period:]
+    repeats = 0
+    end = len(seq)
+    while end - period >= 0 and seq[end - period:end] == pattern:
+        repeats += 1
+        end -= period
+    return repeats
+
+
 def detect_ping_pong(
     signatures: list[str],
     *,
@@ -82,23 +100,17 @@ def detect_ping_pong(
     max_period: int = 4,
     min_repeats: int = 2,
 ) -> tuple[str, int] | None:
-    """Busca el periodo mas pequeno que se repite min_repeats veces.
+    """Busca el periodo mas pequeno que se repite min_repeats veces
+    consecutivas al final de `signatures`.
 
-    Devuelve (patron, ciclos) o None si no hay patron.
+    Devuelve (patron, ciclos) o None si no hay patron. P2#7:
+    cuenta los ciclos hacia atras sobre todo el buffer en lugar
+    de mirar solo una ventana de period*min_repeats.
     """
     for period in range(min_period, max_period + 1):
-        if len(signatures) < period * min_repeats:
-            continue
-        window = signatures[-period * min_repeats:]
-        pattern = window[:period]
-        repeats = 0
-        for i in range(0, len(window), period):
-            if window[i:i + period] == pattern:
-                repeats += 1
-            else:
-                break
+        repeats = _trailing_cycles(signatures, period)
         if repeats >= min_repeats:
-            return ("|".join(pattern), repeats)
+            return ("|".join(signatures[-period:]), repeats)
     return None
 
 
@@ -254,11 +266,22 @@ class LoopDetector:
         if not res:
             return
         pattern, cycles = res
+        # P2#7 (b): spec 3.7 — mismas llamadas con resultados
+        # distintos es progreso. Solo se escala mas alla de
+        # warning si los resultados tambien ciclan (strict).
+        period = len(pattern.split("|"))
+        combined = [
+            f"{obs.signature}|{obs.result_signature}"
+            for obs in self.recent
+        ]
+        strict = _trailing_cycles(combined, period)
         warn, correct, abort = self.policy.ping_pong
         reason = f"patron alternante {cycles} ciclos"
-        if cycles >= abort:
-            decisions.append(("abort", "ping_pong", pattern, cycles, reason))
-        elif cycles >= correct:
+        if cycles >= abort and strict >= abort:
+            decisions.append(
+                ("abort", "ping_pong", pattern, cycles, reason)
+            )
+        elif cycles >= correct and strict >= correct:
             decisions.append(
                 ("corrective", "ping_pong", pattern, cycles, reason)
             )
