@@ -11,10 +11,13 @@ Estado de slices:
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
+import secrets
 import sqlite3
 import threading
 from collections.abc import Iterator
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -30,6 +33,28 @@ CREATE TABLE IF NOT EXISTS events (
     payload TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id, seq);
+
+CREATE TABLE IF NOT EXISTS checkpoints (
+    checkpoint_id TEXT PRIMARY KEY,
+    run_id        TEXT NOT NULL,
+    seq           INTEGER NOT NULL,
+    snapshot      TEXT NOT NULL,
+    ts            TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_run
+    ON checkpoints(run_id, seq DESC);
+
+CREATE TABLE IF NOT EXISTS executed_ops (
+    key     TEXT PRIMARY KEY,
+    run_id  TEXT NOT NULL,
+    op_type TEXT NOT NULL,
+    call_id TEXT NOT NULL,
+    state   TEXT NOT NULL,
+    result  TEXT,
+    ts      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_executed_ops_run
+    ON executed_ops(run_id, call_id);
 """
 
 
@@ -209,12 +234,322 @@ class EventLog:
         self.close()
 
 
-# CheckpointManager se implementa en S2-b.
+# ══════════════ S2-b: Checkpoints + Idempotencia ══════════════
+
+
+@dataclass(frozen=True)
+class CheckpointSnapshot:
+    """Estado minimo de un run para reanudar.
+
+    Spec §4.2.2. NO guarda el contenido del workspace (vive en
+    disco) ni los vectores RAG (viven en su DB). Solo lo necesario
+    para retomar el ciclo sin releer el event log entero.
+    """
+
+    run_id: str
+    last_event_seq: int
+    step_index: int
+    messages_summary: list[dict]
+    tools_executed: list[dict]
+    loop_state: dict
+    correctives_count: int
+    verification_issues: list[dict]
+    agent_spec_hash: str
+    policy_hash: str
+
+
 class CheckpointManager:
-    """Gestor de checkpoints. Stub de S0. Implementacion en S2-b."""
+    """Gestor de checkpoints sobre SQLite.
 
-    def save(self, state: object) -> str:
-        raise NotImplementedError("S2-b: implementar save")
+    Uso:
+        cm = CheckpointManager(db_path)
+        cid = cm.save(snapshot)
+        snap = cm.load(cid)
+        snap = cm.get_latest("run_id")
+        cm.close()
 
-    def load(self, checkpoint_id: str) -> object:
-        raise NotImplementedError("S2-b: implementar load")
+    Retencion: por run, se mantienen los `keep_last_checkpoints`
+    mas recientes. Los demas se borran.
+    """
+
+    def __init__(self, db_path: Path) -> None:
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
+        self._con = sqlite3.connect(
+            str(self.db_path),
+            check_same_thread=False,
+        )
+        self._con.row_factory = sqlite3.Row
+        self._con.execute("PRAGMA journal_mode=WAL;")
+        self._con.execute("PRAGMA synchronous=NORMAL;")
+        self._con.execute("PRAGMA busy_timeout=5000;")
+        with self._lock:
+            self._con.executescript(_SCHEMA)
+            self._con.commit()
+
+    def save(self, snapshot: CheckpointSnapshot) -> str:
+        """Persiste el snapshot. Devuelve el checkpoint_id."""
+        cid = f"cp_{secrets.token_hex(8)}"
+        body = json.dumps(
+            asdict(snapshot), ensure_ascii=False, default=str,
+        )
+        ts = datetime.now(UTC).isoformat(timespec="seconds")
+        with self._lock:
+            cur = self._con.cursor()
+            cur.execute(
+                "INSERT INTO checkpoints "
+                "(checkpoint_id, run_id, seq, snapshot, ts) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (cid, snapshot.run_id, snapshot.last_event_seq,
+                 body, ts),
+            )
+            self._con.commit()
+        return cid
+
+    def load(self, checkpoint_id: str) -> CheckpointSnapshot | None:
+        with self._lock:
+            cur = self._con.cursor()
+            row = cur.execute(
+                "SELECT snapshot FROM checkpoints "
+                "WHERE checkpoint_id = ?",
+                (checkpoint_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._from_json(row["snapshot"])
+
+    def get_latest(self, run_id: str) -> CheckpointSnapshot | None:
+        with self._lock:
+            cur = self._con.cursor()
+            row = cur.execute(
+                "SELECT snapshot FROM checkpoints "
+                "WHERE run_id = ? ORDER BY seq DESC LIMIT 1",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._from_json(row["snapshot"])
+
+    def list_run(self, run_id: str) -> list[str]:
+        with self._lock:
+            cur = self._con.cursor()
+            rows = cur.execute(
+                "SELECT checkpoint_id FROM checkpoints "
+                "WHERE run_id = ? ORDER BY seq DESC",
+                (run_id,),
+            ).fetchall()
+        return [r["checkpoint_id"] for r in rows]
+
+    def count(self, run_id: str) -> int:
+        with self._lock:
+            cur = self._con.cursor()
+            row = cur.execute(
+                "SELECT COUNT(*) AS n FROM checkpoints WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+        return int(row["n"]) if row else 0
+
+    def delete(self, checkpoint_id: str) -> bool:
+        with self._lock:
+            cur = self._con.cursor()
+            cur.execute(
+                "DELETE FROM checkpoints WHERE checkpoint_id = ?",
+                (checkpoint_id,),
+            )
+            self._con.commit()
+            return cur.rowcount > 0
+
+    def apply_retention(self, policy: DurablePolicy) -> int:
+        """Borra checkpoints antiguos por run, dejando los N ultimos.
+
+        Devuelve cuantos checkpoints se borraron.
+        """
+        keep = max(1, policy.keep_last_checkpoints)
+        with self._lock:
+            cur = self._con.cursor()
+            runs = [
+                r["run_id"] for r in cur.execute(
+                    "SELECT DISTINCT run_id FROM checkpoints",
+                ).fetchall()
+            ]
+            deleted = 0
+            for rid in runs:
+                ids = [
+                    r["checkpoint_id"] for r in cur.execute(
+                        "SELECT checkpoint_id FROM checkpoints "
+                        "WHERE run_id = ? ORDER BY seq DESC",
+                        (rid,),
+                    ).fetchall()
+                ]
+                to_delete = ids[keep:]
+                if not to_delete:
+                    continue
+                placeholders = ",".join("?" * len(to_delete))
+                cur.execute(
+                    f"DELETE FROM checkpoints "
+                    f"WHERE checkpoint_id IN ({placeholders})",
+                    to_delete,
+                )
+                deleted += len(to_delete)
+            self._con.commit()
+            return deleted
+
+    @staticmethod
+    def _from_json(raw: str) -> CheckpointSnapshot:
+        data = json.loads(raw)
+        return CheckpointSnapshot(
+            run_id=data["run_id"],
+            last_event_seq=int(data["last_event_seq"]),
+            step_index=int(data["step_index"]),
+            messages_summary=list(data.get("messages_summary", [])),
+            tools_executed=list(data.get("tools_executed", [])),
+            loop_state=dict(data.get("loop_state", {})),
+            correctives_count=int(data.get("correctives_count", 0)),
+            verification_issues=list(
+                data.get("verification_issues", []),
+            ),
+            agent_spec_hash=str(data.get("agent_spec_hash", "")),
+            policy_hash=str(data.get("policy_hash", "")),
+        )
+
+    def close(self) -> None:
+        with self._lock, contextlib.suppress(sqlite3.Error):
+            self._con.close()
+
+    def __enter__(self) -> CheckpointManager:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
+# ── Idempotencia ─────────────────────────────────────────────────
+
+
+def idempotency_key(
+    run_id: str, step_index: int, call_id: str,
+) -> str:
+    """Clave estable para una operacion con side effect.
+
+    Spec §4.2.3. Mismo (run, step, call) -> misma clave. Si el
+    proceso muere y se reanuda, la operacion no se repite.
+    """
+    raw = f"{run_id}|{step_index}|{call_id}".encode()
+    return hashlib.sha256(raw).hexdigest()[:24]
+
+
+class IdempotencyRegistry:
+    """Registro de operaciones ejecutadas.
+
+    Estados:
+      - pending:   se intento ejecutar, aun no hay resultado.
+      - completed: ejecutada con exito; `result` guarda el output.
+      - failed:    fallo; reintentar es seguro (no hubo side effect
+                   persistente).
+
+    La regla clave: SIEMPRE insertar como `pending` ANTES de
+    ejecutar. Asi un crash a mitad deja rastro (`pending`) que
+    resume() puede tratar con cuidado.
+    """
+
+    def __init__(self, db_path: Path) -> None:
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
+        self._con = sqlite3.connect(
+            str(self.db_path),
+            check_same_thread=False,
+        )
+        self._con.row_factory = sqlite3.Row
+        self._con.execute("PRAGMA journal_mode=WAL;")
+        self._con.execute("PRAGMA synchronous=NORMAL;")
+        self._con.execute("PRAGMA busy_timeout=5000;")
+        with self._lock:
+            self._con.executescript(_SCHEMA)
+            self._con.commit()
+
+    def mark_pending(
+        self, key: str, run_id: str, op_type: str, call_id: str,
+    ) -> None:
+        ts = datetime.now(UTC).isoformat(timespec="seconds")
+        with self._lock:
+            cur = self._con.cursor()
+            cur.execute(
+                "INSERT OR REPLACE INTO executed_ops "
+                "(key, run_id, op_type, call_id, state, result, ts) "
+                "VALUES (?, ?, ?, ?, 'pending', NULL, ?)",
+                (key, run_id, op_type, call_id, ts),
+            )
+            self._con.commit()
+
+    def mark_completed(self, key: str, result: object) -> None:
+        body = json.dumps(result, ensure_ascii=False, default=str)
+        with self._lock:
+            cur = self._con.cursor()
+            cur.execute(
+                "UPDATE executed_ops SET state = 'completed', "
+                "result = ? WHERE key = ?",
+                (body, key),
+            )
+            self._con.commit()
+
+    def mark_failed(self, key: str) -> None:
+        with self._lock:
+            cur = self._con.cursor()
+            cur.execute(
+                "UPDATE executed_ops SET state = 'failed' "
+                "WHERE key = ?",
+                (key,),
+            )
+            self._con.commit()
+
+    def get_state(self, key: str) -> str | None:
+        with self._lock:
+            cur = self._con.cursor()
+            row = cur.execute(
+                "SELECT state FROM executed_ops WHERE key = ?",
+                (key,),
+            ).fetchone()
+        return row["state"] if row else None
+
+    def get_result(self, key: str) -> object | None:
+        with self._lock:
+            cur = self._con.cursor()
+            row = cur.execute(
+                "SELECT result FROM executed_ops WHERE key = ?",
+                (key,),
+            ).fetchone()
+        if row is None or row["result"] is None:
+            return None
+        return json.loads(row["result"])
+
+    def list_pending(self, run_id: str) -> list[str]:
+        with self._lock:
+            cur = self._con.cursor()
+            rows = cur.execute(
+                "SELECT key FROM executed_ops "
+                "WHERE run_id = ? AND state = 'pending'",
+                (run_id,),
+            ).fetchall()
+        return [r["key"] for r in rows]
+
+    def clear(self, run_id: str) -> int:
+        with self._lock:
+            cur = self._con.cursor()
+            cur.execute(
+                "DELETE FROM executed_ops WHERE run_id = ?",
+                (run_id,),
+            )
+            self._con.commit()
+            return cur.rowcount
+
+    def close(self) -> None:
+        with self._lock, contextlib.suppress(sqlite3.Error):
+            self._con.close()
+
+    def __enter__(self) -> IdempotencyRegistry:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
