@@ -11,6 +11,7 @@ Estado de slices:
 from __future__ import annotations
 
 import hashlib
+import inspect
 import logging
 import threading
 import time
@@ -25,6 +26,8 @@ from core.harness.durable import (
     idempotency_key,
 )
 from core.harness.events import (
+    ConfirmationRequested,
+    ConfirmationResolved,
     Event,
     HarnessError,
     HealthSnapshot,
@@ -73,8 +76,11 @@ class HarnessSession:
         idempotency: IdempotencyRegistry | None = None,
         loop_detector: LoopDetector | None = None,
         health_monitor: HealthMonitor | None = None,
+        # P2#9: firma flexible. Se acepta tanto
+        # (name, args) como (name, args, *, cancel_event=...).
+        # El helper _call_handler decide por inspect.
         confirmation_handler: (
-            Callable[[str, dict], bool] | None
+            Callable[..., bool] | None
         ) = None,
         command_allowed: Callable[[str], bool] | None = None,
     ) -> None:
@@ -263,6 +269,32 @@ class HarnessSession:
     def resolve_confirmation(self, _response: Any) -> None:
         """S4-b: no-op. Confirmaciones bloqueantes en S4-c."""
 
+    def _call_handler(
+        self, name: str, arguments: dict,
+    ) -> bool:
+        """Llama al confirmation_handler pasando cancel_event si
+        acepta ese kwarg (P2#9).
+
+        Firma nueva:  handler(name, args, *, cancel_event=None)
+        Firma vieja:  handler(name, args)
+
+        Se usa inspect para decidir. try/except TypeError
+        confundiria un TypeError real del handler con un
+        handler de firma vieja.
+        """
+        handler = self.confirmation_handler
+        assert handler is not None
+        try:
+            params = inspect.signature(handler).parameters
+            accepts_cancel = "cancel_event" in params
+        except (TypeError, ValueError):
+            accepts_cancel = False
+        if accepts_cancel:
+            return bool(
+                handler(name, arguments, cancel_event=self._cancel)
+            )
+        return bool(handler(name, arguments))
+
     # -- loop interno ------------------------------------------------
 
     def _agent_loop(self, step_index: int) -> Iterator[Event]:
@@ -386,9 +418,29 @@ class HarnessSession:
 
         name = str(tool_call.get("name", ""))
         raw_args = tool_call.get("arguments", {})
-        arguments: dict = (
-            dict(raw_args) if isinstance(raw_args, dict) else {}
-        )
+        # P2#9: validar arguments ANTES del gate. Antes, cualquier
+        # valor no-dict se convertia en {} silenciosamente y el
+        # handler se llamaba con una llamada malformada (regla del
+        # Run #2). None es valido (muchos modelos no mandan args
+        # cuando la tool no los necesita); otros tipos son error.
+        if raw_args is None:
+            arguments: dict = {}
+        elif isinstance(raw_args, dict):
+            arguments = dict(raw_args)
+        else:
+            msg = (
+                f"tool_call arguments invalido: "
+                f"{type(raw_args).__name__}"
+            )
+            self._messages.append({"role": "tool", "content": msg})
+            self._step_error_count += 1
+            yield self._emit(
+                HarnessError,
+                component="session",
+                message=msg,
+                recoverable=True,
+            )
+            return
         if not name:
             yield self._emit(
                 HarnessError,
@@ -520,15 +572,35 @@ class HarnessSession:
         ):
             auto_approved = True
         elif self.confirmation_handler is not None:
+            # P2#9: emitir ConfirmationRequested/Resolved para que
+            # la UI y el log sepan que hubo un dialogo (antes solo
+            # habia el efecto en el handler).
+            yield self._emit(
+                ConfirmationRequested,
+                call_id=call_id,
+                tool_name=name,
+                arguments=dict(arguments),
+                reason="policy",
+            )
             try:
                 auto_approved = bool(
-                    self.confirmation_handler(
-                        name, dict(arguments),
-                    ),
+                    self._call_handler(name, arguments),
+                )
+                yield self._emit(
+                    ConfirmationResolved,
+                    call_id=call_id,
+                    approved=auto_approved,
+                    timeout=False,
                 )
             except Exception as exc:  # noqa: BLE001
                 auto_approved = False
                 handler_error = f"confirmation_handler fallo: {exc}"
+                yield self._emit(
+                    ConfirmationResolved,
+                    call_id=call_id,
+                    approved=False,
+                    timeout=False,
+                )
         else:
             auto_approved = False
             denial_reason = (
