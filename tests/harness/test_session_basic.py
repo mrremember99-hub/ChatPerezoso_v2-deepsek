@@ -81,7 +81,12 @@ def test_step_emite_deltas_y_completed(tmp_path):
     assert "message_completed" in kinds
     assert kinds[-1] == "step_ended"
 
-    completed = next(e for e in events if e.kind == "message_completed")
+    # P2#3: ahora hay MessageCompleted para user y assistant.
+    # Buscamos el de assistant explicitamente.
+    completed = next(
+        e for e in events
+        if e.kind == "message_completed" and e.role == "assistant"
+    )
     assert completed.content == "hola"
     ended = next(e for e in events if e.kind == "step_ended")
     assert ended.outcome == "ok"

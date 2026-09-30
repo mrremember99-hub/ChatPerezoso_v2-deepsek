@@ -134,10 +134,18 @@ class HarnessSession:
 
         self._step_index += 1
         step_index = self._step_index
+        yield self._emit(StepStarted, step_index=step_index)
         self._messages.append(
             {"role": "user", "content": user_message},
         )
-        yield self._emit(StepStarted, step_index=step_index)
+        # P2#3: los roles user/tool/system tambien van al log como
+        # MessageCompleted para que fold_events los recupere tras
+        # un crash+resume. Antes solo assistant lo hacia. Va
+        # DESPUES de StepStarted: el step empieza, y el primer
+        # evento del step es el mensaje del usuario.
+        yield self._emit(
+            MessageCompleted, role="user", content=user_message,
+        )
 
         fatal: str | None = None
         try:
@@ -351,6 +359,9 @@ class HarnessSession:
                 auto_approved=False,
             )
             yield self._emit(
+                MessageCompleted, role="tool", content=msg,
+            )
+            yield self._emit(
                 ToolCallCompleted,
                 call_id=call_id,
                 tool_name=name,
@@ -427,6 +438,9 @@ class HarnessSession:
                 {"role": "tool", "content": err_msg},
             )
             yield self._emit(
+                MessageCompleted, role="tool", content=err_msg,
+            )
+            yield self._emit(
                 ToolCallCompleted,
                 call_id=call_id,
                 tool_name=name,
@@ -440,6 +454,9 @@ class HarnessSession:
         if denial_reason is not None:
             self._messages.append(
                 {"role": "tool", "content": denial_reason},
+            )
+            yield self._emit(
+                MessageCompleted, role="tool", content=denial_reason,
             )
             yield self._emit(
                 ToolCallCompleted,
@@ -460,6 +477,9 @@ class HarnessSession:
             )
             self._messages.append(
                 {"role": "tool", "content": result},
+            )
+            yield self._emit(
+                MessageCompleted, role="tool", content=result,
             )
             yield self._emit(
                 ToolCallCompleted,
@@ -484,6 +504,9 @@ class HarnessSession:
                 result = str(cached) if cached is not None else ""
                 self._messages.append(
                     {"role": "tool", "content": result},
+                )
+                yield self._emit(
+                    MessageCompleted, role="tool", content=result,
                 )
                 yield self._emit(
                     ToolCallCompleted,
@@ -533,6 +556,9 @@ class HarnessSession:
                 self.idempotency.mark_failed(key)
 
         self._messages.append({"role": "tool", "content": result})
+        yield self._emit(
+            MessageCompleted, role="tool", content=result,
+        )
         yield self._emit(
             ToolCallCompleted,
             call_id=call_id,
@@ -591,6 +617,9 @@ class HarnessSession:
             prompt = self._corrective_builder.build(decision)
             self._messages.append(
                 {"role": "system", "content": prompt},
+            )
+            yield self._emit(
+                MessageCompleted, role="system", content=prompt,
             )
             yield self._emit(
                 LoopCorrectivePrompt,
