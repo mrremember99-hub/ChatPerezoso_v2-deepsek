@@ -303,7 +303,10 @@ class HarnessSession:
         """
         for round_index in range(self.config.max_tool_rounds):
             text_parts: list[str] = []
-            tool_call: dict | None = None
+            # P2#11: acumular TODOS los tool_calls del turno. Antes
+            # se hacia `break` al primero y se descartaba el resto
+            # (el protocolo Ollama permite N tool_calls por ronda).
+            tool_calls: list[dict] = []
 
             for delta in self.model_client.chat(
                 self._build_messages(),
@@ -319,8 +322,9 @@ class HarnessSession:
                         content=delta.text,
                     )
                 elif delta.kind == "tool_call":
-                    tool_call = delta.tool_call
-                    break
+                    if isinstance(delta.tool_call, dict):
+                        tool_calls.append(delta.tool_call)
+                    # NO break: seguir leyendo por si vienen mas.
                 elif delta.kind == "done":
                     if delta.text and not text_parts:
                         text_parts.append(delta.text)
@@ -337,28 +341,45 @@ class HarnessSession:
                     role="assistant",
                     content=full_text,
                 )
-                self._messages.append(
-                    {"role": "assistant", "content": full_text},
-                )
+            # P2#11: el mensaje assistant va a _messages aunque no
+            # haya texto si pidio tools. Formato Ollama: content +
+            # tool_calls. Sin esto, la siguiente ronda no ve que el
+            # modelo pidio N tools y puede volver a pedirlas.
+            if full_text or tool_calls:
+                assistant_msg: dict = {
+                    "role": "assistant", "content": full_text,
+                }
+                if tool_calls:
+                    assistant_msg["tool_calls"] = [
+                        {
+                            "function": {
+                                "name": str(tc.get("name", "")),
+                                "arguments": tc.get("arguments", {}),
+                            },
+                        }
+                        for tc in tool_calls
+                    ]
+                self._messages.append(assistant_msg)
 
-            if tool_call is None:
+            if not tool_calls:
                 yield from self._observe_health(step_index)
                 return  # el modelo no pide nada mas: step ok
 
             # P2#10: si el usuario cancelo mientras el modelo
-            # generaba, no ejecutar la tool.
+            # generaba, no ejecutar las tools.
             if self._cancel.is_set():
                 yield from self._observe_health(step_index)
                 return
 
-            yield from self._execute_tool_call(
-                tool_call, step_index, round_index,
-            )
-
-            # Si el loop detector aborto, cortamos el ciclo.
-            if self._cancel.is_set() or self._step_failed:
-                yield from self._observe_health(step_index)
-                return
+            # P2#11: ejecutar las N tools en orden. Parar si una
+            # aborta o se cancela.
+            for ordinal, tc in enumerate(tool_calls):
+                yield from self._execute_tool_call(
+                    tc, step_index, round_index, ordinal,
+                )
+                if self._cancel.is_set() or self._step_failed:
+                    yield from self._observe_health(step_index)
+                    return
 
         # Excedido max_tool_rounds.
         msg = (
