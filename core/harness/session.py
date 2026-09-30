@@ -10,10 +10,11 @@ Estado de slices:
 """
 from __future__ import annotations
 
-import secrets
+import hashlib
 import threading
 import time
 from collections.abc import Callable, Iterator
+from dataclasses import replace as _dc_replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -183,7 +184,7 @@ class HarnessSession:
         """Itera modelo -> tool calls -> modelo hasta que el modelo
         termine o se exceda max_tool_rounds.
         """
-        for _round in range(self.config.max_tool_rounds):
+        for round_index in range(self.config.max_tool_rounds):
             text_parts: list[str] = []
             tool_call: dict | None = None
 
@@ -227,7 +228,9 @@ class HarnessSession:
                 yield from self._observe_health(step_index)
                 return  # el modelo no pide nada mas: step ok
 
-            yield from self._execute_tool_call(tool_call, step_index)
+            yield from self._execute_tool_call(
+                tool_call, step_index, round_index,
+            )
 
             # Si el loop detector aborto, cortamos el ciclo.
             if self._cancel.is_set() or self._step_failed:
@@ -247,10 +250,40 @@ class HarnessSession:
             recoverable=True,
         )
 
+    def _make_call_id(
+        self, step_index: int, round_index: int, ordinal: int,
+    ) -> str:
+        """call_id determinista (auditoria P2#1).
+
+        Mismo (run, step, round, ordinal) -> mismo id. Tras un
+        crash+resume, el harness reconstruye el step desde el
+        checkpoint y reintenta la misma posicion: la clave de
+        idempotencia coincide y la tool no se re-ejecuta.
+
+        Antes: secrets.token_hex(6) -> id aleatorio por llamada,
+        la rama 'completed' de IdempotencyRegistry era inalcanzable
+        y dos reintentos del mismo step ejecutaban la tool dos
+        veces.
+        """
+        raw = (
+            f"{self.config.run_id}|{step_index}|"
+            f"{round_index}|{ordinal}"
+        ).encode()
+        return "tc_" + hashlib.sha256(raw).hexdigest()[:12]
+
     def _execute_tool_call(
-        self, tool_call: dict, step_index: int,
+        self,
+        tool_call: dict,
+        step_index: int,
+        round_index: int = 0,
+        ordinal: int = 0,
     ) -> Iterator[Event]:
-        """Ejecuta una tool call y emite Requested/Completed."""
+        """Ejecuta una tool call y emite Requested/Completed.
+
+        `call_id` es determinista (P2#1). Con IdempotencyRegistry,
+        una segunda ejecucion del mismo (step, round, ordinal)
+        devuelve el resultado cacheado sin re-ejecutar.
+        """
         if not isinstance(tool_call, dict):
             yield self._emit(
                 HarnessError,
@@ -274,7 +307,9 @@ class HarnessSession:
             )
             return
 
-        call_id = f"tc_{secrets.token_hex(6)}"
+        call_id = self._make_call_id(
+            step_index, round_index, ordinal,
+        )
 
         # P2#6: AgentSpec.allowed_tools tambien se hace cumplir al
         # ejecutar. El filtro de _tool_definitions solo oculta las
@@ -641,6 +676,16 @@ class HarnessSession:
     # -- emision -----------------------------------------------------
 
     def _emit(self, cls: type[Event], **kwargs: Any) -> Event:
+        """Crea el evento, lo persiste si hay log, y devuelve el
+        evento con el seq REAL del log (auditoria P2#15).
+
+        Sin event_log: `self._seq` local, monotono por sesion.
+        Con event_log: el seq viene de SQLite AUTOINCREMENT. Es
+        el unico autoritativo para `events(since_seq)` y para el
+        `last_event_seq` de checkpoints. Antes de este fix, dos
+        runs en el mismo log mezclaban dominios de seq: uno decia
+        [1..5] y el otro [6..10] sobre las mismas filas.
+        """
         self._seq += 1
         event = cls(
             seq=self._seq,
@@ -649,5 +694,7 @@ class HarnessSession:
             **kwargs,
         )
         if self.event_log is not None:
-            self.event_log.append(event)
+            real_seq = self.event_log.append(event)
+            if real_seq > 0 and real_seq != event.seq:
+                event = _dc_replace(event, seq=real_seq)
         return event
