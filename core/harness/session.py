@@ -387,6 +387,7 @@ class HarnessSession:
         )
         self._errors.append(msg)
         self._step_failed = True
+        self._step_error_count += 1
         yield self._emit(
             HarnessError,
             component="session",
@@ -435,6 +436,9 @@ class HarnessSession:
                 message=f"tool_call malformado: {tool_call!r}",
                 recoverable=True,
             )
+            yield from self._fail_tool(
+                "", {}, f"tool_call malformado: {tool_call!r}", "error",
+            )
             return
 
         name = str(tool_call.get("name", ""))
@@ -454,13 +458,13 @@ class HarnessSession:
                 f"{type(raw_args).__name__}"
             )
             self._messages.append({"role": "tool", "content": msg})
-            self._step_error_count += 1
             yield self._emit(
                 HarnessError,
                 component="session",
                 message=msg,
                 recoverable=True,
             )
+            yield from self._fail_tool(name, {}, msg, "error")
             return
         if not name:
             yield self._emit(
@@ -468,6 +472,9 @@ class HarnessSession:
                 component="session",
                 message="tool_call sin 'name'",
                 recoverable=True,
+            )
+            yield from self._fail_tool(
+                "", {}, "tool_call sin 'name'", "error",
             )
             return
 
@@ -488,7 +495,6 @@ class HarnessSession:
             # consumidor abandona el generador, el log y las
             # señales deben reflejar un estado consistente.
             self._messages.append({"role": "tool", "content": msg})
-            self._step_error_count += 1
             yield self._emit(
                 ToolCallRequested,
                 call_id=call_id,
@@ -508,6 +514,7 @@ class HarnessSession:
                 detail=msg,
                 duration_ms=0,
             )
+            yield from self._fail_tool(name, arguments, msg, "error")
             return
 
         # P2#2 (auditoria externa): idempotencia ANTES del gate.
@@ -658,6 +665,9 @@ class HarnessSession:
                 detail=err_msg,
                 duration_ms=0,
             )
+            yield from self._fail_tool(
+                name, arguments, err_msg, "error",
+            )
             return
 
         if denial_reason is not None:
@@ -677,6 +687,9 @@ class HarnessSession:
                 summary=denial_reason[:120],
                 detail=denial_reason,
                 duration_ms=0,
+            )
+            yield from self._fail_tool(
+                name, arguments, denial_reason, "cancelled",
             )
             return
 
@@ -702,6 +715,9 @@ class HarnessSession:
                 summary=result[:120],
                 detail=result,
                 duration_ms=0,
+            )
+            yield from self._fail_tool(
+                name, arguments, result, "cancelled",
             )
             return
 
@@ -761,6 +777,22 @@ class HarnessSession:
         yield from self._observe_loop(
             name, arguments, result, status,
         )
+
+    def _fail_tool(
+        self,
+        name: str,
+        arguments: dict,
+        result: str,
+        status: str,
+    ) -> Iterator[Event]:
+        """Registra un fallo de tool antes de ejecutarla.
+
+        Cuenta para el health monitor y alimenta al LoopDetector
+        con el par (name, args, result) aunque la tool no se
+        ejecute (denegacion, timeout, error previo).
+        """
+        self._step_error_count += 1
+        yield from self._observe_loop(name, arguments, result, status)
 
     # -- loop + health (S4-c-mini) -----------------------------------
 
