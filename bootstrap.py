@@ -36,6 +36,26 @@ HISTORY_FILE = ROOT / "history.json"
 VENV_DIR = ROOT / ".venv"
 
 
+def _resolve_workspace_dir() -> Path:
+    """Devuelve el workspace real: config.json si lo define, si no
+    WORKSPACE_DIR (default historico).
+
+    Fix run #5 OVERPAPER: el diagnostico mostraba WORKSPACE_DIR
+    aunque config.json apuntase a otra ruta, porque el modulo nunca
+    leia el config. El ChatWorker si lo lee, asi que el diagnostico
+    mentia sobre donde iba a escribir la app.
+    """
+    if CONFIG_FILE.exists():
+        try:
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            ws = data.get("workspace")
+            if isinstance(ws, str) and ws.strip():
+                return Path(ws).expanduser().resolve()
+        except (OSError, ValueError):
+            pass
+    return WORKSPACE_DIR
+
+
 IS_MAC = platform.system() == "Darwin"
 IS_ARM = platform.machine() == "arm64"
 
@@ -270,11 +290,12 @@ def check_dependencies() -> list[Check]:
 # -- preparación de estado local ---------------------------------------------
 
 def ensure_workspace() -> Check:
-    if WORKSPACE_DIR.is_dir():
-        return Check("Workspace", True, detail=str(WORKSPACE_DIR))
+    workspace = _resolve_workspace_dir()
+    if workspace.is_dir():
+        return Check("Workspace", True, detail=str(workspace))
     try:
-        WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
-        readme = WORKSPACE_DIR / "README.md"
+        workspace.mkdir(parents=True, exist_ok=True)
+        readme = workspace / "README.md"
         if not readme.exists():
             readme.write_text(
                 "# Workspace de ChatPerezoso\n\n"
@@ -282,7 +303,7 @@ def ensure_workspace() -> Check:
                 "Puedes cambiarlo desde la app.\n",
                 encoding="utf-8",
             )
-        return Check("Workspace", True, detail="creado")
+        return Check("Workspace", True, detail=f"creado en {workspace}")
     except OSError as exc:
         return Check("Workspace", False, fix=str(exc), blocking=True)
 
