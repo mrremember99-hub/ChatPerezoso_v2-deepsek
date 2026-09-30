@@ -17,6 +17,7 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
+from core.approval import is_auto_approved
 from core.harness.durable import (
     IdempotencyRegistry,
     idempotency_key,
@@ -71,6 +72,7 @@ class HarnessSession:
         confirmation_handler: (
             Callable[[str, dict], bool] | None
         ) = None,
+        command_allowed: Callable[[str], bool] | None = None,
     ) -> None:
         self.config = config
         self.model_client = model_client
@@ -80,6 +82,7 @@ class HarnessSession:
         self.loop_detector = loop_detector
         self.health_monitor = health_monitor
         self.confirmation_handler = confirmation_handler
+        self.command_allowed = command_allowed
         self._corrective_builder = CorrectivePromptBuilder()
         # Contadores para health monitoring dentro del step en curso.
         self._step_error_count = 0
@@ -298,7 +301,13 @@ class HarnessSession:
         denial_reason: str | None = None
         handler_error: str | None = None
 
-        if not requires or self.config.auto_approve:
+        if not requires or is_auto_approved(
+            name,
+            arguments,
+            auto_approve=self.config.auto_approve,
+            auto_approve_shell=self.config.auto_approve_shell,
+            command_allowed=self.command_allowed,
+        ):
             auto_approved = True
         elif self.confirmation_handler is not None:
             try:

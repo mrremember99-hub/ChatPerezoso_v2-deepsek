@@ -114,3 +114,9 @@ class HarnessConfig:
     # ChatWorker.auto_approve. Sin UI, el gate bloqueante real
     # es S4-c.
     auto_approve: bool = False
+    # P2#5 (auditoria externa): doble puerta para ejecutar_comando,
+    # igual que ChatWorker. Con auto_approve pero sin este flag,
+    # el shell se degrada a confirmacion. Ademas, la allowlist
+    # inyectada (command_allowed) decide si el comando concreto
+    # es auto-aprobable.
+    auto_approve_shell: bool = False
