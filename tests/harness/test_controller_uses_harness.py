@@ -1,4 +1,4 @@
-"""S6-b-2: flag harness_enabled en ChatController."""
+"""S7-a: ChatController usa HarnessWorker (único camino)."""
 from __future__ import annotations
 
 import pytest
@@ -60,7 +60,6 @@ class _FakeWorker:
         pass
 
     def __getattr__(self, name):
-        # Se�ales lazy: cualquier Signal pedida se crea al vuelo.
         s = _FakeSignal()
         object.__setattr__(self, name, s)
         return s
@@ -97,23 +96,9 @@ def _make_ctrl():
 # ── tests ──────────────────────────────────────────────────────
 
 
-def test_flag_off_por_defecto():
+def test_spawn_worker_usa_build_harness(monkeypatch):
+    """_spawn_worker delega siempre en _build_harness_worker."""
     ctrl = _make_ctrl()
-    assert ctrl._harness_enabled is False
-
-
-def test_setter_harness_enabled():
-    ctrl = _make_ctrl()
-    ctrl.set_harness_enabled(True)
-    assert ctrl._harness_enabled is True
-    ctrl.set_harness_enabled(False)
-    assert ctrl._harness_enabled is False
-
-
-def test_spawn_worker_flag_on_usa_build_harness(monkeypatch):
-    """Flag ON -> _spawn_worker delega en _build_harness_worker."""
-    ctrl = _make_ctrl()
-    ctrl._harness_enabled = True
 
     llamadas = []
 
@@ -132,34 +117,9 @@ def test_spawn_worker_flag_on_usa_build_harness(monkeypatch):
     assert llamadas[0][0] == "m1"
 
 
-def test_spawn_worker_flag_off_usa_chat_worker(monkeypatch):
-    """Flag OFF -> _spawn_worker usa ChatWorker."""
-    ctrl = _make_ctrl()
-    ctrl._harness_enabled = False
-
-    llamadas = []
-
-    def _fake_chat_worker(*a, **kw):
-        llamadas.append((a, kw))
-        return _FakeWorker()
-
-    monkeypatch.setattr(
-        "ui.controllers.chat_controller.ChatWorker",
-        _fake_chat_worker,
-    )
-    monkeypatch.setattr(
-        "ui.controllers.chat_controller.QThread", _FakeThread,
-    )
-
-    ctrl._spawn_worker("m1", None, "sys")
-
-    assert len(llamadas) == 1
-
-
 def test_build_harness_worker_inyecta_handler():
     """_build_harness_worker construye worker con session lista."""
     ctrl = _make_ctrl()
-    ctrl._harness_enabled = True
     ctrl.messages = [{"role": "user", "content": "hola"}]
     ctrl._loop_detection_enabled = False
 
@@ -174,8 +134,8 @@ def test_build_harness_worker_inyecta_handler():
     assert worker._user_message == "hola"
 
 
-def test_señales_identicas():
-    """Las 13 se�ales existen en ambos workers."""
+def test_senales_identicas():
+    """Las 13 senales existen en ambos workers (paridad S7-a)."""
     for name in _SEÑALES:
         assert hasattr(ChatWorker, name), f"ChatWorker sin {name}"
         assert hasattr(HarnessWorker, name), f"HarnessWorker sin {name}"

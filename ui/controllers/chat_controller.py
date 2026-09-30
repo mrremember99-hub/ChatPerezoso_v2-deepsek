@@ -28,7 +28,6 @@ from core.tool_result import ToolResult
 from ..chat_state import ChatState
 from ..rendering import ChatRenderer
 from ..views.dialogs import confirm_tool
-from ..workers import ChatWorker
 
 logger = logging.getLogger(__name__)
 
@@ -143,9 +142,6 @@ class ChatController(QObject):
         # Harness v3 S1-ter: si True, se inyecta un LoopDetector en
         # el ChatWorker. OFF por defecto: cero cambios visibles.
         self._loop_detection_enabled = False
-        # S6-b-2: si True, usa HarnessWorker en vez de ChatWorker.
-        # OFF por defecto: cero cambios visibles.
-        self._harness_enabled = False
         # Hook de verificación post-escritura. Callable o None.
         self._verificador_hook: Any = None
         # Cola de prompts para envío secuencial. Vacía = no hay cola.
@@ -587,13 +583,6 @@ class ChatController(QObject):
         """
         self._loop_detection_enabled = bool(enabled)
 
-    def set_harness_enabled(self, enabled: bool) -> None:
-        """Activa/desactiva el worker basado en harness (S6-b-2).
-
-        No afecta al worker en curso: se aplica al siguiente.
-        """
-        self._harness_enabled = bool(enabled)
-
     def set_verificador_hook(self, hook: Any) -> None:
         """Registra el callable de verificación post-escritura.
 
@@ -860,30 +849,10 @@ class ChatController(QObject):
             system_prompt or "",
             getattr(self, "_auto_approve", False),
         )
-        loop_detector = self._make_loop_detector()
-
         self._thread = QThread(self)
-        if getattr(self, "_harness_enabled", False):
-            self._worker = self._build_harness_worker(
-                model, options, system_prompt,
-            )
-        else:
-            self._worker = ChatWorker(
-                self.client,
-                model,
-                list(self.messages),
-                self.tools,
-                options=options,
-                system_prompt=system_prompt,
-                auto_approve=self._auto_approve,
-                auto_approve_shell=self._auto_approve_shell,
-                context_window=self._get_context_window(),
-                verificador_hook=self._verificador_hook,
-                summary_model=self._summary_model,
-                summary_prompt=summary_prompt,
-                summary_new_index=summary_new_index,
-                loop_detector=loop_detector,
-            )
+        self._worker = self._build_harness_worker(
+            model, options, system_prompt,
+        )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.stream_ready.connect(self._schedule_stream_drain)
