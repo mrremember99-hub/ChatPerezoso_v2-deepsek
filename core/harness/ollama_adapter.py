@@ -75,7 +75,23 @@ class OllamaAdapter:
                     yield ModelDelta(kind="text", text=text)
             elif kind == "tool_call":
                 tc = raw.get("tool_call")
-                if isinstance(tc, dict):
-                    yield ModelDelta(kind="tool_call", tool_call=tc)
+                if not isinstance(tc, dict):
+                    continue
+                fn = tc.get("function")
+                if isinstance(fn, dict):
+                    # Ollama nativo: {function:{name,arguments}}
+                    # -> plano {name,arguments} (contrato
+                    # de HarnessSession._execute_tool_call).
+                    yield ModelDelta(
+                        kind="tool_call",
+                        tool_call={
+                            "name": str(fn.get("name", "")),
+                            "arguments": fn.get("arguments") or {},
+                        },
+                    )
+                else:
+                    yield ModelDelta(
+                        kind="tool_call", tool_call=tc,
+                    )
             elif kind == "done":
                 yield ModelDelta(kind="done")

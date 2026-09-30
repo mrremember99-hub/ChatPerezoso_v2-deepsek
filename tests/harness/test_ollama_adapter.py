@@ -54,29 +54,33 @@ def test_solo_texto() -> None:
 
 
 def test_texto_y_tool_call() -> None:
-    tc = {"id": "c1", "function": {"name": "t", "arguments": {}}}
+    # S6-b-2: Ollama nativo {id, function:{name,args}} se aplana
+    # a {name,args} (contrato de HarnessSession).
+    tc_in = {"id": "c1", "function": {"name": "t", "arguments": {}}}
+    tc_out = {"name": "t", "arguments": {}}
     adapter, _ = _a([
         {"kind": "text", "text": "leyendo"},
-        {"kind": "tool_call", "tool_call": tc},
+        {"kind": "tool_call", "tool_call": tc_in},
         {"kind": "done"},
     ])
     deltas = list(adapter.chat([{"role": "user", "content": "x"}]))
     assert deltas == [
         ModelDelta(kind="text", text="leyendo"),
-        ModelDelta(kind="tool_call", tool_call=tc),
+        ModelDelta(kind="tool_call", tool_call=tc_out),
         ModelDelta(kind="done"),
     ]
 
 
 def test_solo_tool_call() -> None:
-    tc = {"id": "c1", "function": {"name": "t", "arguments": {}}}
+    tc_in = {"id": "c1", "function": {"name": "t", "arguments": {}}}
+    tc_out = {"name": "t", "arguments": {}}
     adapter, _ = _a([
-        {"kind": "tool_call", "tool_call": tc},
+        {"kind": "tool_call", "tool_call": tc_in},
         {"kind": "done"},
     ])
     deltas = list(adapter.chat([{"role": "user", "content": "x"}]))
     assert deltas == [
-        ModelDelta(kind="tool_call", tool_call=tc),
+        ModelDelta(kind="tool_call", tool_call=tc_out),
         ModelDelta(kind="done"),
     ]
 
@@ -143,3 +147,31 @@ def test_raw_no_dict_se_ignora() -> None:
     ])
     deltas = list(adapter.chat([{"role": "user", "content": "x"}]))
     assert deltas == [ModelDelta(kind="done")]
+
+
+def test_chat_aplana_function_name_arguments():
+    """Ollama nativo {function:{name,args}} -> plano {name,args}."""
+    from core.harness.model import ModelDelta
+    from core.harness.ollama_adapter import OllamaAdapter
+
+    class _Client:
+        def chat_once(self, *a, **kw):
+            yield {
+                "kind": "tool_call",
+                "tool_call": {
+                    "function": {
+                        "name": "listar_carpeta",
+                        "arguments": {"path": ".", "recursive": True},
+                    },
+                },
+            }
+            yield {"kind": "done"}
+
+    adapter = OllamaAdapter(_Client(), model="m")
+    deltas = list(adapter.chat([]))
+    tcs = [d for d in deltas if d.kind == "tool_call"]
+    assert len(tcs) == 1
+    assert tcs[0].tool_call == {
+        "name": "listar_carpeta",
+        "arguments": {"path": ".", "recursive": True},
+    }
