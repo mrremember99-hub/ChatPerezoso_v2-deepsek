@@ -143,6 +143,9 @@ class ChatController(QObject):
         # Harness v3 S1-ter: si True, se inyecta un LoopDetector en
         # el ChatWorker. OFF por defecto: cero cambios visibles.
         self._loop_detection_enabled = False
+        # S6-b-2: si True, usa HarnessWorker en vez de ChatWorker.
+        # OFF por defecto: cero cambios visibles.
+        self._harness_enabled = False
         # Hook de verificación post-escritura. Callable o None.
         self._verificador_hook: Any = None
         # Cola de prompts para envío secuencial. Vacía = no hay cola.
@@ -584,6 +587,13 @@ class ChatController(QObject):
         """
         self._loop_detection_enabled = bool(enabled)
 
+    def set_harness_enabled(self, enabled: bool) -> None:
+        """Activa/desactiva el worker basado en harness (S6-b-2).
+
+        No afecta al worker en curso: se aplica al siguiente.
+        """
+        self._harness_enabled = bool(enabled)
+
     def set_verificador_hook(self, hook: Any) -> None:
         """Registra el callable de verificación post-escritura.
 
@@ -732,6 +742,91 @@ class ChatController(QObject):
         self.renderer.remove_from_last_user()
         self.send(user_text, model, self._last_options, self._last_system_prompt)
 
+    def _make_loop_detector(self):
+        """Construye un LoopDetector si la flag esta activa."""
+        if not getattr(self, "_loop_detection_enabled", False):
+            return None
+        from core.harness.loop import LoopDetector
+        from core.harness.policy import LoopPolicy
+        return LoopDetector(LoopPolicy())
+
+    def _build_harness_worker(
+        self, model, options, system_prompt,
+    ):
+        """S6-b-2: construye HarnessWorker en lugar de ChatWorker.
+
+        Precarga el historico sin el ultimo user (que se pasa
+        por step) y asigna el confirmation_handler al worker
+        despues de construirlo. La session no invoca el handler
+        hasta step(), que corre dentro del thread.
+        """
+        import tempfile
+        import uuid
+        from pathlib import Path as _Path
+
+        from core.harness.ollama_adapter import OllamaAdapter
+        from core.harness.policy import (
+            AgentSpec,
+            HarnessConfig,
+            ModelSpec,
+        )
+        from core.harness.session import HarnessSession
+
+        from ..harness_worker import HarnessWorker
+
+        run_id = uuid.uuid4().hex[:12]
+        ws_provider = getattr(self, "_workspace_provider", None)
+        if ws_provider is not None:
+            try:
+                ws_root = _Path(ws_provider().root)
+            except Exception:
+                ws_root = _Path.cwd()
+        else:
+            ws_root = _Path.cwd()
+        storage = (
+            _Path(tempfile.gettempdir()) / "cp_harness" / run_id
+        )
+
+        adapter = OllamaAdapter(
+            self.client, model=model, options=options,
+        )
+        cfg = HarnessConfig(
+            run_id=run_id,
+            workspace_root=ws_root,
+            storage_dir=storage,
+            model=ModelSpec(name=model),
+            agent=AgentSpec(
+                name="chat", system_prompt=system_prompt or "",
+            ),
+        )
+        session = HarnessSession(
+            cfg,
+            model_client=adapter,
+            tool_registry=self.tools,
+            loop_detector=self._make_loop_detector(),
+            confirmation_handler=None,
+        )
+
+        # Localizar el ultimo mensaje user: todo lo anterior va
+        # como historico, ese user va por step().
+        user_idx = None
+        for i in range(len(self.messages) - 1, -1, -1):
+            if self.messages[i].get("role") == "user":
+                user_idx = i
+                break
+        if user_idx is None:
+            session.load_history(list(self.messages))
+            user_message = ""
+        else:
+            session.load_history(list(self.messages[:user_idx]))
+            user_message = str(
+                self.messages[user_idx].get("content", ""),
+            )
+
+        worker = HarnessWorker(session, user_message)
+        session.confirmation_handler = worker.handle_confirmation
+        return worker
+
     def _spawn_worker(
         self,
         model,
@@ -756,30 +851,30 @@ class ChatController(QObject):
             system_prompt or "",
             getattr(self, "_auto_approve", False),
         )
-        # Harness v3 S1-ter: construir detector si esta activo.
-        loop_detector = None
-        if self._loop_detection_enabled:
-            from core.harness.loop import LoopDetector
-            from core.harness.policy import LoopPolicy
-            loop_detector = LoopDetector(LoopPolicy())
+        loop_detector = self._make_loop_detector()
 
         self._thread = QThread(self)
-        self._worker = ChatWorker(
-            self.client,
-            model,
-            list(self.messages),
-            self.tools,
-            options=options,
-            system_prompt=system_prompt,
-            auto_approve=self._auto_approve,
-            auto_approve_shell=self._auto_approve_shell,
-            context_window=self._get_context_window(),
-            verificador_hook=self._verificador_hook,
-            summary_model=self._summary_model,
-            summary_prompt=summary_prompt,
-            summary_new_index=summary_new_index,
-            loop_detector=loop_detector,
-        )
+        if getattr(self, "_harness_enabled", False):
+            self._worker = self._build_harness_worker(
+                model, options, system_prompt,
+            )
+        else:
+            self._worker = ChatWorker(
+                self.client,
+                model,
+                list(self.messages),
+                self.tools,
+                options=options,
+                system_prompt=system_prompt,
+                auto_approve=self._auto_approve,
+                auto_approve_shell=self._auto_approve_shell,
+                context_window=self._get_context_window(),
+                verificador_hook=self._verificador_hook,
+                summary_model=self._summary_model,
+                summary_prompt=summary_prompt,
+                summary_new_index=summary_new_index,
+                loop_detector=loop_detector,
+            )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.stream_ready.connect(self._schedule_stream_drain)
