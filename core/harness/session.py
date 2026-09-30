@@ -96,6 +96,7 @@ class HarnessSession:
         self._errors: list[str] = []
         self._step_failed = False
         self._step_in_progress = False
+        self._run_ended = False
 
     # -- API ---------------------------------------------------------
 
@@ -164,14 +165,44 @@ class HarnessSession:
             yield self._emit(
                 StepEnded, step_index=step_index, outcome="failed",
             )
-            yield self._emit(
-                RunEnded, reason="error", summary=fatal,
-            )
+            # P2#4: el run NO se cierra aqui. El caller decide
+            # cuando termina de usar la sesion (close()). Antes,
+            # un fallo de Ollama marcaba el run como terminado
+            # aunque la app siguiera viva y pudiera reintentar.
             return
 
         outcome = "failed" if self._step_failed else "ok"
         yield self._emit(
             StepEnded, step_index=step_index, outcome=outcome,
+        )
+
+    def close(
+        self,
+        reason: str = "completed",
+        summary: str = "",
+    ) -> Iterator[Event]:
+        """Cierra el run. Emite RunEnded una sola vez.
+
+        Idempotente: la segunda llamada no hace nada. El ciclo
+        correcto es: N step() -> close() al terminar.
+
+        Motivo de existir (P2#4): step() NO emite RunEnded
+        porque no puede saber si el usuario va a pedir otro
+        turno. Antes solo se emitia en la rama de excepcion de
+        _step_impl, y ademas marcaba el run como terminado
+        aunque la app pudiera seguir. Consecuencias del bug:
+        - La retencion de EventLog nunca borraba runs normales.
+        - resume_on_startup ofrecia todos como incompletos.
+        - Un fallo transitorio de Ollama cerraba el run.
+
+        Con close() explicito: el caller cierra cuando el
+        usuario sale de la sesion, no cuando un step falla.
+        """
+        if self._run_ended:
+            return
+        self._run_ended = True
+        yield self._emit(
+            RunEnded, reason=reason, summary=summary,
         )
 
     def cancel(self) -> None:

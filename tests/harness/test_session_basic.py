@@ -150,18 +150,33 @@ def test_tool_call_sin_registry_emite_completed_con_error(tmp_path):
     assert "tool_registry" in completed.detail
 
 
-def test_excepcion_modelo_emite_error_y_run_ended(tmp_path):
+def test_excepcion_modelo_emite_error_sin_run_ended(tmp_path):
+    """P2#4: step() con excepcion emite HarnessError + StepEnded
+    failed, pero NO RunEnded. El caller cierra con close() cuando
+    termina de usar la sesion. Antes, un fallo de Ollama marcaba
+    el run como terminado aunque la app pudiera seguir."""
     model = _FakeModel(raise_exc=RuntimeError("boom"))
     s = HarnessSession(_config(tmp_path=tmp_path), model_client=model)
     events = list(s.step("x"))
 
     kinds = [e.kind for e in events]
     assert "harness_error" in kinds
-    assert "run_ended" in kinds
+    assert "run_ended" not in kinds
     err = next(e for e in events if e.kind == "harness_error")
     assert "boom" in err.message
-    ended = next(e for e in events if e.kind == "run_ended")
-    assert ended.reason == "error"
+    ended = next(e for e in events if e.kind == "step_ended")
+    assert ended.outcome == "failed"
+
+
+def test_close_tras_error_emite_run_ended(tmp_path):
+    """close() tras error cierra el run con reason."""
+    model = _FakeModel(raise_exc=RuntimeError("boom"))
+    s = HarnessSession(_config(tmp_path=tmp_path), model_client=model)
+    list(s.step("x"))
+    events = list(s.close(reason="error", summary="boom"))
+    assert len(events) == 1
+    assert events[0].kind == "run_ended"
+    assert events[0].reason == "error"
 
 
 # ── Cancel ────────────────────────────────────────────────────────
