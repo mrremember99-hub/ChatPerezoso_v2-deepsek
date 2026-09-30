@@ -126,55 +126,6 @@ def test_chunk_text_trunca_body():
     assert out.count("Z") == MAX_BODY_CHARS
 
 
-# ── RAG-2: ponderacion ────────────────────────────────────────────
-
-
-def test_chunk_text_repite_header_3_veces():
-    """RAG-2: el header humanizado se repite _NAME_REPEATS veces."""
-    from core.ast_index import Symbol
-    from core.rag_index import _NAME_REPEATS
-
-    s = Symbol(name="User", kind="class", file="auth.py", line=1)
-    out = _chunk_text(s, "")
-    header = "auth | user class"
-    assert out.count(header) == _NAME_REPEATS
-
-
-def test_chunk_text_repite_docstring_2_veces():
-    """RAG-2: la docstring se repite _DOCSTRING_REPEATS veces."""
-    from core.ast_index import Symbol
-    from core.rag_index import _DOCSTRING_REPEATS
-
-    s = Symbol(name="User", kind="class", file="auth.py", line=1,
-               docstring="Usuario.")
-    out = _chunk_text(s, "")
-    assert out.count("Usuario.") == _DOCSTRING_REPEATS
-
-
-def test_chunk_text_nombre_tecnico_una_vez():
-    """RAG-2: el nombre tecnico NO se repite (solo el humanizado)."""
-    from core.ast_index import Symbol
-
-    s = Symbol(name="User", kind="class", file="auth.py", line=1)
-    out = _chunk_text(s, "")
-    # La ruta original:nombre tecnico aparece exactamente una vez.
-    assert out.count("auth.py:User") == 1
-
-
-def test_chunk_text_flat_reproduce_comportamiento_previo():
-    """RAG-2: name_repeats=1 + docstring_repeats=1 = formato anterior."""
-    from core.ast_index import Symbol
-
-    s = Symbol(name="User", kind="class", file="auth.py", line=1,
-               docstring="Usuario.")
-    out = _chunk_text(
-        s, "body",
-        name_repeats=1, docstring_repeats=1,
-    )
-    assert out.count("auth | user class") == 1
-    assert out.count("Usuario.") == 1
-
-
 # ── index_pending ─────────────────────────────────────────────────
 
 

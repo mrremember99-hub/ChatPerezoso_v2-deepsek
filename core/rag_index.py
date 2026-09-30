@@ -89,28 +89,7 @@ def _humanize_path(path: str) -> str:
     return _humanize(path)
 
 
-# RAG-2 (2026-09-30): ponderacion del chunk por secciones.
-#
-# El embedding es un unico vector sobre todo el chunk. Las secciones
-# mas informativas (nombre + ruta humanizadas, docstring) se repiten
-# fisicamente para aumentar su densidad en el vector. El body queda
-# con peso 1.
-#
-# Repetir fisicamente es mas simple que embeddings multiples
-# (uno por seccion + promedio) y suficiente para el tamano del
-# indice actual. Si el indice crece >10k simbolos, migrar a
-# embeddings multiples.
-_NAME_REPEATS: int = 3
-_DOCSTRING_REPEATS: int = 2
-
-
-def _chunk_text(
-    symbol: Symbol,
-    body: str,
-    *,
-    name_repeats: int = _NAME_REPEATS,
-    docstring_repeats: int = _DOCSTRING_REPEATS,
-) -> str:
+def _chunk_text(symbol: Symbol, body: str) -> str:
     """Construye el texto que se embebe para un simbolo.
 
     C6a (2026-09-29): el nombre y la ruta se humanizan a palabras
@@ -118,30 +97,22 @@ def _chunk_text(
     conecta "leer archivo" con read_file: el identificador crudo
     no es semantico para el modelo.
 
-    RAG-2 (2026-09-30): el header y la docstring se repiten para
-    ponderar su peso en el embedding. `name_repeats=1` +
-    `docstring_repeats=1` reproduce el comportamiento previo.
-
-    Formato (repeats = 3/2 por defecto):
-        <header> x3
+    Formato:
+        <ruta humanizada> | <nombre humanizado> <kind>
         <ruta original>:<nombre original>
         <firma>
-        <docstring> x2
+        <docstring>
         <body truncado>
     """
     header = (
         f"{_humanize_path(symbol.file)} | "
         f"{_humanize(symbol.name)} {symbol.kind}"
     )
-    parts: list[str] = []
-    for _ in range(max(1, name_repeats)):
-        parts.append(header)
-    parts.append(f"{symbol.file}:{symbol.name}")
+    parts = [header, f"{symbol.file}:{symbol.name}"]
     if symbol.signature:
         parts.append(symbol.signature)
     if symbol.docstring:
-        for _ in range(max(1, docstring_repeats)):
-            parts.append(symbol.docstring)
+        parts.append(symbol.docstring)
     if body:
         parts.append("")
         parts.append(body[:MAX_BODY_CHARS])
