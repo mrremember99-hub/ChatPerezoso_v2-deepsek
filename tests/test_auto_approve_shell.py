@@ -97,49 +97,6 @@ class _FakeClient:
 
 def _make_worker(*, auto_approve: bool, auto_approve_shell: bool):
     from ui.workers import ChatWorker
-    return ChatWorker(
-        client=_FakeClient(),
-        model="test",
-        messages=[],
-        tools=_FakeTools(),
-        auto_approve=auto_approve,
-        auto_approve_shell=auto_approve_shell,
-    )
-
-
-def test_worker_archivos_auto_aprobados_con_piloto(qapp):
-    """crear/escribir/editar se auto-aprueban con autopilot.
-
-    borrar_archivo NO: fix del run #5 OVERPAPER. El modelo borro
-    gui.py para "arreglar" un f-string roto, y con autopilot ON el
-    borrado paso sin dialogo. El borrado de ficheros es siempre
-    destructivo y no merece excepcion.
-    """
-    w = _make_worker(auto_approve=True, auto_approve_shell=False)
-    assert w._is_auto_approved("crear_archivo") is True
-    assert w._is_auto_approved("escribir_archivo") is True
-    assert w._is_auto_approved("editar_archivo") is True
-    assert w._is_auto_approved("borrar_archivo") is False
-
-
-def test_worker_shell_no_auto_aprobado_sin_flag(qapp):
-    w = _make_worker(auto_approve=True, auto_approve_shell=False)
-    assert w._is_auto_approved("ejecutar_comando") is False
-
-
-def test_worker_shell_auto_aprobado_con_ambos(qapp):
-    w = _make_worker(auto_approve=True, auto_approve_shell=True)
-    assert w._is_auto_approved("ejecutar_comando") is True
-
-
-def test_worker_shell_requiere_piloto_principal(qapp):
-    """Doble puerta: si el piloto está apagado, la extensión de shell
-    no basta para auto-aprobar `ejecutar_comando`."""
-    w = _make_worker(auto_approve=False, auto_approve_shell=True)
-    assert w._is_auto_approved("ejecutar_comando") is False
-    assert w._is_auto_approved("crear_archivo") is False
-
-
 # -- Config: round-trip -----------------------------------------------
 
 

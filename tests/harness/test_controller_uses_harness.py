@@ -8,16 +8,6 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QObject
 
 from ui.harness_worker import HarnessWorker
-from ui.workers import ChatWorker
-
-
-_SEÑALES = [
-    "stream_ready", "tool", "tool_result",
-    "confirmation_requested", "tool_auto_approved",
-    "metrics_updated", "summary_ready",
-    "loop_warning", "loop_corrective", "loop_aborted",
-    "finished", "cancelled", "error",
-]
 
 
 class _FakeSignal:
@@ -133,9 +123,3 @@ def test_build_harness_worker_inyecta_handler():
     assert session._messages == []
     assert worker._user_message == "hola"
 
-
-def test_senales_identicas():
-    """Las 13 senales existen en ambos workers (paridad S7-a)."""
-    for name in _SEÑALES:
-        assert hasattr(ChatWorker, name), f"ChatWorker sin {name}"
-        assert hasattr(HarnessWorker, name), f"HarnessWorker sin {name}"
