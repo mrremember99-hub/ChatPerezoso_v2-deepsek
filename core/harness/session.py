@@ -13,7 +13,7 @@ from __future__ import annotations
 import secrets
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -68,6 +68,9 @@ class HarnessSession:
         idempotency: IdempotencyRegistry | None = None,
         loop_detector: LoopDetector | None = None,
         health_monitor: HealthMonitor | None = None,
+        confirmation_handler: (
+            Callable[[str, dict], bool] | None
+        ) = None,
     ) -> None:
         self.config = config
         self.model_client = model_client
@@ -76,6 +79,7 @@ class HarnessSession:
         self.idempotency = idempotency
         self.loop_detector = loop_detector
         self.health_monitor = health_monitor
+        self.confirmation_handler = confirmation_handler
         self._corrective_builder = CorrectivePromptBuilder()
         # Contadores para health monitoring dentro del step en curso.
         self._step_error_count = 0
@@ -279,7 +283,41 @@ class HarnessSession:
             except Exception:  # noqa: BLE001
                 requires = False
 
-        auto_approved = (not requires) or self.config.auto_approve
+        # S4-d: resolver el gate de confirmacion. Orden:
+        #   1. Tool no requiere confirmacion -> auto_approved=True.
+        #   2. auto_approve global ON        -> auto_approved=True.
+        #   3. confirmation_handler inyectado:
+        #      True -> aprobado; False -> denegado.
+        #      Excepcion -> error con mensaje al modelo.
+        #   4. Sin handler y sin auto_approve:
+        #      denegar con mensaje explicativo (compat S4-b).
+        #
+        # El handler se llama SINCRONICAMENTE desde este hilo. Si el
+        # cliente necesita bloquearse esperando UI, lo hace él; el
+        # harness no crea threading.Event ni impone timeout.
+        denial_reason: str | None = None
+        handler_error: str | None = None
+
+        if not requires or self.config.auto_approve:
+            auto_approved = True
+        elif self.confirmation_handler is not None:
+            try:
+                auto_approved = bool(
+                    self.confirmation_handler(
+                        name, dict(arguments),
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001
+                auto_approved = False
+                handler_error = f"confirmation_handler fallo: {exc}"
+        else:
+            auto_approved = False
+            denial_reason = (
+                "OPERACIÓN CANCELADA: la tool requiere confirmación "
+                "explícita del usuario. El harness no tiene "
+                "confirmation_handler inyectado; la tool no se ha "
+                "ejecutado."
+            )
 
         yield self._emit(
             ToolCallRequested,
@@ -289,13 +327,42 @@ class HarnessSession:
             auto_approved=auto_approved,
         )
 
-        # Gate minimo: si requiere y no hay auto_approve, denegar.
-        if requires and not self.config.auto_approve:
+        if handler_error is not None:
+            err_msg = f"ERROR: {handler_error}"
+            yield self._emit(
+                ToolCallCompleted,
+                call_id=call_id,
+                tool_name=name,
+                status="error",
+                summary=handler_error[:120],
+                detail=err_msg,
+                duration_ms=0,
+            )
+            self._messages.append(
+                {"role": "tool", "content": err_msg},
+            )
+            return
+
+        if denial_reason is not None:
+            yield self._emit(
+                ToolCallCompleted,
+                call_id=call_id,
+                tool_name=name,
+                status="cancelled",
+                summary=denial_reason[:120],
+                detail=denial_reason,
+                duration_ms=0,
+            )
+            self._messages.append(
+                {"role": "tool", "content": denial_reason},
+            )
+            return
+
+        if not auto_approved:
+            # Handler devolvio False: el usuario denego.
             result = (
-                "OPERACIÓN CANCELADA: la tool requiere confirmación "
-                "explícita del usuario. El harness S4-b no soporta "
-                "confirmaciones bloqueantes todavía; la tool no se "
-                "ha ejecutado."
+                "OPERACIÓN CANCELADA POR EL USUARIO: la tool "
+                "requiere confirmación y fue denegada."
             )
             yield self._emit(
                 ToolCallCompleted,
@@ -306,7 +373,9 @@ class HarnessSession:
                 detail=result,
                 duration_ms=0,
             )
-            self._messages.append({"role": "tool", "content": result})
+            self._messages.append(
+                {"role": "tool", "content": result},
+            )
             return
 
         # Idempotencia.
