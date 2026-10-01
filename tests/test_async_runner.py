@@ -228,3 +228,47 @@ def test_close_limpio_libera_handles():
     assert ok is True
     assert runner._loop is None
     assert runner._thread is None
+
+
+def test_cancel_durante_coroutine_ya_en_ejecucion():
+    """2026-10-01: el watcher cancela el task asyncio subyacente.
+
+    Regresion: antes, si la coroutine ya estaba corriendo (p.ej.
+    Ollama en prefill, 30-60s sin emitir bytes), future.cancel()
+    devolvia False y el watcher salia sin hacer nada. El task
+    seguia vivo y el shutdown abortaba el QThread -> SIGABRT.
+    """
+    import asyncio
+    import threading
+    import time
+
+    from core.async_runner import AsyncRunner
+
+    runner = AsyncRunner(name="test-cancel-running")
+    try:
+        async def slow_op():
+            # Simula prefill: bloqueado 10s sin emitir nada.
+            await asyncio.sleep(10)
+            return "nunca deberia llegar"
+
+        cancel = threading.Event()
+
+        def cancel_soon():
+            time.sleep(0.3)
+            cancel.set()
+
+        threading.Thread(target=cancel_soon, daemon=True).start()
+
+        t0 = time.monotonic()
+        try:
+            runner.submit(slow_op(), cancel_event=cancel)
+            raise AssertionError("debio lanzar cancelacion")
+        except Exception as exc:
+            # _CancelledByEvent o CancelledError, lo importante es
+            # que salga rapido.
+            elapsed = time.monotonic() - t0
+            assert elapsed < 2.0, (
+                f"cancel tardo {elapsed:.2f}s (esperado <2s)"
+            )
+    finally:
+        runner.close(timeout=2.0)

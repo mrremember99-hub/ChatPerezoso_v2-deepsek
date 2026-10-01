@@ -281,10 +281,25 @@ class AsyncRunner:
         # lock. Sin esto, entre `_ensure_loop()` y `run_coroutine_-
         # threadsafe()` otro hilo podia llamar a `close()`, parar el
         # loop, y dejar la coroutine programada sobre un loop muerto.
+        # 2026-10-01: capturar el task asyncio subyacente. El
+        # .cancel() del concurrent.futures.Future que devuelve
+        # run_coroutine_threadsafe SOLO funciona si el task aun
+        # no ha empezado. Si ya esta corriendo (p.ej. Ollama en
+        # prefill), cancel() devuelve False y el task sigue
+        # vivo hasta el siguiente chunk. Wrapper para guardar
+        # la referencia al task y cancelarlo directamente.
+        holder: dict = {}
+
+        async def _tracked():
+            holder["task"] = asyncio.current_task()
+            return await coro
+
         with self._lock:
             loop = self._ensure_loop_locked()
             try:
-                future = asyncio.run_coroutine_threadsafe(coro, loop)
+                future = asyncio.run_coroutine_threadsafe(
+                    _tracked(), loop,
+                )
             except RuntimeError as exc:
                 # El loop se cerro entre el check y el schedule.
                 # Cerrar la coroutine para no dejar warnings de
@@ -299,7 +314,7 @@ class AsyncRunner:
         if cancel_event is not None:
             watcher = threading.Thread(
                 target=self._watch_for_cancel,
-                args=(future, done_signal, cancel_event, loop),
+                args=(future, done_signal, cancel_event, loop, holder),
                 name=f"{self.name}-watch",
                 daemon=True,
             )
@@ -327,22 +342,33 @@ class AsyncRunner:
         done_signal: threading.Event,
         cancel_event: threading.Event,
         loop: asyncio.AbstractEventLoop,
+        holder: dict,
     ) -> None:
-        """Hilo watcher: cancela el future si el cancel_event se activa.
+        """Hilo watcher: cancela el task si el cancel_event se activa.
 
-        `loop` se captura al crear el watcher y se pasa como argumento
-        para evitar leer `self._loop`, que `close()` puede poner a None
-        mientras este hilo sigue vivo. Sin esto, existe una carrera
-        entre el cierre del runner y el watcher.
+        2026-10-01: preferir task.cancel() sobre future.cancel().
+        El future de run_coroutine_threadsafe no cancela un task
+        ya en ejecucion (cancel() devuelve False). Guardamos la
+        referencia al asyncio.Task via holder y lo cancelamos
+        directamente en el loop, lo que si interrumpe awaits
+        en curso (httpx read, etc).
         """
         while not done_signal.is_set():
             if cancel_event.wait(timeout=_WATCHER_CHECK_INTERVAL_SECONDS):
-                if not future.done():
+                if future.done():
+                    return
+                task = holder.get("task")
+                if task is not None and not task.done():
+                    try:
+                        loop.call_soon_threadsafe(task.cancel)
+                    except RuntimeError:
+                        pass
+                else:
+                    # Task aun no arrancado: cancelar el future si
+                    # sirve en ese caso.
                     try:
                         loop.call_soon_threadsafe(future.cancel)
                     except RuntimeError:
-                        # El loop se cerró entre el wait y el call.
-                        # No hay nada que cancelar.
                         pass
                 return
 
