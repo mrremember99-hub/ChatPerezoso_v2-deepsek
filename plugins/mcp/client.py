@@ -99,7 +99,10 @@ class MCPClient:
             self._loop_thread = None
 
     def __del__(self) -> None:
-        if self._closed:
+        # 2026-10-01: getattr defensivo. Si el objeto se crea
+        # sin __init__ (tests, __new__), _closed no existe y
+        # __del__ lanzaba AttributeError durante el cleanup.
+        if getattr(self, "_closed", True):
             return
         try:
             self._closed = True
