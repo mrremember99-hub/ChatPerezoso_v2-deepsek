@@ -93,6 +93,23 @@ class HarnessWorker(QObject):
         self._text_parts: list[str] = []
         self._step_index = -1
 
+    # -- puente hacia la session -----------------------------------
+
+    @property
+    def verificador_hook(self):
+        """Hook de verificacion post-escritura (proxy).
+
+        ChatController.set_verificador_hook asigna este atributo
+        en el worker vivo. La implementacion real vive en la
+        HarnessSession; aqui delegamos. Sin esto, la asignacion
+        era un no-op silencioso (2026-10-01).
+        """
+        return self._session.verificador_hook
+
+    @verificador_hook.setter
+    def verificador_hook(self, hook) -> None:
+        self._session.verificador_hook = hook
+
     # -- contrato ModelClient-side ---------------------------------
 
     def handle_confirmation(

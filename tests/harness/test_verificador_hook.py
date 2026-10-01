@@ -188,3 +188,32 @@ def test_verificador_sin_hook_no_hace_nada(tmp_path):
     )
     list(s.step("x"))
     assert "[VERIFICACIÓN]" not in _last_tool_msg(s)
+
+
+# -- B (2026-10-01): property en HarnessWorker -------------------
+
+
+def test_harness_worker_verificador_hook_property(tmp_path):
+    """Asignar al worker propaga a la session viva."""
+    pytest = __import__("pytest")
+    pytest.importorskip("PySide6")
+    from ui.harness_worker import HarnessWorker
+
+    model = _ScriptedModel([[_text("fin")]])
+    s = HarnessSession(
+        _cfg(tmp_path, auto_approve=True),
+        model_client=model,
+        tool_registry=_FakeRegistry(),
+    )
+    w = HarnessWorker(s, "hola")
+    assert w.verificador_hook is None
+
+    def hook(rel):
+        return "x"
+
+    w.verificador_hook = hook
+    assert s.verificador_hook is hook
+    assert w.verificador_hook is hook
+
+    w.verificador_hook = None
+    assert s.verificador_hook is None
