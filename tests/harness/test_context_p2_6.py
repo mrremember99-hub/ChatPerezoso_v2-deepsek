@@ -75,7 +75,12 @@ def test_system_prompt_first_and_not_accumulated() -> None:
     list(s.step("hola"))
     assert len(m.calls) == 2
     for msgs, _ in m.calls:
-        assert msgs[0] == {"role": "system", "content": "SYS"}
+        # C (2026-10-01): el harness añade un bloque con la lista
+        # de tools disponibles al final del system prompt. El
+        # contenido base sigue siendo exactamente "SYS".
+        assert msgs[0]["role"] == "system"
+        assert msgs[0]["content"].startswith("SYS")
+        assert "TOOLS DISPONIBLES" in msgs[0]["content"]
         assert sum(x["role"] == "system" for x in msgs) == 1
     assert all(x["role"] != "system" for x in s._messages)
 
