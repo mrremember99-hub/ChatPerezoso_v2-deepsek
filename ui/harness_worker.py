@@ -96,6 +96,37 @@ class HarnessWorker(QObject):
     # -- puente hacia la session -----------------------------------
 
     @property
+    def auto_approve(self):
+        """Proxy mutable a HarnessConfig.auto_approve.
+
+        HarnessConfig es frozen; la reasignacion sustituye el
+        objeto entero via dataclasses.replace. La session lee
+        config.auto_approve en cada step, asi que el cambio
+        surte efecto inmediato (2026-10-01).
+        """
+        return self._session.config.auto_approve
+
+    @auto_approve.setter
+    def auto_approve(self, enabled) -> None:
+        from dataclasses import replace
+        self._session.config = replace(
+            self._session.config,
+            auto_approve=bool(enabled),
+        )
+
+    @property
+    def auto_approve_shell(self):
+        return self._session.config.auto_approve_shell
+
+    @auto_approve_shell.setter
+    def auto_approve_shell(self, enabled) -> None:
+        from dataclasses import replace
+        self._session.config = replace(
+            self._session.config,
+            auto_approve_shell=bool(enabled),
+        )
+
+    @property
     def verificador_hook(self):
         """Hook de verificacion post-escritura (proxy).
 
