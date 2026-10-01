@@ -294,22 +294,27 @@ class AsyncRunner:
             holder["task"] = asyncio.current_task()
             return await coro
 
-        with self._lock:
-            loop = self._ensure_loop_locked()
-            try:
-                future = asyncio.run_coroutine_threadsafe(
-                    _tracked(), loop,
-                )
-            except RuntimeError as exc:
-                # El loop se cerro entre el check y el schedule.
-                # Cerrar las coroutines para no dejar warnings de
-                # "coroutine was never awaited".
-                wrapper = _tracked()
+        wrapper = _tracked()
+        handed_off = False
+        try:
+            with self._lock:
+                loop = self._ensure_loop_locked()
+                try:
+                    future = asyncio.run_coroutine_threadsafe(
+                        wrapper, loop,
+                    )
+                    handed_off = True
+                except RuntimeError as exc:
+                    # El loop se cerro entre el check y el schedule.
+                    raise RuntimeError(
+                        f"{self.name} se cerró durante el envío."
+                    ) from exc
+        finally:
+            # Si la coroutine no llego al loop, cerrar ambas para
+            # no dejar warnings de 'coroutine was never awaited'.
+            if not handed_off:
                 wrapper.close()
                 coro.close()
-                raise RuntimeError(
-                    f"{self.name} se cerró durante el envío."
-                ) from exc
         done_signal = threading.Event()
 
         watcher: threading.Thread | None = None
