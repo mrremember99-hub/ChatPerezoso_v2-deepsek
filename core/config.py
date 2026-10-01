@@ -42,6 +42,10 @@ class AppConfig:
     # cada tool call y emite narraciones cuando detecta bucles.
     # OFF por defecto: comportamiento identico al actual.
     loop_detection_enabled: bool = False
+    # P1.4 (2026-10-01): completion verification. Cuando esta
+    # activo, el harness comprueba al final del step que el
+    # modelo hizo lo que dice haber completado (fases OVERPAPER).
+    completion_verification_enabled: bool = False
     # Modelo Ollama que genera el resumen rolling de la sesion.
     # Pequeno y rapido por diseno: el resumen es una tarea simple.
     # Si no esta instalado, el resumen se deshabilita (con aviso

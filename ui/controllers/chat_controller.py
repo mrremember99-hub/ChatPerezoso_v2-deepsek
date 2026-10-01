@@ -142,6 +142,8 @@ class ChatController(QObject):
         # Harness v3 S1-ter: si True, se inyecta un LoopDetector en
         # el ChatWorker. OFF por defecto: cero cambios visibles.
         self._loop_detection_enabled = False
+        # P1.4: completion verification. Aplica al próximo worker.
+        self._completion_verification_enabled = False
         # Hook de verificación post-escritura. Callable o None.
         self._verificador_hook: Any = None
         # Cola de prompts para envío secuencial. Vacía = no hay cola.
@@ -591,6 +593,12 @@ class ChatController(QObject):
         """
         self._loop_detection_enabled = bool(enabled)
 
+    def set_completion_verification_enabled(
+        self, enabled: bool,
+    ) -> None:
+        """P1.4: completion verification para el proximo worker."""
+        self._completion_verification_enabled = bool(enabled)
+
     def set_verificador_hook(self, hook: Any) -> None:
         """Registra el callable de verificación post-escritura.
 
@@ -811,6 +819,11 @@ class ChatController(QObject):
             ),
             auto_approve_shell=bool(
                 getattr(self, "_auto_approve_shell", False),
+            ),
+            completion_verification_enabled=bool(
+                getattr(
+                    self, "_completion_verification_enabled", False,
+                ),
             ),
         )
         # P1.4 (2026-10-01): event_log persistente. Permite

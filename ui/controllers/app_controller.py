@@ -203,6 +203,14 @@ class AppController(QObject):
         self._apply_loop_detection(
             getattr(self.config, "loop_detection_enabled", False)
         )
+        # P1.4: completion verification (fases OVERPAPER).
+        self.chat_ctrl.set_completion_verification_enabled(
+            getattr(
+                self.config,
+                "completion_verification_enabled",
+                False,
+            ),
+        )
 
         self._wire()
         self._apply_initial_state()

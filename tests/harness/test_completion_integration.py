@@ -117,3 +117,59 @@ def test_completion_detecta_sin_tools(tmp_path):
     # phase sin required_tools -> issues vacias (status verified)
     # Documentamos el comportamiento actual.
     assert vrs[0].issues == []
+
+
+# -- P1.4: flag se propaga desde el controller -----------------
+
+
+def test_set_completion_verification_enabled():
+    """P1.4: el setter guarda el flag para el proximo worker."""
+    import pytest
+    pytest.importorskip("PySide6")
+    from PySide6.QtCore import QObject
+    from ui.controllers.chat_controller import ChatController
+
+    class _T:
+        def definitions(self): return []
+        def call(self, *a, **kw): return ""
+        def requires_confirmation(self, name): return False
+        def intent_rules(self): return {}
+
+    ctrl = ChatController(
+        parent=QObject(),
+        parent_widget=None,
+        client=object(),
+        tools=_T(),
+        renderer=object(),
+    )
+    assert ctrl._completion_verification_enabled is False
+    ctrl.set_completion_verification_enabled(True)
+    assert ctrl._completion_verification_enabled is True
+
+
+def test_harness_config_recibe_completion_flag(tmp_path):
+    """P1.4: _build_harness_worker pasa el flag al HarnessConfig."""
+    import pytest
+    pytest.importorskip("PySide6")
+    from PySide6.QtCore import QObject
+    from ui.controllers.chat_controller import ChatController
+
+    class _T:
+        def definitions(self): return []
+        def call(self, *a, **kw): return ""
+        def requires_confirmation(self, name): return False
+        def intent_rules(self): return {}
+
+    ctrl = ChatController(
+        parent=QObject(),
+        parent_widget=None,
+        client=object(),
+        tools=_T(),
+        renderer=object(),
+    )
+    ctrl.messages = [{"role": "user", "content": "hola"}]
+    ctrl._loop_detection_enabled = False
+    ctrl._completion_verification_enabled = True
+
+    worker = ctrl._build_harness_worker("m1", None, "sys")
+    assert worker._session.config.completion_verification_enabled is True
