@@ -35,6 +35,7 @@ from core.harness.events import (
     LoopCorrectivePrompt,
     LoopWarning,
     MessageCompleted,
+    VerificationRun,
     MessageDelta,
     RunEnded,
     RunStarted,
@@ -103,6 +104,10 @@ class HarnessSession:
         # Contadores para health monitoring dentro del step en curso.
         self._step_error_count = 0
         self._step_findings_count = 0
+        # S5-c-mini (2026-10-01): tools exitosas del step actual,
+        # para que CompletionVerifier pueda comprobar que el
+        # modelo ejecuto lo que dice haber completado.
+        self._step_tools_executed: list[str] = []
         self._seq = 0
         self._step_index = -1
         self._run_started = False
@@ -168,6 +173,7 @@ class HarnessSession:
         self._step_failed = False
         self._step_error_count = 0
         self._step_findings_count = 0
+        self._step_tools_executed = []
 
         if not self._run_started:
             self._run_started = True
@@ -225,6 +231,19 @@ class HarnessSession:
             # un fallo de Ollama marcaba el run como terminado
             # aunque la app siguiera viva y pudiera reintentar.
             return
+
+        # S5-c-mini (2026-10-01): completion verification.
+        # Si el prompt declara fases con verificacion (formato
+        # OVERPAPER), comprobar que el modelo hizo lo que dice.
+        # Flag OFF por defecto: cero cambio de comportamiento.
+        if (
+            self.config.completion_verification_enabled
+            and not self._step_failed
+            and not self._cancel.is_set()
+        ):
+            yield from self._verify_completion(
+                step_index, user_message,
+            )
 
         # P2#10: failed tiene prioridad sobre cancelled.
         # Un abort del loop detector setea _cancel Y _step_failed;
@@ -328,6 +347,55 @@ class HarnessSession:
         return bool(handler(name, arguments))
 
     # -- loop interno ------------------------------------------------
+
+    def _verify_completion(
+        self, step_index: int, user_message: str,
+    ) -> Iterator[Event]:
+        """S5-c-mini: emite VerificationRun si el prompt declara
+        fases en formato OVERPAPER.
+
+        No falla el step si la verificacion no pasa: solo
+        emite el evento con las issues detectadas. El flag
+        completion_verification_enabled controla si se llama.
+        """
+        from core.harness.completion import (
+            CompletionVerifier, parse_phases,
+        )
+
+        try:
+            phases = parse_phases(user_message)
+        except Exception:  # noqa: BLE001
+            return
+        if not phases:
+            return
+
+        # El turno corresponde a la ultima fase declarada en el
+        # prompt (OVERPAPER pega una fase por turno).
+        phase = phases[-1]
+        verifier = CompletionVerifier(self.config.policy.completion)
+
+        try:
+            result = verifier.verify(
+                phase,
+                executed_tools=list(self._step_tools_executed),
+            )
+        except Exception:  # noqa: BLE001
+            return
+
+        issues: list[dict] = []
+        if result.status != "verified":
+            issues.append({
+                "code": result.status,
+                "message": result.message,
+                "missing_tools": list(result.missing_tools),
+            })
+
+        yield self._emit(
+            VerificationRun,
+            call_id=f"completion-step-{step_index}",
+            target=f"phase-{phase.index}",
+            issues=issues,
+        )
 
     def _agent_loop(self, step_index: int) -> Iterator[Event]:
         """Itera modelo -> tool calls -> modelo hasta que el modelo
@@ -847,6 +915,8 @@ class HarnessSession:
                 except Exception:  # noqa: BLE001
                     pass
 
+        if status == "ok":
+            self._step_tools_executed.append(name)
         self._messages.append({"role": "tool", "content": result})
         yield self._emit(
             MessageCompleted, role="tool", content=result,
