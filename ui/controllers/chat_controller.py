@@ -761,6 +761,7 @@ class ChatController(QObject):
         import uuid
         from pathlib import Path as _Path
 
+        from core.harness.durable import EventLog
         from core.harness.ollama_adapter import OllamaAdapter
         from core.harness.policy import (
             AgentSpec,
@@ -812,6 +813,11 @@ class ChatController(QObject):
                 getattr(self, "_auto_approve_shell", False),
             ),
         )
+        # P1.4 (2026-10-01): event_log persistente. Permite
+        # validar features del harness en vivo (antes volabamos
+        # a ciegas: sin event_log los eventos se emitian pero no
+        # se guardaban). El log es thread-safe (RLock propio).
+        event_log = EventLog(storage / "events.db")
         session = HarnessSession(
             cfg,
             model_client=adapter,
@@ -822,6 +828,7 @@ class ChatController(QObject):
             verificador_hook=getattr(
                 self, "_verificador_hook", None,
             ),
+            event_log=event_log,
         )
 
         # Localizar el ultimo mensaje user: todo lo anterior va

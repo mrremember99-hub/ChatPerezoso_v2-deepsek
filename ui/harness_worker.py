@@ -87,6 +87,8 @@ class HarnessWorker(QObject):
         self._session = session
         self._user_message = user_message
         self._cancel = threading.Event()
+        # P1.4: referencia al EventLog para cerrarlo en run().
+        self._event_log = getattr(session, "event_log", None)
         self._confirmation_lock = threading.Lock()
         self._confirmation_event: threading.Event | None = None
         self._confirmation_approved = False
@@ -199,15 +201,24 @@ class HarnessWorker(QObject):
     def run(self) -> None:
         """Ejecuta el step. Consume eventos y los traduce a señales."""
         try:
-            for event in self._session.step(self._user_message):
-                self._translate(event)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("HarnessWorker.run fallo")
-            self.error.emit(str(exc) or type(exc).__name__)
-            return
+            try:
+                for event in self._session.step(self._user_message):
+                    self._translate(event)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("HarnessWorker.run fallo")
+                self.error.emit(str(exc) or type(exc).__name__)
+                return
 
-        if self._cancel.is_set():
-            self.cancelled.emit()
+            if self._cancel.is_set():
+                self.cancelled.emit()
+        finally:
+            # P1.4: cerrar el EventLog al terminar el step para
+            # liberar el handle de SQLite. Idempotente.
+            if self._event_log is not None:
+                try:
+                    self._event_log.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
     # -- traduccion de eventos -------------------------------------
 
