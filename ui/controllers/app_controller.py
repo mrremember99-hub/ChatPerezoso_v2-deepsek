@@ -146,7 +146,13 @@ class AppController(QObject):
 
         self.history_store = HistoryStore()
         saved = self.history_store.load()
-        initial_messages = saved.messages if saved else []
+        # 2026-10-01: no restaurar la conversacion al arrancar.
+        # La persistencia sigue existiendo (history.json se
+        # escribe al cerrar) pero no se pinta en la UI. El
+        # usuario prefiere arrancar en limpio; el boton
+        # "Nueva conversacion" ya limpia el fichero.
+        _ = saved  # mantener load() para no romper el flujo
+        initial_messages: list[dict] = []
 
         self.agent_ctrl = AgentController(
             self,
