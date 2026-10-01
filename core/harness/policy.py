@@ -7,6 +7,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# 2026-10-01: fuente unica de CompletionPolicy. Antes estaba
+# duplicada en este modulo y en completion.py; el HarnessConfig
+# usaba la de aqui, CompletionVerifier la suya, y mypy se
+# quejaba al pasarlas. Consolidamos en completion.py.
+from core.harness.completion import CompletionPolicy  # noqa: F401
+
 
 @dataclass(frozen=True)
 class ModelSpec:
@@ -67,15 +73,6 @@ class VRRPolicy:
     max_rounds: int = 5
     min_verification_margin: float = 0.3
     calibration_calls: int = 3
-
-
-@dataclass(frozen=True)
-class CompletionPolicy:
-    enabled: bool = True
-    require_tool_execution: bool = True
-    require_verification_pass: bool = True
-    require_evidence: bool = True
-    max_auto_continuations: int = 3
 
 
 @dataclass(frozen=True)
