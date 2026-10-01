@@ -65,7 +65,7 @@ class HarnessWorker(QObject):
     stream_ready = Signal()
     tool = Signal(str)
     tool_result = Signal(object)          # ToolResult
-    confirmation_requested = Signal(str, object)
+    confirmation_requested = Signal(str, object, str)
     tool_auto_approved = Signal(str)
     metrics_updated = Signal(object)
     loop_warning = Signal(str, str)
@@ -145,17 +145,22 @@ class HarnessWorker(QObject):
 
     def handle_confirmation(
         self, name: str, arguments: dict[str, Any],
+        *, reason: str = "",
     ) -> bool:
         """Se inyecta como `confirmation_handler` de la session.
 
         Bloquea el hilo del worker hasta que la UI llame a
         `resolve_confirmation(bool)` o expire el timeout.
+        El `reason` (2026-10-01) se reenvia por la senal
+        para que el dialogo lo muestre al usuario.
         """
         event = threading.Event()
         with self._confirmation_lock:
             self._confirmation_event = event
             self._confirmation_approved = False
-        self.confirmation_requested.emit(name, dict(arguments))
+        self.confirmation_requested.emit(
+            name, dict(arguments), reason,
+        )
         event.wait(timeout=CONFIRMATION_TIMEOUT_SECONDS)
         with self._confirmation_lock:
             approved = self._confirmation_approved

@@ -29,16 +29,26 @@ if TYPE_CHECKING:
     from core.agents import Agent
 
 
-def confirm_tool(parent: QWidget | None, name: str, arguments: dict) -> bool:
-    """Decide si el usuario aprueba una operación."""
+def confirm_tool(
+    parent: QWidget | None, name: str, arguments: dict,
+    *, reason: str = "",
+) -> bool:
+    """Decide si el usuario aprueba una operación.
+
+    `reason` (2026-10-01) explica por que la tool cae a
+    confirmacion manual (allowlist, destructiva, etc.).
+    """
     if name == "ejecutar_comando":
-        return _confirm_shell(parent, arguments)
-    return _confirm_generic(parent, name, arguments)
+        return _confirm_shell(parent, arguments, reason=reason)
+    return _confirm_generic(parent, name, arguments, reason=reason)
 
 
 # -- shell -------------------------------------------------------------------
 
-def _confirm_shell(parent: QWidget | None, arguments: dict) -> bool:
+def _confirm_shell(
+    parent: QWidget | None, arguments: dict,
+    *, reason: str = "",
+) -> bool:
     from plugins.shell import analyze_risk
 
     command = str(arguments.get("command", ""))
@@ -57,6 +67,12 @@ def _confirm_shell(parent: QWidget | None, arguments: dict) -> bool:
     intro = QLabel("El modelo quiere ejecutar el siguiente comando:")
     intro.setWordWrap(True)
     layout.addWidget(intro)
+
+    if reason.strip():
+        reason_label = QLabel(f"Motivo: {reason}")
+        reason_label.setWordWrap(True)
+        reason_label.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(reason_label)
 
     # El comando lo propone el modelo. Fijamos PlainText y no pasamos por
     # el auto-detect de RichText de QLabel, que interpretaría <b>...</b>
@@ -121,10 +137,15 @@ def _confirm_shell(parent: QWidget | None, arguments: dict) -> bool:
 
 # -- resto de operaciones ----------------------------------------------------
 
-def _confirm_generic(parent: QWidget | None, name: str, arguments: dict) -> bool:
+def _confirm_generic(
+    parent: QWidget | None, name: str, arguments: dict,
+    *, reason: str = "",
+) -> bool:
     # Casos con contenido largo: usamos diálogo con scroll.
     if _is_write_tool(name):
-        return _confirm_file_write(parent, name, arguments)
+        return _confirm_file_write(
+            parent, name, arguments, reason=reason,
+        )
 
     if name == "borrar_archivo":
         path = str(arguments.get("path", ""))
@@ -138,7 +159,12 @@ def _confirm_generic(parent: QWidget | None, name: str, arguments: dict) -> bool
         text = f"¿Quieres crear la carpeta «{path}»?"
         title = "Confirmar creación de carpeta"
     else:
-        return _confirm_generic_with_scroll(parent, name, arguments)
+        return _confirm_generic_with_scroll(
+            parent, name, arguments, reason=reason,
+        )
+
+    if reason.strip():
+        text = text + f"\n\nMotivo: {reason}"
 
     reply = QMessageBox.question(
         parent,
@@ -151,7 +177,8 @@ def _confirm_generic(parent: QWidget | None, name: str, arguments: dict) -> bool
 
 
 def _confirm_generic_with_scroll(
-    parent: QWidget | None, name: str, arguments: dict
+    parent: QWidget | None, name: str, arguments: dict,
+    *, reason: str = "",
 ) -> bool:
     """Fallback para herramientas sin confirmación específica.
 
@@ -227,7 +254,10 @@ def _is_write_tool(name: str) -> bool:
     return any(hint in name for hint in _WRITE_TOOL_HINTS)
 
 
-def _confirm_file_write(parent: QWidget | None, name: str, arguments: dict) -> bool:
+def _confirm_file_write(
+    parent: QWidget | None, name: str, arguments: dict,
+    *, reason: str = "",
+) -> bool:
     """Diálogo de confirmación para crear/escribir archivos.
 
     Usa un QPlainTextEdit con altura fija y scroll en lugar de QMessageBox.

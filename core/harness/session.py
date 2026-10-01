@@ -301,29 +301,30 @@ class HarnessSession:
         """S4-b: no-op. Confirmaciones bloqueantes en S4-c."""
 
     def _call_handler(
-        self, name: str, arguments: dict,
+        self, name: str, arguments: dict, *, reason: str = "",
     ) -> bool:
-        """Llama al confirmation_handler pasando cancel_event si
-        acepta ese kwarg (P2#9).
+        """Llama al confirmation_handler pasando los kwargs
+        que acepte (cancel_event, reason).
 
-        Firma nueva:  handler(name, args, *, cancel_event=None)
-        Firma vieja:  handler(name, args)
-
-        Se usa inspect para decidir. try/except TypeError
-        confundiria un TypeError real del handler con un
-        handler de firma vieja.
+        Se usa inspect para decidir que kwargs inyectar; asi
+        handlers de firma vieja (name, args) siguen funcionando.
         """
         handler = self.confirmation_handler
         assert handler is not None
         try:
             params = inspect.signature(handler).parameters
             accepts_cancel = "cancel_event" in params
+            accepts_reason = "reason" in params
         except (TypeError, ValueError):
             accepts_cancel = False
+            accepts_reason = False
+        kwargs: dict = {}
         if accepts_cancel:
-            return bool(
-                handler(name, arguments, cancel_event=self._cancel)
-            )
+            kwargs["cancel_event"] = self._cancel
+        if accepts_reason:
+            kwargs["reason"] = reason
+        if kwargs:
+            return bool(handler(name, arguments, **kwargs))
         return bool(handler(name, arguments))
 
     # -- loop interno ------------------------------------------------
@@ -446,6 +447,38 @@ class HarnessSession:
             f"{round_index}|{ordinal}"
         ).encode()
         return "tc_" + hashlib.sha256(raw).hexdigest()[:12]
+
+    def _build_reason(
+        self, name: str, arguments: dict,
+    ) -> str:
+        """Motivo por el que se pide confirmacion (2026-10-01).
+
+        Se muestra en el dialogo de UI para que el usuario
+        sepa por que su tool cae a confirmacion manual.
+        """
+        if name == "borrar_archivo":
+            return "operacion destructiva (nunca auto-aprobada)"
+        if name == "ejecutar_comando":
+            if not self.config.auto_approve_shell:
+                return "shell requiere auto_approve_shell activo"
+            cmd = (
+                arguments.get("command", "")
+                if isinstance(arguments, dict) else ""
+            )
+            if not isinstance(cmd, str) or not cmd.strip():
+                return "comando malformado"
+            allowed = False
+            if self.command_allowed is not None:
+                try:
+                    allowed = bool(self.command_allowed(cmd))
+                except Exception:  # noqa: BLE001
+                    allowed = False
+            if not allowed:
+                return "comando fuera de la allowlist"
+            return "shell auto-aprobable pero requiere confirmacion"
+        if not self.config.auto_approve:
+            return "auto_approve global desactivado"
+        return "requiere confirmacion explicita"
 
     def _execute_tool_call(
         self,
@@ -634,16 +667,19 @@ class HarnessSession:
             # P2#9: emitir ConfirmationRequested/Resolved para que
             # la UI y el log sepan que hubo un dialogo (antes solo
             # habia el efecto en el handler).
+            confirm_reason = self._build_reason(name, arguments)
             yield self._emit(
                 ConfirmationRequested,
                 call_id=call_id,
                 tool_name=name,
                 arguments=dict(arguments),
-                reason="policy",
+                reason=confirm_reason,
             )
             try:
                 auto_approved = bool(
-                    self._call_handler(name, arguments),
+                    self._call_handler(
+                        name, arguments, reason=confirm_reason,
+                    ),
                 )
                 yield self._emit(
                     ConfirmationResolved,

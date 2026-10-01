@@ -1172,11 +1172,16 @@ class ChatController(QObject):
         self._current_actions.append(result)
         self.renderer.insert_tool_card(result)
 
-    def _on_confirmation(self, name: str, arguments: dict[str, Any]) -> None:
+    def _on_confirmation(
+        self, name: str, arguments: dict[str, Any],
+        reason: str = "",
+    ) -> None:
         worker = self._worker
         if worker is None:
             return
-        approved = confirm_tool(self._parent_widget, name, arguments)
+        approved = confirm_tool(
+            self._parent_widget, name, arguments, reason=reason,
+        )
         # Recheck: durante el event loop anidado del dialogo, _cleanup
         # puede haber puesto self._worker a None (cancelacion, cierre
         # de ventana). Sin este recheck, resolve_confirmation falla
