@@ -302,8 +302,10 @@ class AsyncRunner:
                 )
             except RuntimeError as exc:
                 # El loop se cerro entre el check y el schedule.
-                # Cerrar la coroutine para no dejar warnings de
+                # Cerrar las coroutines para no dejar warnings de
                 # "coroutine was never awaited".
+                wrapper = _tracked()
+                wrapper.close()
                 coro.close()
                 raise RuntimeError(
                     f"{self.name} se cerró durante el envío."
