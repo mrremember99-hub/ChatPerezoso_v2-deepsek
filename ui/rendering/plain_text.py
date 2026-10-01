@@ -409,7 +409,17 @@ class PlainTextRenderer:
         }[result.status]
         icon = {"ok": "●", "error": "▲", "cancelled": "■"}[result.status]
         duration = f" · {result.duration_ms} ms" if result.duration_ms else ""
-        summary = html.escape(result.summary or result.status_label)
+        summary_text = result.summary or result.status_label
+        # B (2026-10-01): no mostrar summary si ya esta al
+        # inicio del detail. Con outputs cortos el harness
+        # pasa summary == detail[:120] y se pintaba dos veces.
+        show_summary = not result.detail.startswith(summary_text)
+        summary_html = ""
+        if show_summary:
+            summary_html = (
+                f'<br><span style="color:{self.palette.tool_card_detail};">'
+                f'{html.escape(summary_text)}</span>'
+            )
 
         cursor.insertHtml(
             f'<div style="border-left:3px solid {color}; '
@@ -418,7 +428,7 @@ class PlainTextRenderer:
             f'font-size:{design.TOOL_CARD_FONT_SIZE_PT}pt;">'
             f'<span style="color:{color};">{icon}</span> '
             f'<b>{html.escape(result.tool_name)}</b>{html.escape(duration)}'
-            f'<br><span style="color:{self.palette.tool_card_detail};">{summary}</span>'
+            f'{summary_html}'
             f'</div>'
         )
 
