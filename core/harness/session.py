@@ -923,13 +923,42 @@ class HarnessSession:
         El system prompt no se guarda en `_messages` para no
         duplicarlo en cada ronda ni meterlo en el fold de eventos.
         """
-        prompt = self.config.agent.system_prompt
+        prompt = self.config.agent.system_prompt or ""
+        tools_block = self._tools_block()
+        if tools_block:
+            prompt = (
+                prompt + "\n\n" + tools_block
+                if prompt.strip()
+                else tools_block
+            )
         if not prompt:
             return list(self._messages)
         return [
             {"role": "system", "content": prompt},
             *self._messages,
         ]
+
+    def _tools_block(self) -> str:
+        """Lista explicita de tools disponibles para el modelo.
+
+        Mitiga la hallucination de nombres de tool (auditoria
+        Run OVERPAPER v2 2026-10-01: el modelo intento llamar a
+        una tool "python" porque el phase spec mencionaba el
+        comando `python -m py_compile`). Listar los nombres
+        exactos da al modelo un ancla contra la que comparar.
+        """
+        defs = self._tool_definitions() or []
+        names = sorted({
+            str(d.get("function", {}).get("name", ""))
+            for d in defs
+            if isinstance(d, dict)
+        } - {""})
+        if not names:
+            return ""
+        return (
+            "TOOLS DISPONIBLES (usa estos nombres exactos; "
+            "no inventes otros): " + ", ".join(names)
+        )
 
     def _is_tool_allowed(self, name: str) -> bool:
         """True si la tool esta en AgentSpec.allowed_tools.
