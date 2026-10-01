@@ -83,6 +83,11 @@ class HarnessSession:
             Callable[..., bool] | None
         ) = None,
         command_allowed: Callable[[str], bool] | None = None,
+        # A (2026-10-01): hook de verificacion post-escritura.
+        # Recibe la ruta relativa y devuelve texto (vacio = OK).
+        # El harness lo llama SOLO si la tool es de escritura,
+        # el status es "ok" y la ruta es str no vacia.
+        verificador_hook: Callable[[str], str] | None = None,
     ) -> None:
         self.config = config
         self.model_client = model_client
@@ -93,6 +98,7 @@ class HarnessSession:
         self.health_monitor = health_monitor
         self.confirmation_handler = confirmation_handler
         self.command_allowed = command_allowed
+        self.verificador_hook = verificador_hook
         self._corrective_builder = CorrectivePromptBuilder()
         # Contadores para health monitoring dentro del step en curso.
         self._step_error_count = 0
@@ -780,6 +786,30 @@ class HarnessSession:
                 self.idempotency.mark_completed(key, result)
             else:
                 self.idempotency.mark_failed(key)
+
+        # A (2026-10-01): verificar escrituras exitosas.
+        if (
+            status == "ok"
+            and name in ("crear_archivo", "escribir_archivo",
+                         "editar_archivo")
+            and self.verificador_hook is not None
+        ):
+            rel = (
+                arguments.get("path")
+                or arguments.get("nombre")
+                or ""
+            )
+            if isinstance(rel, str) and rel:
+                try:
+                    extra = self.verificador_hook(rel)
+                    if extra:
+                        result = (
+                            result
+                            + "\n\n[VERIFICACIÓN]\n"
+                            + str(extra)
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
 
         self._messages.append({"role": "tool", "content": result})
         yield self._emit(

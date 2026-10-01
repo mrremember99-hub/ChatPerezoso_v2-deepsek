@@ -811,6 +811,9 @@ class ChatController(QObject):
             loop_detector=self._make_loop_detector(),
             confirmation_handler=None,
             command_allowed=is_command_allowed,
+            verificador_hook=getattr(
+                self, "_verificador_hook", None,
+            ),
         )
 
         # Localizar el ultimo mensaje user: todo lo anterior va
