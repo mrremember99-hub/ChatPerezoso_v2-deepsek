@@ -977,7 +977,7 @@ class ChatController(QObject):
                     # mitad de una operacion puede corromper estado o
                     # provocar deadlocks.
                     logger.error(
-                        "ChatWorker no terminó en %d ms durante "
+                        "worker no terminó en %d ms durante "
                         "shutdown; dejando que el watchdog global actue",
                         wait_ms,
                     )
