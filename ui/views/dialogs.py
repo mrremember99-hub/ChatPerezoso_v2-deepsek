@@ -307,6 +307,14 @@ def _confirm_file_write(
     question.setWordWrap(True)
     layout.addWidget(question)
 
+    # Motivo de la confirmacion (2026-10-01). Solo aparece
+    # cuando el harness lo envia; sin reason, no se pinta.
+    if reason.strip():
+        reason_label = QLabel(f"Motivo: {reason}")
+        reason_label.setWordWrap(True)
+        reason_label.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(reason_label)
+
     # Etiqueta del contenido + tamaño
     meta = QLabel(f"<b>Contenido</b> ({size_bytes} bytes):")
     meta.setTextFormat(Qt.TextFormat.RichText)
