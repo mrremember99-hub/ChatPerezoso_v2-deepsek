@@ -247,6 +247,14 @@ class ChatController(QObject):
 
     def rebind_tools(self, tools: ToolProvider) -> None:
         self.tools = tools
+        # 2026-10-01: propagar a la session viva. Sin esto, un
+        # cambio de agente o de composite con el worker corriendo
+        # dejaba la session con el tool_registry anterior.
+        worker = self._worker
+        if worker is not None:
+            session = getattr(worker, "_session", None)
+            if session is not None:
+                session.tool_registry = tools
 
     # -- cola de prompts ----------------------------------------------------
 
