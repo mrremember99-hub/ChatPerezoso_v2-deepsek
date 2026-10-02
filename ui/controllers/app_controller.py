@@ -722,9 +722,10 @@ class AppController(QObject):
         if not ok:
             self.view.set_status("Ya hay un turno o una cola en curso")
 
-    @Slot(int, int)
-    # -- editar cola (2026-09-28) ------------------------------------------
-
+    # P3#24 (auditoria 2026-10-02): @Slot(int, int) estaba sobre
+    # _on_queue_edit, cuya Signal es (int, str). El comentario
+    # de seccion vivia entre el decorador y la funcion.
+    @Slot(int, str)
     def _on_queue_edit(self, idx: int, new_text: str) -> None:
         """Aplica la edicion al controller y refleja en el panel."""
         if self.chat_ctrl.queue_edit_item(idx, new_text):
@@ -740,6 +741,8 @@ class AppController(QObject):
         if self.chat_ctrl.queue_move_item(idx, delta):
             self.view.right_panel.queue_row_move(idx, delta)
 
+    # P3#24: _on_queue_progress recibe Signal(int, int).
+    @Slot(int, int)
     def _on_queue_progress(self, current: int, total: int) -> None:
         self.view.set_status(f"Cola: {current}/{total}")
 
