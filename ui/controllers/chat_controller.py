@@ -120,7 +120,6 @@ class ChatController(QObject):
         renderer: ChatRenderer,
         store: HistoryStore | None = None,
         initial_messages: list[dict] | None = None,
-        summary_model: str = "",
     ):
         # `client` y `tools` se anotan como Any porque los tests pasan
         # dobles que no cumplen los protocolos completos, y el worker
@@ -143,7 +142,7 @@ class ChatController(QObject):
         self._last_options: dict[str, Any] | None = None
         self._last_system_prompt = ""
         # Flags runtime consolidados: auto_approve, auto_approve_shell,
-        # loop_detection_enabled, completion_verification_enabled.
+        # completion_verification_enabled.
         self._runtime = RuntimeConfig()
         # Hook de verificación post-escritura. Callable o None.
         self._verificador_hook: Any = None

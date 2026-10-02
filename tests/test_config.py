@@ -48,6 +48,31 @@ def test_load_ignores_values_with_wrong_type(tmp_path, monkeypatch):
     assert config.model == AppConfig.model       # default, no 42
 
 
+def test_load_ignores_removed_v3_settings(tmp_path, monkeypatch):
+    from core import config as config_module
+
+    config_file = tmp_path / "config.json"
+    config_file.write_text(
+        json.dumps({
+            "loop_detection_enabled": True,
+            "summary_model": "qwen3:1.7b",
+            "verificador_enabled": True,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_module, "CONFIG_FILE", config_file)
+
+    config = AppConfig.load()
+
+    assert not hasattr(config, "loop_detection_enabled")
+    assert not hasattr(config, "summary_model")
+    assert config.verificador_enabled is True
+    config.save()
+    saved = json.loads(config_file.read_text(encoding="utf-8"))
+    assert "loop_detection_enabled" not in saved
+    assert "summary_model" not in saved
+
+
 def test_load_clamps_absurd_dimensions(tmp_path, monkeypatch):
     from core import config as config_module
 

@@ -37,20 +37,10 @@ class AppConfig:
     # ve el modelo. La tool `verificar_sintaxis` sigue disponible
     # siempre, independientemente de este flag.
     verificador_enabled: bool = False
-    # Harness v3 S1-ter: activa loop detection en el worker. Si
-    # esta ON, ChatController inyecta un LoopDetector que observa
-    # cada tool call y emite narraciones cuando detecta bucles.
-    # OFF por defecto: comportamiento identico al actual.
-    loop_detection_enabled: bool = False
     # P1.4 (2026-10-01): completion verification. Cuando esta
     # activo, el harness comprueba al final del step que el
     # modelo hizo lo que dice haber completado (fases OVERPAPER).
     completion_verification_enabled: bool = False
-    # Modelo Ollama que genera el resumen rolling de la sesion.
-    # Pequeno y rapido por diseno: el resumen es una tarea simple.
-    # Si no esta instalado, el resumen se deshabilita (con aviso
-    # en el log) y el chat sigue funcionando normalmente. D6.
-    summary_model: str = "qwen3:1.7b"
     # Tiempo que Ollama mantiene el modelo en RAM/VRAM tras la
     # ultima peticion. Formato Ollama ("30m", "5m", "1h", "-1" =
     # forever, "0" = unload inmediato).
