@@ -6,6 +6,16 @@ import pytest
 pytest.importorskip("PySide6")
 
 from core.harness.events import StepEnded
+
+
+def _ended(outcome: str) -> StepEnded:
+    return StepEnded(
+        seq=1,
+        run_id="r1",
+        ts="2026-10-02T00:00:00+00:00",
+        step_index=1,
+        outcome=outcome,
+    )
 from core.harness.policy import (
     AgentSpec,
     HarnessConfig,
@@ -42,7 +52,7 @@ def test_cancel_no_emite_finished(tmp_path):
     w.error.connect(lambda *_: calls.__setitem__(
         "error", calls["error"] + 1))
 
-    w._on_step_ended(StepEnded(step_index=1, outcome="cancelled"))
+    w._on_step_ended(_ended("cancelled"))
     assert calls["finished"] == 0
 
 
@@ -52,7 +62,7 @@ def test_ok_emite_finished(tmp_path):
     w.finished.connect(lambda *_: calls.__setitem__(
         "finished", calls["finished"] + 1))
 
-    w._on_step_ended(StepEnded(step_index=1, outcome="ok"))
+    w._on_step_ended(_ended("ok"))
     assert calls["finished"] == 1
 
 
@@ -64,7 +74,7 @@ def test_failed_sin_error_previo_emite_error(tmp_path):
     w.finished.connect(lambda *_: calls.__setitem__(
         "finished", calls["finished"] + 1))
 
-    w._on_step_ended(StepEnded(step_index=1, outcome="failed"))
+    w._on_step_ended(_ended("failed"))
     assert calls["error"] == 1
     assert calls["finished"] == 0
 
@@ -76,5 +86,5 @@ def test_failed_con_error_previo_no_duplica(tmp_path):
     w.error.connect(lambda *_: calls.__setitem__(
         "error", calls["error"] + 1))
 
-    w._on_step_ended(StepEnded(step_index=1, outcome="failed"))
+    w._on_step_ended(_ended("failed"))
     assert calls["error"] == 0
