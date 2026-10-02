@@ -5,11 +5,29 @@ worker auto-aprueba `ejecutar_comando` sin dialogo. Sin esta allowlist,
 un toggle pensado para iterar rapido con `pytest`/`ls`/`cat` se
 convierte en "el modelo puede borrar lo que quiera sin preguntar".
 
-Politica: solo programas read-only o de ejecucion de tests. Todo lo
-que modifica estado (rm, mv, sed -i, sort -o, git push, pip install)
-sigue pidiendo confirmacion manual aunque autopilot+shell esten ON.
-La degradacion es a confirmacion, no a bloqueo: el flujo del usuario
-sigue funcionando, solo con un dialogo extra.
+Politica base: solo programas read-only o de ejecucion de tests.
+Todo lo que modifica estado (rm, mv, sed -i, sort -o, git push,
+pip install) sigue pidiendo confirmacion manual aunque
+autopilot+shell esten ON. La degradacion es a confirmacion, no a
+bloqueo: el flujo del usuario sigue funcionando, solo con un
+dialogo extra.
+
+EXCEPCION DOCUMENTADA (P3#2, auditoria 2026-10-02):
+    `python <script>.py` y `pytest` pasan como read-only en
+    esta allowlist, pero en la practica ejecutan codigo
+    arbitrario: un script puede escribir estado, invocar
+    subprocess, borrar archivos, etc. Esto NO es un bug: es
+    una decision de diseno. `auto_approve_shell=True` significa
+    "confio en el modelo para ejecutar lo que escriba". Si el
+    usuario quiere ejecucion restringida, mantiene el flag OFF
+    (default) o revisa cada comando a mano.
+
+    Justificacion: (a) el flag se llama auto_approve_SHELL, no
+    auto_approve_solo_comandos_inocuos; (b) la app ya auto-aprueba
+    `escribir_archivo`, asi que el modelo puede dejar codigo en
+    disco sin dialogo, y `python script.py` no cambia el riesgo
+    real; (c) bloquear `python script.py` rompe el flujo
+    OVERPAPER y similares, donde el modelo itera con pruebas.
 
 Diseno deliberadamente conservador: cualquier duda → False.
 """

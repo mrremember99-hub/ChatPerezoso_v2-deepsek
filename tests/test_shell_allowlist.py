@@ -203,3 +203,33 @@ def test_find_peligrosos_denegados(cmd):
 @pytest.mark.parametrize("cmd", [None, 42, [], {}])
 def test_no_string_devuelve_false(cmd):
     assert is_command_allowed(cmd) is False
+
+
+# -- P3#2: contrato de auto_approve_shell (documentado) -----------------
+
+@pytest.mark.parametrize("cmd", [
+    # Estos pasan por diseño. `auto_approve_shell=True` implica
+    # confianza en el modelo para ejecutar lo que escriba. Ver
+    # docstring del modulo. Si en el futuro se endurece, este test
+    # debe actualizarse en el mismo commit.
+    "python script.py",
+    "python3 script.py",
+    "python my_agent_output.py --flag arg",
+    "pytest tests/",
+    "pytest -q",
+])
+def test_python_scripts_y_pytest_pasan_por_diseno(cmd):
+    """P3#2: contrato documentado — no es bug."""
+    assert is_command_allowed(cmd) is True
+
+
+@pytest.mark.parametrize("cmd", [
+    # Pese al diseño, siguen bloqueados los modulos no allowlisted.
+    "python -m pip install foo",
+    "python3 -m venv .venv",
+    "python -m http.server 8000",
+    "python3 -m black --check .",
+])
+def test_python_modulos_no_allowlisted_denegados(cmd):
+    """P3#2: la allowlist de MODULOS -m si bloquea."""
+    assert is_command_allowed(cmd) is False
