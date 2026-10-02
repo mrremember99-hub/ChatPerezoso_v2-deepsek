@@ -78,6 +78,12 @@ _INVALIDATING_TOOLS = {
     "crear_carpeta",
     "escribir_archivo",
     "borrar_archivo",
+    # P3#22 (auditoria 2026-10-02): editar/insertar tambien
+    # mutan el disco. Sin invalidar, el patron "editar y
+    # releer para comprobar" devolvia contenido stale durante
+    # el TTL de 5s.
+    "editar_archivo",
+    "insertar_en_archivo",
     # plugins
     "ejecutar_comando",
     # MCP de escritura
@@ -790,6 +796,11 @@ class AppController(QObject):
             self.view.set_status(f"Error borrando: {result[:80]}")
         else:
             self.view.set_status(f"Borrado: {name}")
+            # P3#22 (auditoria 2026-10-02): el borrado desde el
+            # arbol llama a self.tools.call directamente, saltando
+            # el CachedToolProvider. Invalidar manualmente para
+            # que el proximo listado no muestre el archivo borrado.
+            self.composite.cache.invalidate_all()
 
     @Slot(object)
     def _on_state_changed(self, state: ChatState) -> None:
