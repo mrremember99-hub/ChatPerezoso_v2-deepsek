@@ -166,12 +166,27 @@ def _git_allowed(args: list[str]) -> bool:
         return len(args) >= 2 and args[1] == "list"
     # P3#3: subcomandos duales (config/branch/tag/remote) solo en
     # forma de listado. Sin args = listado; con args, todos deben
-    # estar en la allowlist.
+    # estar en la allowlist, salvo el argumento posicional que
+    # consumen flags como --get / --get-all / --get-regexp.
     if sub in _GIT_DUAL_USE_SUBCOMMANDS:
         rest = args[1:]
         if not rest:
             return True
-        return all(a in _GIT_LISTING_ARGS for a in rest)
+        # Flags que consumen un valor posicional (read-only).
+        consumes_value = {"--get", "--get-all", "--get-regexp"}
+        i = 0
+        while i < len(rest):
+            a = rest[i]
+            if a in consumes_value:
+                # Necesita valor a continuacion.
+                if i + 1 >= len(rest):
+                    return False
+                i += 2
+                continue
+            if a not in _GIT_LISTING_ARGS:
+                return False
+            i += 1
+        return True
     return True
 
 
