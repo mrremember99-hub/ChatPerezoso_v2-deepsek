@@ -469,7 +469,13 @@ class MCPClient:
     @staticmethod
     def _result_to_text(result: Any) -> str:
         is_error = getattr(result, "is_error", getattr(result, "isError", False))
-        prefix = "ERROR MCP: " if is_error else ""
+        # P3#10 (auditoria 2026-10-02): distinguir error de TOOL
+        # de fallo de TRANSPORTE. El primero es el servidor
+        # respondiendo isError=True (fichero no existe, permiso
+        # denegado); NO debe tumbar el servidor. El segundo
+        # (timeout, conexion cerrada) si lo justifica. El
+        # controller usa el prefijo para decidir.
+        prefix = "ERROR TOOL MCP: " if is_error else ""
         content = getattr(result, "content", result)
         if isinstance(content, list):
             parts: list[str] = []
