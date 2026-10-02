@@ -15,6 +15,7 @@ Diseno deliberadamente conservador: cualquier duda → False.
 """
 from __future__ import annotations
 
+import re
 import shlex
 
 from .client import ShellClient, ShellError
@@ -62,6 +63,13 @@ _FIND_DANGEROUS_FLAGS: frozenset[str] = frozenset({
     "-delete",
     "-fprint", "-fprint0", "-fprintf", "-fls",
 })
+
+# P3#1: rechazar cualquier flag corto que contenga c/m/i. Antes
+# solo se comparaba el token exacto, y "python3 -Ic 'codigo'"
+# bypaseaba la allowlist (el token era "-Ic", no "-c"). El
+# patron cubre cadenas de flags combinados tipo -Ic, -cI, -cm,
+# -Ii. NO matchea long flags (--interactive, --config).
+_PY_FLAG_WITH_DANGEROUS_CHAR = re.compile(r"^-[A-Za-z]*[cimCIM]")
 
 
 def is_command_allowed(command: str) -> bool:
@@ -121,13 +129,21 @@ def _git_allowed(args: list[str]) -> bool:
 def _python_allowed(args: list[str]) -> bool:
     if not args:
         return False  # REPL interactivo
-    # -c codigo inline: siempre rechazado (bypass del allowlist).
-    if "-c" in args:
+    # P3#1: cualquier flag corto con c/m/i dentro es peligroso,
+    # incluso combinado con otros (-Ic, -cI, -cm, -Ii). Antes
+    # solo se comparaba el token exacto y los combinados pasaban.
+    # "-m" aislado se excluye: se valida despues contra la
+    # allowlist de modulos (solo -m exacto, no combinado).
+    for a in args:
+        if a == "-m":
+            continue
+        if _PY_FLAG_WITH_DANGEROUS_CHAR.match(a):
+            return False
+    # --interactive es long flag: el patron de arriba no lo pilla.
+    if "--interactive" in args:
         return False
-    # -i fuerza REPL tras script.
-    if "-i" in args or "--interactive" in args:
-        return False
-    # -m modulo: validar contra la lista blanca.
+    # -m modulo: validar contra la lista blanca (ahora solo si
+    # es exactamente "-m" separado; los combinados ya rechazados).
     if "-m" in args:
         idx = args.index("-m")
         if idx + 1 >= len(args):
