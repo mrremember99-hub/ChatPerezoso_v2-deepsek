@@ -78,13 +78,12 @@ class RuntimeConfig:
 
     Consolidan los antiguos atributos privados. Se mantienen
     properties de compatibilidad para los tests que acceden
-    directamente a `_auto_approve`, `_auto_approve_shell`,
-    `_loop_detection_enabled` y `_completion_verification_enabled`.
+    directamente a `_auto_approve`, `_auto_approve_shell` y
+    `_completion_verification_enabled`.
     """
 
     auto_approve: bool = False
     auto_approve_shell: bool = False
-    loop_detection_enabled: bool = False
     completion_verification_enabled: bool = False
 
 
@@ -591,14 +590,6 @@ class ChatController(QObject):
         self._ensure_runtime().auto_approve_shell = bool(value)
 
     @property
-    def _loop_detection_enabled(self) -> bool:
-        return self._ensure_runtime().loop_detection_enabled
-
-    @_loop_detection_enabled.setter
-    def _loop_detection_enabled(self, value: bool) -> None:
-        self._ensure_runtime().loop_detection_enabled = bool(value)
-
-    @property
     def _completion_verification_enabled(self) -> bool:
         return self._ensure_runtime().completion_verification_enabled
 
@@ -615,8 +606,8 @@ class ChatController(QObject):
         siempre confirma.
         """
         self._auto_approve = bool(enabled)
-        # Aplica al proximo worker: _build_harness_worker
-        # reconstruye HarnessConfig desde _runtime en cada send.
+        # Aplica al proximo worker: _build_agent_worker
+        # reconstruye AgentConfig desde _runtime en cada send.
         # Cascada: si el piloto principal se apaga, la extensión de
         # shell también. Así nunca queda un estado inconsistente.
         if not enabled:
@@ -633,13 +624,6 @@ class ChatController(QObject):
         self._auto_approve_shell = enabled
         # Aplica al proximo worker (ver set_auto_approve).
 
-    def set_loop_detection_enabled(self, enabled: bool) -> None:
-        """Activa/desactiva loop detection para el proximo worker.
-
-        No afecta al worker en curso: se aplica al siguiente.
-        """
-        self._loop_detection_enabled = bool(enabled)
-
     def set_completion_verification_enabled(
         self, enabled: bool,
     ) -> None:
@@ -653,8 +637,8 @@ class ChatController(QObject):
         del archivo y devuelve texto (vacío si OK).
         """
         self._verificador_hook = hook
-        # Aplica al proximo worker: _build_harness_worker pasa
-        # self._verificador_hook a HarnessSession al construir.
+        # Aplica al proximo worker: _build_agent_worker pasa
+        # self._verificador_hook a AgentSession al construir.
 
     def set_current_model(self, model: str) -> None:
         # Si el modelo cambia, el ContextWindow cacheado apunta al
@@ -794,39 +778,29 @@ class ChatController(QObject):
         self.renderer.remove_from_last_user()
         self.send(user_text, model, self._last_options, self._last_system_prompt)
 
-    def _make_loop_detector(self):
-        """Construye un LoopDetector si la flag esta activa."""
-        if not self._loop_detection_enabled:
-            return None
-        from core.harness.loop import LoopDetector
-        from core.harness.policy import LoopPolicy
-        return LoopDetector(LoopPolicy())
-
-    def _build_harness_worker(
+    def _build_agent_worker(
         self, model, options, system_prompt,
     ):
-        """S6-b-2: construye HarnessWorker en lugar de ChatWorker.
+        """Construye AgentWorker para el proximo step.
 
         Precarga el historico sin el ultimo user (que se pasa
         por step) y asigna el confirmation_handler al worker
         despues de construirlo. La session no invoca el handler
         hasta step(), que corre dentro del thread.
         """
-        import tempfile
         import uuid
         from pathlib import Path as _Path
 
-        from core.harness.durable import EventLog
-        from core.harness.ollama_adapter import OllamaAdapter
-        from core.harness.policy import (
+        from core.agent.ollama_adapter import OllamaAdapter
+        from core.agent.policy import (
+            AgentConfig,
             AgentSpec,
-            HarnessConfig,
             ModelSpec,
         )
-        from core.harness.session import HarnessSession
+        from core.agent.session import AgentSession
         from plugins.shell import is_command_allowed
 
-        from ..harness_worker import HarnessWorker
+        from ..agent_worker import AgentWorker
 
         run_id = uuid.uuid4().hex[:12]
         ws_provider = getattr(self, "_workspace_provider", None)
@@ -837,69 +811,40 @@ class ChatController(QObject):
                 ws_root = _Path.cwd()
         else:
             ws_root = _Path.cwd()
-        storage = (
-            _Path(tempfile.gettempdir()) / "cp_harness" / run_id
-        )
 
-        # S6-b-2: sin limite de output, qwen3 puede generar
-        # hasta agotar contexto (UX horrible). El legacy no lo
-        # necesita porque el modelo para solo, pero el harness
-        # anade tools + system prompt mas grandes y a veces no.
-        # Solo aplica si el config no fijo num_predict.
-        _HARNESS_NUM_PREDICT = 2048
+        # Sin limite de output, qwen3 puede generar hasta agotar
+        # contexto (UX horrible). El modelo legacy para solo, pero
+        # con tools + system prompt grande a veces no. Solo aplica
+        # si el config no fijo num_predict.
+        _DEFAULT_NUM_PREDICT = 2048
         _opts = dict(options or {})
         if not _opts.get("num_predict"):
-            _opts["num_predict"] = _HARNESS_NUM_PREDICT
+            _opts["num_predict"] = _DEFAULT_NUM_PREDICT
         adapter = OllamaAdapter(
             self.client, model=model, options=_opts,
         )
-        cfg = HarnessConfig(
+        cfg = AgentConfig(
             run_id=run_id,
             workspace_root=ws_root,
-            storage_dir=storage,
             model=ModelSpec(name=model),
             agent=AgentSpec(
                 name="chat", system_prompt=system_prompt or "",
             ),
-            auto_approve=bool(
-                self._auto_approve,
-            ),
-            auto_approve_shell=bool(
-                self._auto_approve_shell,
-            ),
+            auto_approve=bool(self._auto_approve),
+            auto_approve_shell=bool(self._auto_approve_shell),
             completion_verification_enabled=bool(
                 self._completion_verification_enabled,
             ),
         )
-        # P1.4 (2026-10-01): event_log persistente. Permite
-        # validar features del harness en vivo (antes volabamos
-        # a ciegas: sin event_log los eventos se emitian pero no
-        # se guardaban). El log es thread-safe (RLock propio).
-        #
-        # P3#8 (auditoria 2026-10-02): telemetria POR STEP.
-        # Un directorio nuevo por step (run_id distinto), sin
-        # retencion ni resume. `session.close()` no se llama
-        # desde el controller, asi que RunEnded no se emite y
-        # `apply_retention` no corre. Es aceptado por diseño:
-        # hoy el EventLog sirve solo para inspeccion puntual,
-        # no para reconstruir runs. Si en el futuro se quiere
-        # resume tras crash, habria que:
-        #   1. run_id estable por conversacion (no por step).
-        #   2. llamar a session.close() al cerrar la conversacion.
-        #   3. invocar apply_retention periodicamente.
-        # Mientras no haya caso de uso, se deja como esta.
-        event_log = EventLog(storage / "events.db")
-        session = HarnessSession(
+        session = AgentSession(
             cfg,
             model_client=adapter,
             tool_registry=self.tools,
-            loop_detector=self._make_loop_detector(),
             confirmation_handler=None,
             command_allowed=is_command_allowed,
             verificador_hook=getattr(
                 self, "_verificador_hook", None,
             ),
-            event_log=event_log,
         )
 
         # Localizar el ultimo mensaje user: todo lo anterior va
@@ -918,7 +863,7 @@ class ChatController(QObject):
                 self.messages[user_idx].get("content", ""),
             )
 
-        worker = HarnessWorker(session, user_message)
+        worker = AgentWorker(session, user_message)
         session.confirmation_handler = worker.handle_confirmation
         return worker
 
@@ -947,7 +892,7 @@ class ChatController(QObject):
             self._auto_approve,
         )
         self._thread = QThread(self)
-        self._worker = self._build_harness_worker(
+        self._worker = self._build_agent_worker(
             model, options, system_prompt,
         )
         self._worker.moveToThread(self._thread)
@@ -959,11 +904,6 @@ class ChatController(QObject):
         self._worker.tool_auto_approved.connect(self._on_tool_auto_approved)
         self._worker.metrics_updated.connect(self._on_worker_metrics)
         self._worker.summary_ready.connect(self._on_summary_ready)
-        # Harness v3 S1-ter: señales de loop detection. Solo se
-        # emiten si hay detector inyectado.
-        self._worker.loop_warning.connect(self._on_loop_warning)
-        self._worker.loop_corrective.connect(self._on_loop_corrective)
-        self._worker.loop_aborted.connect(self._on_loop_aborted)
         self._worker.finished.connect(self._on_done)
         self._worker.error.connect(self._on_error)
         self._worker.cancelled.connect(self._on_cancelled)
@@ -1302,29 +1242,6 @@ class ChatController(QObject):
         """
         self.renderer.insert_narration(
             f"Auto-aprobado: {name}", active=False
-        )
-
-    def _on_loop_warning(self, detector: str, reason: str) -> None:
-        """El LoopDetector detecto un patron repetitivo (leve)."""
-        self.renderer.insert_narration(
-            f"Loop leve ({detector}): {reason}",
-            active=False,
-        )
-
-    def _on_loop_corrective(self, detector: str, reason: str) -> None:
-        """El LoopDetector pide un cambio de estrategia."""
-        self.renderer.insert_narration(
-            f"Loop detectado ({detector}): {reason}. "
-            "El agente deberia cambiar de estrategia.",
-            active=False,
-        )
-
-    def _on_loop_aborted(self, detector: str, reason: str) -> None:
-        """El LoopDetector aborto la sesion. El worker se cancelo."""
-        self.renderer.insert_narration(
-            f"Loop abortado ({detector}): {reason}. "
-            "Sesion cancelada automaticamente.",
-            active=False,
         )
 
     def _on_summary_ready(self, raw: str, new_index: int) -> None:
