@@ -895,7 +895,7 @@ class HarnessSession:
         if (
             status == "ok"
             and name in ("crear_archivo", "escribir_archivo",
-                         "editar_archivo")
+                         "editar_archivo", "insertar_en_archivo")
             and self.verificador_hook is not None
         ):
             rel = (

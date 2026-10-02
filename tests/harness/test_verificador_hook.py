@@ -217,3 +217,27 @@ def test_harness_worker_verificador_hook_property(tmp_path):
 
     w.verificador_hook = None
     assert s.verificador_hook is None
+
+
+def test_verificador_anexa_en_insertar(tmp_path):
+    """P3#17: insertar_en_archivo tambien pasa por el verificador."""
+    calls = []
+
+    def hook(rel):
+        calls.append(rel)
+        return f"{rel}: issue"
+
+    model = _ScriptedModel([
+        [_call("insertar_en_archivo", {"path": "a.py", "line": 1})],
+        [_text("fin")],
+    ])
+    s = HarnessSession(
+        _cfg(tmp_path, auto_approve=True),
+        model_client=model,
+        tool_registry=_FakeRegistry(),
+        verificador_hook=hook,
+    )
+    list(s.step("x"))
+    assert calls == ["a.py"]
+    content = _last_tool_msg(s)
+    assert "[VERIFICACIÓN]" in content
