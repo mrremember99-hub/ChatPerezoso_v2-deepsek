@@ -101,7 +101,12 @@ class AgentSession:
             })
 
     def step(self, user_message: str) -> Iterator[Event]:
-        """Ejecuta un step. No reentrante."""
+        """Ejecuta un step. No reentrante. Fallo tras close()."""
+        # P4#1: no aceptar steps tras close().
+        if self._run_ended:
+            raise RuntimeError(
+                "AgentSession.step() llamado tras close()",
+            )
         if self._step_in_progress:
             raise RuntimeError(
                 "AgentSession.step() no es reentrante",
@@ -169,12 +174,16 @@ class AgentSession:
             return
 
         fatal: str | None = None
+        fatal_is_cancel = False
         try:
             yield from self._agent_loop(step_index)
         except Exception as exc:  # noqa: BLE001
             fatal = str(exc) or type(exc).__name__
+            # P4#2: si el cancel esta seteado es cancelacion
+            # (OllamaCancelled), no error del modelo.
+            fatal_is_cancel = self._cancel.is_set()
 
-        if fatal is not None:
+        if fatal is not None and not fatal_is_cancel:
             self._errors.append(fatal)
             yield self._emit(
                 AgentError,
@@ -429,7 +438,10 @@ class AgentSession:
                     self.tool_registry.requires_confirmation(name),
                 )
             except Exception:  # noqa: BLE001
-                requires = False
+                # P4#5: fail-closed. Antes una excepcion aqui
+                # dejaba requires=False y la tool se ejecutaba
+                # sin confirmacion.
+                requires = True
 
         denial_reason: str | None = None
         handler_error: str | None = None
@@ -548,7 +560,34 @@ class AgentSession:
                 detail=result,
                 duration_ms=0,
             )
-            self._step_failed = True
+            # P4#14: denegacion del usuario = cancelacion,
+            # no fallo del step. El worker emitira cancelled.
+            self._cancel.set()
+            return
+
+        # P4#12: re-chequear cancel justo antes de invocar.
+        # Un cancel que llega tras la aprobacion pero antes
+        # de call() ejecutaria la tool igualmente.
+        if self._cancel.is_set():
+            result = (
+                "OPERACIÓN CANCELADA: cancelado antes de "
+                "ejecutar la herramienta."
+            )
+            self._messages.append(
+                {"role": "tool", "content": result},
+            )
+            yield self._emit(
+                MessageCompleted, role="tool", content=result,
+            )
+            yield self._emit(
+                ToolCallCompleted,
+                call_id=call_id,
+                tool_name=name,
+                status="cancelled",
+                summary=result[:120],
+                detail=result,
+                duration_ms=0,
+            )
             return
 
         start = time.monotonic()

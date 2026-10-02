@@ -86,6 +86,8 @@ class AgentWorker(QObject):
         self._step_index = -1
         # Evita emitir finished si el step acabo en error.
         self._error_emitted = False
+        # P4#2: evita emitir cancelled tras senal terminal.
+        self._terminal_emitted = False
 
     # ── contrato ModelClient-side ──────────────────────────
 
@@ -102,6 +104,13 @@ class AgentWorker(QObject):
         with self._confirmation_lock:
             self._confirmation_event = event
             self._confirmation_approved = False
+        # P4#8: cancel puede haber llegado entre el registro
+        # del Event y el emit. Si esta seteado, no esperar.
+        if self._cancel.is_set():
+            with self._confirmation_lock:
+                self._confirmation_event = None
+                self._confirmation_approved = False
+            return False
         self.confirmation_requested.emit(
             name, dict(arguments), reason,
         )
@@ -144,6 +153,7 @@ class AgentWorker(QObject):
     def run(self) -> None:
         """Ejecuta el step. Consume eventos y los traduce a señales."""
         self._error_emitted = False
+        self._terminal_emitted = False
         try:
             for event in self._session.step(self._user_message):
                 self._translate(event)
@@ -152,7 +162,8 @@ class AgentWorker(QObject):
             self.error.emit(str(exc) or type(exc).__name__)
             return
 
-        if self._cancel.is_set():
+        # P4#2: no emitir cancelled tras finished/error.
+        if self._cancel.is_set() and not self._terminal_emitted:
             self.cancelled.emit()
 
     # ── traducción de eventos ──────────────────────────────
@@ -209,6 +220,7 @@ class AgentWorker(QObject):
 
     def _on_agent_error(self, event: AgentError) -> None:
         self._error_emitted = True
+        self._terminal_emitted = True
         self.error.emit(str(event.message))
 
     def _on_step_ended(self, event: StepEnded) -> None:
@@ -220,10 +232,16 @@ class AgentWorker(QObject):
         # y emitimos finished, el siguiente prompt de la cola
         # arrancaria con un turno cancelado a medias.
         if outcome == "cancelled":
-            return  # run() emitira cancelled al salir del for
+            # P4#2/P4#14: emitir cancelled aqui y marcar
+            # terminal. run() no lo re-emitira.
+            self._terminal_emitted = True
+            self.cancelled.emit()
+            return
         if outcome == "failed":
+            self._terminal_emitted = True
             if not self._error_emitted:
                 self.error.emit("El step termino con fallo")
             return
         full_text = self.drain_text()
+        self._terminal_emitted = True
         self.finished.emit(full_text)

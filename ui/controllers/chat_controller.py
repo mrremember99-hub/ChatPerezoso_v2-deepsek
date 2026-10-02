@@ -442,6 +442,7 @@ class ChatController(QObject):
             self._last_model,
             self._last_options,
             self._last_system_prompt,
+            from_queue=True,
         )
 
     # -- editar cola (2026-09-28) -------------------------------------------
@@ -532,11 +533,17 @@ class ChatController(QObject):
             f"Reintentando prompt {current} "
             f"(intento {self._current_retry_count + 1})"
         )
+        # P4#4: quitar el user del intento previo para no
+        # duplicar en el historial.
+        if self.messages and self.messages[-1].get("role") == "user":
+            self.messages.pop()
+            self.renderer.remove_from_last_user()
         self.send(
             self._current_prompt,
             self._last_model,
             self._last_options,
             self._last_system_prompt,
+            from_queue=True,
         )
         return True
 
@@ -560,6 +567,10 @@ class ChatController(QObject):
         self._queue_paused = False
         self._current_prompt = ""
         self._current_retry_count = 0
+        # P4#6: limpiar el plan de fases. Sin esto, la siguiente
+        # cola puede reenviar prompts de fases anteriores.
+        self._phase_plan = None
+        self._phase_bodies.clear()
         current = self._queue_total - len(self._queue)
         self.queue_item_status_changed.emit(current, "cancelled")
         self._stop_queue_with_message("Cola cancelada por el usuario")
@@ -683,7 +694,17 @@ class ChatController(QObject):
         model: str,
         options: dict[str, Any] | None = None,
         system_prompt: str | None = None,
+        *,
+        from_queue: bool = False,
     ) -> None:
+        # P4#9: bloquear send() externo con cola activa.
+        # getattr: tests con __new__ no pasan por __init__.
+        if getattr(self, "_queue_active", False) and not from_queue:
+            self.status.emit(
+                "Hay una cola en curso o en pausa: reanudala, "
+                "saltala o cancelala antes de enviar un mensaje nuevo"
+            )
+            return
         if self._state.is_active or not text or not model:
             return
         self._last_model = model
@@ -914,6 +935,9 @@ class ChatController(QObject):
         self._thread.start()
 
     def cancel(self) -> None:
+        # P4#19: guard contra cancel tardio.
+        if not self._state.is_active:
+            return
         if self._worker is not None:
             self._worker.cancel()
             self._set_state(ChatState.CANCELLING)
@@ -921,6 +945,9 @@ class ChatController(QObject):
     def clear(self) -> None:
         if self._state.is_active:
             return
+        # P4#10: cancelar cola pausada antes de limpiar.
+        if self._queue_paused:
+            self.cancel_paused_queue()
         self.messages.clear()
         if self._persist_timer.isActive():
             self._persist_timer.stop()
