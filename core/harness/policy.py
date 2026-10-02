@@ -95,10 +95,7 @@ class HarnessConfig:
     agent: AgentSpec
     policy: HarnessPolicy = field(default_factory=HarnessPolicy)
 
-    # Flags por slice (S0: todos False excepto estructura).
-    loop_detection_enabled: bool = False
-    health_monitoring_enabled: bool = False
-    durable_enabled: bool = False
+    # Flag por slice vivo.
     completion_verification_enabled: bool = False
 
     # S4-b: limite de rondas del ciclo de agente por step. Cada

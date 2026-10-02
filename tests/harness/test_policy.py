@@ -28,12 +28,10 @@ def test_harness_config_minimo():
         agent=AgentSpec(name="Programador"),
     )
     assert cfg.run_id == "r1"
-    assert cfg.loop_detection_enabled is False
-    assert cfg.durable_enabled is False
     assert isinstance(cfg.policy, HarnessPolicy)
 
 
-def test_flags_por_slice_off_por_defecto():
+def test_completion_verification_off_por_defecto():
     cfg = HarnessConfig(
         run_id="r1",
         workspace_root=Path("/tmp/ws"),
