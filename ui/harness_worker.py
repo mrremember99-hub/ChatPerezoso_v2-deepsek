@@ -93,6 +93,10 @@ class HarnessWorker(QObject):
         self._confirmation_event: threading.Event | None = None
         self._confirmation_approved = False
         self._text_parts: list[str] = []
+        # P3#6: drain_text corre en el hilo de UI (timer),
+        # _on_message_delta en el hilo del worker. Sin lock,
+        # un delta anadido entre el join y el clear se perdia.
+        self._text_parts_lock = threading.Lock()
         self._step_index = -1
         # P3#5: evita emitir finished si el step acabo en error.
         self._error_emitted = False
@@ -193,10 +197,15 @@ class HarnessWorker(QObject):
         self._session.cancel()
 
     def drain_text(self) -> str:
-        """Devuelve y limpia el buffer de texto acumulado."""
-        text = "".join(self._text_parts)
-        self._text_parts.clear()
-        return text
+        """Devuelve y limpia el buffer de texto acumulado.
+
+        P3#6: swap bajo lock. Antes hacia join + clear sin
+        lock, y un delta anadido entre ambos se perdia.
+        """
+        with self._text_parts_lock:
+            parts = self._text_parts
+            self._text_parts = []
+        return "".join(parts)
 
     # -- ciclo -----------------------------------------------------
 
@@ -252,7 +261,8 @@ class HarnessWorker(QObject):
         content = getattr(event, "content", "")
         if not content:
             return
-        self._text_parts.append(content)
+        with self._text_parts_lock:
+            self._text_parts.append(content)
         self.stream_ready.emit()
 
     def _on_tool_requested(self, event: ToolCallRequested) -> None:
