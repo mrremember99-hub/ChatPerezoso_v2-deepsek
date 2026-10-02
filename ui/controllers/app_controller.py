@@ -628,6 +628,17 @@ class AppController(QObject):
             self.mcp = new_bridge
             self._rebuild_composite()
 
+            # P3#21 (auditoria 2026-10-02): reaplicar el hook de
+            # verificacion. _rebuild_composite creo un nuevo
+            # VerificadorProvider con el workspace nuevo, pero
+            # chat_ctrl._verificador_hook seguia apuntando al
+            # bound method del provider viejo. Tras cambiar de
+            # carpeta, cada escritura recibia
+            # "[VERIFICACION] ERROR: archivo no encontrado" (o
+            # verificaba un fichero homonimo del workspace
+            # anterior).
+            self._apply_verificador(self.config.verificador_enabled)
+
             self.agent_ctrl.set_available_tools(self._all_tool_names())
             self._apply_agent(self.agent_ctrl.active_agent())
 
