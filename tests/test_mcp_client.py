@@ -54,7 +54,11 @@ def test_kill_orphans_si_mata_con_hint(monkeypatch):
 
     class FakeServer:
         command = "npx"
-        args = ["-y", "/Users/x/ws"]  # con /
+        args = ["-y", "@scope/pkg"]  # paquete npm, no workspace
+        # P3#11 (2026-10-02): el identificador del workspace
+        # ahora viene de `cwd` (preferente) o del ultimo arg
+        # que sea un directorio absoluto existente.
+        cwd = "/Users/x/ws"
 
     terminated = []
 
