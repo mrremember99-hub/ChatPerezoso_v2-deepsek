@@ -259,6 +259,27 @@ class CachedToolProvider:
     def requires_confirmation(self, name: str) -> bool:
         return self.source.requires_confirmation(name)
 
+    def invalidate(self) -> None:
+        """P3#20 (auditoria 2026-10-02): propaga invalidacion.
+
+        AppController._on_mcp_servers_changed hace
+        `getattr(self.composite, 'invalidate', None)` sobre el
+        CachedToolProvider. Sin este metodo, la invalidacion era
+        un no-op silencioso y las tools mcp__* activadas tras
+        el arranque nunca llegaban al modelo.
+
+        Limpia dos niveles: (1) la cache de catalogo del source
+        (CompositeToolProvider) si la soporta; (2) la cache de
+        resultados (ToolCache) porque el conjunto de tools
+        cambio y las respuestas cacheadas pueden ser obsoletas.
+        """
+        source_invalidate = getattr(
+            self.source, "invalidate", None,
+        )
+        if callable(source_invalidate):
+            source_invalidate()
+        self.cache.invalidate_all()
+
     # -- ejecución -----------------------------------------------------------
 
     def call(
