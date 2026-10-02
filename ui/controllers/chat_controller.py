@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
@@ -71,6 +72,22 @@ _NARRATION_TEMPLATES = {
 }
 
 
+@dataclass
+class RuntimeConfig:
+    """Flags runtime del ChatController.
+
+    Consolidan los antiguos atributos privados. Se mantienen
+    properties de compatibilidad para los tests que acceden
+    directamente a `_auto_approve`, `_auto_approve_shell`,
+    `_loop_detection_enabled` y `_completion_verification_enabled`.
+    """
+
+    auto_approve: bool = False
+    auto_approve_shell: bool = False
+    loop_detection_enabled: bool = False
+    completion_verification_enabled: bool = False
+
+
 class ChatController(QObject):
     streaming_changed = Signal(bool)  # DEPRECADO: usar state_changed
     state_changed = Signal(object)  # ChatState
@@ -132,18 +149,9 @@ class ChatController(QObject):
         self._last_model = ""
         self._last_options: dict[str, Any] | None = None
         self._last_system_prompt = ""
-        # Modo piloto automático: si True, el worker salta el diálogo
-        # de confirmación para las tools. El shell se rige por
-        # `_auto_approve_shell`.
-        self._auto_approve = False
-        # Extensión opt-in: si True, `ejecutar_comando` también se
-        # auto-aprueba. Requiere `_auto_approve=True` para tener efecto.
-        self._auto_approve_shell = False
-        # Harness v3 S1-ter: si True, se inyecta un LoopDetector en
-        # el ChatWorker. OFF por defecto: cero cambios visibles.
-        self._loop_detection_enabled = False
-        # P1.4: completion verification. Aplica al próximo worker.
-        self._completion_verification_enabled = False
+        # Flags runtime consolidados: auto_approve, auto_approve_shell,
+        # loop_detection_enabled, completion_verification_enabled.
+        self._runtime = RuntimeConfig()
         # Hook de verificación post-escritura. Callable o None.
         self._verificador_hook: Any = None
         # Cola de prompts para envío secuencial. Vacía = no hay cola.
@@ -558,6 +566,46 @@ class ChatController(QObject):
         self._stop_queue_with_message("Cola cancelada por el usuario")
         return True
 
+    # -- properties de compatibilidad (RuntimeConfig) -----------
+
+    def _ensure_runtime(self) -> RuntimeConfig:
+        """Lazy init para tests con __new__ sin __init__."""
+        if not hasattr(self, "_runtime"):
+            self._runtime = RuntimeConfig()
+        return self._runtime
+
+    @property
+    def _auto_approve(self) -> bool:
+        return self._ensure_runtime().auto_approve
+
+    @_auto_approve.setter
+    def _auto_approve(self, value: bool) -> None:
+        self._ensure_runtime().auto_approve = bool(value)
+
+    @property
+    def _auto_approve_shell(self) -> bool:
+        return self._ensure_runtime().auto_approve_shell
+
+    @_auto_approve_shell.setter
+    def _auto_approve_shell(self, value: bool) -> None:
+        self._ensure_runtime().auto_approve_shell = bool(value)
+
+    @property
+    def _loop_detection_enabled(self) -> bool:
+        return self._ensure_runtime().loop_detection_enabled
+
+    @_loop_detection_enabled.setter
+    def _loop_detection_enabled(self, value: bool) -> None:
+        self._ensure_runtime().loop_detection_enabled = bool(value)
+
+    @property
+    def _completion_verification_enabled(self) -> bool:
+        return self._ensure_runtime().completion_verification_enabled
+
+    @_completion_verification_enabled.setter
+    def _completion_verification_enabled(self, value: bool) -> None:
+        self._ensure_runtime().completion_verification_enabled = bool(value)
+
     def set_auto_approve(self, enabled: bool) -> None:
         """Activa o desactiva el piloto automático de confirmaciones.
 
@@ -749,7 +797,7 @@ class ChatController(QObject):
 
     def _make_loop_detector(self):
         """Construye un LoopDetector si la flag esta activa."""
-        if not getattr(self, "_loop_detection_enabled", False):
+        if not self._loop_detection_enabled:
             return None
         from core.harness.loop import LoopDetector
         from core.harness.policy import LoopPolicy
@@ -815,15 +863,13 @@ class ChatController(QObject):
                 name="chat", system_prompt=system_prompt or "",
             ),
             auto_approve=bool(
-                getattr(self, "_auto_approve", False),
+                self._auto_approve,
             ),
             auto_approve_shell=bool(
-                getattr(self, "_auto_approve_shell", False),
+                self._auto_approve_shell,
             ),
             completion_verification_enabled=bool(
-                getattr(
-                    self, "_completion_verification_enabled", False,
-                ),
+                self._completion_verification_enabled,
             ),
         )
         # P1.4 (2026-10-01): event_log persistente. Permite
@@ -899,7 +945,7 @@ class ChatController(QObject):
         from ..autopilot_prompt import inject as _inject_autopilot
         system_prompt = _inject_autopilot(
             system_prompt or "",
-            getattr(self, "_auto_approve", False),
+            self._auto_approve,
         )
         self._thread = QThread(self)
         self._worker = self._build_harness_worker(
