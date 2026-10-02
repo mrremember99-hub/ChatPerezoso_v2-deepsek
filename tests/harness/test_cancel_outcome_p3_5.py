@@ -130,3 +130,73 @@ def test_no_auto_approved_no_emite_signal(tmp_path):
     )
     w._on_tool_requested(event)
     assert calls == []
+
+
+# -- P3#9: metadata.arguments propagada ------------------------------
+
+
+def test_metadata_arguments_llega_al_tool_result(tmp_path):
+    """ToolCallRequested cachea args; ToolCallCompleted los adjunta."""
+    from core.harness.events import (
+        ToolCallCompleted, ToolCallRequested,
+    )
+    w = _make_worker(tmp_path)
+    results: list = []
+    w.tool_result.connect(lambda r: results.append(r))
+
+    w._on_tool_requested(ToolCallRequested(
+        seq=1, run_id="r1", ts="2026-10-02T00:00:00+00:00",
+        call_id="tc_1",
+        tool_name="escribir_archivo",
+        arguments={"path": "a.py", "content": "x"},
+        auto_approved=False,
+    ))
+    w._on_tool_completed(ToolCallCompleted(
+        seq=2, run_id="r1", ts="2026-10-02T00:00:00+00:00",
+        call_id="tc_1",
+        tool_name="escribir_archivo",
+        status="ok",
+        summary="ok",
+        detail="ok",
+        duration_ms=1,
+    ))
+    assert len(results) == 1
+    assert results[0].metadata["arguments"]["path"] == "a.py"
+
+
+def test_metadata_vacia_si_no_hay_call_id(tmp_path):
+    from core.harness.events import ToolCallCompleted
+    w = _make_worker(tmp_path)
+    results: list = []
+    w.tool_result.connect(lambda r: results.append(r))
+
+    w._on_tool_completed(ToolCallCompleted(
+        seq=2, run_id="r1", ts="2026-10-02T00:00:00+00:00",
+        call_id="tc_huerfano",
+        tool_name="escribir_archivo",
+        status="ok",
+        summary="ok",
+        detail="ok",
+        duration_ms=1,
+    ))
+    assert results[0].metadata == {}
+
+
+def test_cache_no_crece_indefinidamente(tmp_path):
+    """Al consumir el call_id, se saca del dict."""
+    from core.harness.events import (
+        ToolCallCompleted, ToolCallRequested,
+    )
+    w = _make_worker(tmp_path)
+    w._on_tool_requested(ToolCallRequested(
+        seq=1, run_id="r1", ts="2026-10-02T00:00:00+00:00",
+        call_id="tc_1",
+        tool_name="t", arguments={"x": 1}, auto_approved=False,
+    ))
+    assert "tc_1" in w._pending_args
+    w._on_tool_completed(ToolCallCompleted(
+        seq=2, run_id="r1", ts="2026-10-02T00:00:00+00:00",
+        call_id="tc_1", tool_name="t", status="ok",
+        summary="", detail="", duration_ms=0,
+    ))
+    assert "tc_1" not in w._pending_args

@@ -93,6 +93,10 @@ class HarnessWorker(QObject):
         self._confirmation_event: threading.Event | None = None
         self._confirmation_approved = False
         self._text_parts: list[str] = []
+        # P3#9: cachear arguments por call_id. ToolCallCompleted
+        # no lleva arguments, pero el trace del turno siguiente
+        # los necesita para el hint `tool(path)`.
+        self._pending_args: dict[str, dict] = {}
         # P3#6: drain_text corre en el hilo de UI (timer),
         # _on_message_delta en el hilo del worker. Sin lock,
         # un delta anadido entre el join y el clear se perdia.
@@ -267,6 +271,14 @@ class HarnessWorker(QObject):
 
     def _on_tool_requested(self, event: ToolCallRequested) -> None:
         name = str(event.tool_name)
+        # P3#9: cachear args para adjuntarlos a ToolResult.metadata
+        # cuando llegue ToolCallCompleted (que no lleva args).
+        call_id = str(getattr(event, "call_id", ""))
+        if call_id:
+            args = getattr(event, "arguments", None)
+            self._pending_args[call_id] = (
+                dict(args) if isinstance(args, dict) else {}
+            )
         self.tool.emit(name)
         # P3#7: propagar el flag auto_approved para que la UI
         # muestre "Auto-aprobado: X". Sin esto, las operaciones
@@ -277,6 +289,12 @@ class HarnessWorker(QObject):
 
     def _on_tool_completed(self, event: ToolCallCompleted) -> None:
         status = str(event.status)
+        call_id = str(getattr(event, "call_id", ""))
+        # P3#9: recuperar args cacheados en ToolCallRequested.
+        args = self._pending_args.pop(call_id, {}) if call_id else {}
+        metadata: dict = {}
+        if args:
+            metadata["arguments"] = args
         result = ToolResult(
             tool_name=str(event.tool_name),
             summary=str(event.summary),
@@ -284,7 +302,7 @@ class HarnessWorker(QObject):
             is_error=status == "error",
             is_cancelled=status == "cancelled",
             duration_ms=int(event.duration_ms),
-            metadata={},
+            metadata=metadata,
         )
         self.tool_result.emit(result)
 
