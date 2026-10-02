@@ -615,8 +615,8 @@ class ChatController(QObject):
         siempre confirma.
         """
         self._auto_approve = bool(enabled)
-        if self._worker is not None:
-            self._worker.auto_approve = self._auto_approve
+        # Aplica al proximo worker: _build_harness_worker
+        # reconstruye HarnessConfig desde _runtime en cada send.
         # Cascada: si el piloto principal se apaga, la extensión de
         # shell también. Así nunca queda un estado inconsistente.
         if not enabled:
@@ -631,8 +631,7 @@ class ChatController(QObject):
         """
         enabled = bool(enabled) and self._auto_approve
         self._auto_approve_shell = enabled
-        if self._worker is not None:
-            self._worker.auto_approve_shell = enabled
+        # Aplica al proximo worker (ver set_auto_approve).
 
     def set_loop_detection_enabled(self, enabled: bool) -> None:
         """Activa/desactiva loop detection para el proximo worker.
@@ -654,8 +653,8 @@ class ChatController(QObject):
         del archivo y devuelve texto (vacío si OK).
         """
         self._verificador_hook = hook
-        if self._worker is not None:
-            self._worker.verificador_hook = hook
+        # Aplica al proximo worker: _build_harness_worker pasa
+        # self._verificador_hook a HarnessSession al construir.
 
     def set_current_model(self, model: str) -> None:
         # Si el modelo cambia, el ContextWindow cacheado apunta al
