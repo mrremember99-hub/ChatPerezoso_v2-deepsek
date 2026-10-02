@@ -830,6 +830,19 @@ class ChatController(QObject):
         # validar features del harness en vivo (antes volabamos
         # a ciegas: sin event_log los eventos se emitian pero no
         # se guardaban). El log es thread-safe (RLock propio).
+        #
+        # P3#8 (auditoria 2026-10-02): telemetria POR STEP.
+        # Un directorio nuevo por step (run_id distinto), sin
+        # retencion ni resume. `session.close()` no se llama
+        # desde el controller, asi que RunEnded no se emite y
+        # `apply_retention` no corre. Es aceptado por diseño:
+        # hoy el EventLog sirve solo para inspeccion puntual,
+        # no para reconstruir runs. Si en el futuro se quiere
+        # resume tras crash, habria que:
+        #   1. run_id estable por conversacion (no por step).
+        #   2. llamar a session.close() al cerrar la conversacion.
+        #   3. invocar apply_retention periodicamente.
+        # Mientras no haya caso de uso, se deja como esta.
         event_log = EventLog(storage / "events.db")
         session = HarnessSession(
             cfg,
