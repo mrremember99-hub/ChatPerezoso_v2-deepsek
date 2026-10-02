@@ -89,5 +89,6 @@ def test_mcp_error_result_still_prefixed_and_truncated():
         content = [type("T", (), {"text": "y" * (MCP_MAX * 2)})()]
 
     text = MCPClient._result_to_text(FakeResult())
-    assert text.startswith("ERROR MCP:")
+    # P3#10 (2026-10-02): prefijo de tool distinto del transporte.
+    assert text.startswith("ERROR TOOL MCP:")
     assert "truncado" in text

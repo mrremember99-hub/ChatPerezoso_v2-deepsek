@@ -69,7 +69,10 @@ def test_error_string_content_truncado(monkeypatch):
         is_error = True
 
     out = _result_to_text(R())
-    assert out.startswith("ERROR MCP: ")
+    # P3#10 (2026-10-02): el prefijo de error de TOOL cambio
+    # a "ERROR TOOL MCP: " para distinguirlo de fallo de
+    # transporte (que sigue siendo "ERROR MCP:").
+    assert out.startswith("ERROR TOOL MCP: ")
     assert "truncado" in out
 
 
