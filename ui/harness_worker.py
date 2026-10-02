@@ -8,7 +8,7 @@ Traduce eventos del harness a señales Qt. El adapter
 worker traduce eventos del harness a señales de UI.
 
 Señales sin equivalente en el harness (por ahora vacías):
-  · tool_auto_approved — el harness no emite un evento aparte.
+  · tool_auto_approved — emitido si ToolCallRequested.auto_approved.
   · metrics_updated    — idem (los tokens van en métricas de
                          ChatWorker, no del harness).
   · summary_ready      — el resumen rolling no está portado a S4;
@@ -266,7 +266,14 @@ class HarnessWorker(QObject):
         self.stream_ready.emit()
 
     def _on_tool_requested(self, event: ToolCallRequested) -> None:
-        self.tool.emit(str(event.tool_name))
+        name = str(event.tool_name)
+        self.tool.emit(name)
+        # P3#7: propagar el flag auto_approved para que la UI
+        # muestre "Auto-aprobado: X". Sin esto, las operaciones
+        # auto-aprobadas (escribir, ejecutar_comando) ocurrian
+        # sin ningun aviso visible.
+        if getattr(event, "auto_approved", False):
+            self.tool_auto_approved.emit(name)
 
     def _on_tool_completed(self, event: ToolCallCompleted) -> None:
         status = str(event.status)

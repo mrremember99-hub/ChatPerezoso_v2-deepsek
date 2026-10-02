@@ -88,3 +88,45 @@ def test_failed_con_error_previo_no_duplica(tmp_path):
 
     w._on_step_ended(_ended("failed"))
     assert calls["error"] == 0
+
+
+# -- P3#7: auto_approved propagado ----------------------------------
+
+
+def test_auto_approved_emite_signal(tmp_path):
+    """ToolCallRequested con auto_approved=True emite la señal."""
+    from core.harness.events import ToolCallRequested
+    w = _make_worker(tmp_path)
+    calls: list[str] = []
+    w.tool_auto_approved.connect(lambda name: calls.append(name))
+
+    event = ToolCallRequested(
+        seq=1,
+        run_id="r1",
+        ts="2026-10-02T00:00:00+00:00",
+        call_id="tc_1",
+        tool_name="escribir_archivo",
+        arguments={"path": "a.py"},
+        auto_approved=True,
+    )
+    w._on_tool_requested(event)
+    assert calls == ["escribir_archivo"]
+
+
+def test_no_auto_approved_no_emite_signal(tmp_path):
+    from core.harness.events import ToolCallRequested
+    w = _make_worker(tmp_path)
+    calls: list[str] = []
+    w.tool_auto_approved.connect(lambda name: calls.append(name))
+
+    event = ToolCallRequested(
+        seq=1,
+        run_id="r1",
+        ts="2026-10-02T00:00:00+00:00",
+        call_id="tc_1",
+        tool_name="escribir_archivo",
+        arguments={"path": "a.py"},
+        auto_approved=False,
+    )
+    w._on_tool_requested(event)
+    assert calls == []
