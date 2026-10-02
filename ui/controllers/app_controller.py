@@ -800,7 +800,11 @@ class AppController(QObject):
             # arbol llama a self.tools.call directamente, saltando
             # el CachedToolProvider. Invalidar manualmente para
             # que el proximo listado no muestre el archivo borrado.
-            self.composite.cache.invalidate_all()
+            # getattr defensivo (regla #5): tests con __new__ no
+            # asignan composite.
+            composite = getattr(self, "composite", None)
+            if composite is not None:
+                composite.cache.invalidate_all()
 
     @Slot(object)
     def _on_state_changed(self, state: ChatState) -> None:
