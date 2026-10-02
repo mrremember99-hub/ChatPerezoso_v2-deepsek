@@ -1220,9 +1220,20 @@ class ChatController(QObject):
         worker = self._worker
         if worker is None:
             return
-        approved = confirm_tool(
-            self._parent_widget, name, arguments, reason=reason,
-        )
+        # P3#15 (auditoria 2026-10-02): si confirm_tool crashea
+        # (args malformados del modelo, bugs en el dialogo),
+        # resolve_confirmation nunca se llama y el worker queda
+        # bloqueado 600s. Fallback: denegar por seguridad.
+        approved = False
+        try:
+            approved = confirm_tool(
+                self._parent_widget, name, arguments, reason=reason,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "confirm_tool fallo; denegando por seguridad",
+            )
+            approved = False
         # Recheck: durante el event loop anidado del dialogo, _cleanup
         # puede haber puesto self._worker a None (cancelacion, cierre
         # de ventana). Sin este recheck, resolve_confirmation falla

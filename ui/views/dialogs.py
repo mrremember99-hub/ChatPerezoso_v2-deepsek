@@ -53,7 +53,14 @@ def _confirm_shell(
 
     command = str(arguments.get("command", ""))
     cwd = str(arguments.get("cwd", "."))
-    timeout = arguments.get("timeout_seconds", 30)
+    # P3#15: timeout_seconds puede llegar como str o None
+    # desde el modelo. int() directo crasheaba el slot
+    # _on_confirmation -> worker bloqueado hasta timeout.
+    raw_timeout = arguments.get("timeout_seconds", 30)
+    try:
+        timeout = int(raw_timeout) if raw_timeout is not None else 30
+    except (TypeError, ValueError):
+        timeout = 30
     risks = analyze_risk(command)
 
     dialog = QDialog(parent)
@@ -101,7 +108,7 @@ def _confirm_shell(
     # diálogo, que sí es nuestro.
     meta = QLabel(
         f"<b>Directorio:</b> {html.escape(str(cwd))} &nbsp;&nbsp; "
-        f"<b>Timeout:</b> {int(timeout)} s"
+        f"<b>Timeout:</b> {timeout} s"
     )
     meta.setTextFormat(Qt.TextFormat.RichText)
     layout.addWidget(meta)
