@@ -148,7 +148,14 @@ class MCPController(QObject):
             return
         self._dead.discard(server_id)
         self.status.emit(f"Reconectando MCP «{server_id}»…")
-        self._connect(server_id, config.command, args=config.args)
+        # P3#12 (auditoria 2026-10-02): propagar env tambien.
+        # Sin esto, un servidor con tokens por entorno arrancaba
+        # sin ellos tras reconectar, mientras toggle/rebind si
+        # los pasaban (inconsistencia).
+        self._connect(
+            server_id, config.command,
+            args=config.args, env=config.env,
+        )
 
     def emit_current_state(self) -> None:
         """Fuerza el envío de servers_changed con el estado actual.
@@ -248,6 +255,20 @@ class MCPController(QObject):
 
     @Slot(str, object, list)
     def _on_loaded(self, server_id, client, tools):
+        # P3#13 (auditoria 2026-10-02): si el usuario desactivo
+        # el servidor mientras conectaba, no activarlo. Antes
+        # quedaba entry.enabled=False pero con tools expuestas
+        # al modelo (inconsistencia).
+        entry = self.entries_by_id().get(server_id)
+        if entry is not None and not entry.enabled:
+            try:
+                close = getattr(client, "close", None)
+                if callable(close):
+                    close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._emit_changed()
+            return
         try:
             self.bridge.activate(server_id, client, tools)
             count = sum(

@@ -570,6 +570,12 @@ class AppController(QObject):
             return
         if model == self.view.sidebar.current_model():
             self.view.sidebar.set_capabilities("unknown")
+            # P3#23 (auditoria 2026-10-02): no heredar el limite
+            # del modelo anterior. Si pasas de 131k a 8k y
+            # /api/show falla (timeout de 5s), sin esto la poda
+            # presupuesta con 131k y Ollama trunca silencioso.
+            # 0 activa el fallback de 4096 en el controller.
+            self.chat_ctrl.set_context_limit(0)
 
     def _on_caps_thread_finished(self) -> None:
         # Un QThread acaba de terminar. Si hay un modelo pendiente
