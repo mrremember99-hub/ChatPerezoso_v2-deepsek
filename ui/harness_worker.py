@@ -94,6 +94,8 @@ class HarnessWorker(QObject):
         self._confirmation_approved = False
         self._text_parts: list[str] = []
         self._step_index = -1
+        # P3#5: evita emitir finished si el step acabo en error.
+        self._error_emitted = False
 
     # -- puente hacia la session -----------------------------------
 
@@ -200,6 +202,7 @@ class HarnessWorker(QObject):
 
     def run(self) -> None:
         """Ejecuta el step. Consume eventos y los traduce a señales."""
+        self._error_emitted = False
         try:
             try:
                 for event in self._session.step(self._user_message):
@@ -285,12 +288,24 @@ class HarnessWorker(QObject):
         self.loop_aborted.emit(str(event.detector), str(event.reason))
 
     def _on_harness_error(self, event: HarnessError) -> None:
+        self._error_emitted = True
         self.error.emit(str(event.message))
 
     def _on_step_ended(self, event: StepEnded) -> None:
         self._step_index = int(event.step_index)
-        # Si hubo error, ya se emitió desde HarnessError. Emitimos
-        # finished de todas formas para que ChatController cierre el
-        # estado (mismo patrón que ChatWorker).
+        outcome = str(event.outcome)
+        # P3#5: finished vs cancelled/error son excluyentes.
+        # ChatController._on_done interpreta finished como
+        # "turno completado": añade el parcial al historial y
+        # avanza la cola. Si el step acabo en cancel o error y
+        # emitimos finished, el siguiente prompt de la cola
+        # arrancaria con un turno cancelado a medias.
+        if outcome == "cancelled":
+            return  # run() emitira cancelled al salir del for
+        if outcome == "failed":
+            if not self._error_emitted:
+                # Sin HarnessError explicito (p.ej. LoopAborted).
+                self.error.emit("El step termino con fallo")
+            return
         full_text = self.drain_text()
         self.finished.emit(full_text)
