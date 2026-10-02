@@ -9,18 +9,12 @@ from PySide6.QtWidgets import QWidget
 
 from core.context_window import ContextWindow
 from core.history import AsyncHistoryWriter, HistoryStore
-from core.model_capabilities import is_model_available
 from core.models_config import is_verified_tool_model
 from core.ollama import is_textual_tool_failure
 from core.prompt_phases import (
     DetectedPhases,
     build_phase_prompt,
     detect_phases,
-)
-from core.session_summary import (
-    SessionSummary,
-    build_summary_prompt,
-    format_summary_block,
 )
 from core.shutdown import remaining
 from core.tool_provider import ToolProvider
@@ -173,15 +167,6 @@ class ChatController(QObject):
         self._current_prompt: str = ""
         # Reintentos del prompt actual. Solo informativo.
         self._current_retry_count: int = 0
-        # Resumen rolling de la sesion (Hueco 2). Se regenera
-        # cada 20 mensajes, max 2 ciclos. Se inyecta al system
-        # prompt del siguiente turno.
-        self._session_summary = SessionSummary()
-        # Modelo para el resumen. Pequeno y rapido por diseno:
-        # el resumen es una tarea simple y no merece el grande.
-        self._summary_model: str = summary_model or "qwen3:1.7b"
-        # Aviso unico por sesion si el modelo no esta instalado (D6).
-        self._summary_model_warned: bool = False
         self._current_actions: list[ToolResult] = []
         # Fallos consecutivos de tool calling textual. Reset:
         # tras mostrar el dialogo, tras un turno con tool calls
@@ -213,27 +198,6 @@ class ChatController(QObject):
         self._stream_timer.timeout.connect(self._drain_stream)
 
     # -- API pública ---------------------------------------------------------
-    def _summary_model_available(self) -> bool:
-        """Comprueba disponibilidad del modelo de resumen (D6).
-
-        Cacheado 60s via core.model_capabilities.is_model_available.
-        Aviso una sola vez por sesion si no esta: el resumen se
-        deshabilita pero el chat sigue funcionando.
-        """
-        host = getattr(self.client, "host", "")
-        if not host or not self._summary_model:
-            return False
-        ok = is_model_available(host, self._summary_model)
-        if not ok and not self._summary_model_warned:
-            self._summary_model_warned = True
-            logger.warning(
-                "Modelo de resumen %r no disponible en %s; el "
-                "resumen de sesion queda deshabilitado hasta que "
-                "este instalado.",
-                self._summary_model, host,
-            )
-        return ok
-
     @property
     def state(self) -> ChatState:
         """Estado actual del chat."""
@@ -716,49 +680,12 @@ class ChatController(QObject):
         self.renderer.insert_user_message(text)
         self._append_message({"role": "user", "content": text})
         self.renderer.reset()
-        # Resumen rolling (Hueco 2) — D1 (auditoria 2026-09-26):
-        # el calculo se movio al ChatWorker. Aqui SOLO se construye
-        # el prompt (puro, sin red) si toca. El worker lo envia al
-        # modelo al terminar el turno y emite summary_ready.
-        summary_prompt = ""
-        summary_new_index = 0
-        _summary = getattr(self, "_session_summary", None)
-        if (
-            _summary is not None
-            and _summary.should_update(len(self.messages))
-            and self._summary_model_available()
-        ):
-            summary_prompt = build_summary_prompt(
-                self.messages,
-                keep_recent=0,
-                previous_summary=_summary.text,
-                since_index=_summary.last_message_count,
-            )
-            if summary_prompt:
-                summary_new_index = len(self.messages)
         # Trace del turno anterior: leer ANTES de limpiar
         # _current_actions. Los tool_results no van al historial
         # persistente, asi que sin esto el modelo no sabe que
         # tools se ejecutaron en el turno inmediatamente anterior.
         trace = self._build_tool_trace()
         effective_system_prompt = self._last_system_prompt or ""
-        # Inyectar resumen de sesion ANTES del system base si
-        # existe. Formato: [RESUMEN DE LA SESION]\n...\n\n<base>
-        summary = getattr(self, "_session_summary", None)
-        summary_text = summary.text if summary is not None else ""
-        if summary_text:
-            # H2 (auditoria 2026-09-26): base del agente PRIMERO,
-            # resumen despues. Antes el resumen (hasta 2k chars)
-            # desplazaba las instrucciones del rol, degradando
-            # instruction-following en modelos con atencion debil
-            # a tokens iniciales largos.
-            effective_system_prompt = (
-                effective_system_prompt
-                + "\n\n"
-                + summary_text
-                if effective_system_prompt.strip()
-                else summary_text
-            )
         if trace:
             effective_system_prompt = (
                 effective_system_prompt + "\n\n---\n\n" + trace
@@ -772,8 +699,6 @@ class ChatController(QObject):
             model,
             self._last_options,
             effective_system_prompt,
-            summary_prompt,
-            summary_new_index,
         )
 
     def regenerate(self, model: str) -> None:
@@ -893,8 +818,6 @@ class ChatController(QObject):
         model,
         options=None,
         system_prompt="",
-        summary_prompt="",
-        summary_new_index=0,
     ):
         # Piloto automatico: inyectar el bloque al FINAL
         # del system prompt (despues de summary y trace,
@@ -923,8 +846,6 @@ class ChatController(QObject):
         self._worker.tool_result.connect(self._on_tool_result)
         self._worker.confirmation_requested.connect(self._on_confirmation)
         self._worker.tool_auto_approved.connect(self._on_tool_auto_approved)
-        self._worker.metrics_updated.connect(self._on_worker_metrics)
-        self._worker.summary_ready.connect(self._on_summary_ready)
         self._worker.finished.connect(self._on_done)
         self._worker.error.connect(self._on_error)
         self._worker.cancelled.connect(self._on_cancelled)
@@ -952,10 +873,6 @@ class ChatController(QObject):
         if self._persist_timer.isActive():
             self._persist_timer.stop()
         self.store.clear()
-        # Nueva conversacion: resumen rolling a cero.
-        summary = getattr(self, "_session_summary", None)
-        if summary is not None:
-            summary.reset()
         self.conversation_changed.emit()
 
     def _reset_phase_history(self) -> None:
@@ -973,11 +890,6 @@ class ChatController(QObject):
         """
         self.messages.clear()
         self._current_actions.clear()
-        # Cada fase es una conversacion independiente: el resumen
-        # de una fase no debe filtrarse a la siguiente.
-        summary = getattr(self, "_session_summary", None)
-        if summary is not None:
-            summary.reset()
         self.conversation_changed.emit()
 
     def shutdown(self, deadline: float | None = None) -> bool:
@@ -1271,44 +1183,33 @@ class ChatController(QObject):
             f"Auto-aprobado: {name}", active=False
         )
 
-    def _on_summary_ready(self, raw: str, new_index: int) -> None:
-        """Aplica el resumen generado por el ChatWorker (D1).
+    def _emit_client_metrics(self) -> None:
+        """P4#11: emitir métricas del cliente tras el step.
 
-        Llega en el hilo de UI (Qt queued connection, porque el
-        worker vive en un QThread). `new_index` es el
-        `len(messages)` en el momento del send; el resumen cubre
-        los mensajes desde el ultimo `last_message_count` hasta
-        ahi, sin huecos.
+        Defensivo: tests con __new__ no siempre setean `client`.
+        Si no hay cliente o no expone el método, no hace nada.
         """
-        summary = getattr(self, "_session_summary", None)
-        if summary is None:
+        client = getattr(self, "client", None)
+        if client is None:
             return
-        # Auditoria 2026-09-27: descartar resumen stale. Si el
-        # historial se trunco (regenerate) o vacio (clear)
-        # mientras el worker resumia, `new_index` apunta a un
-        # historial que ya no existe. Aplicarlo congelaria el
-        # resumen para siempre: should_update veria
-        # new_since = len(messages) - last_message_count < 0.
-        if new_index > len(self.messages):
-            logger.info(
-                "Resumen descartado: new_index=%d > len(messages)=%d "
-                "(historial truncado durante la generacion).",
-                new_index, len(self.messages),
-            )
-            return
-        if new_index <= summary.last_message_count:
-            # Retroceso o sin avance: no aplicar.
-            return
-        block = format_summary_block(raw)
-        if not block:
-            return
-        summary.apply(block, new_index)
-        logger.info(
-            "Resumen de sesion actualizado (%d ciclos, %d chars)",
-            summary.cycles, len(block),
-        )
+        for name in (
+            "last_round_metrics", "get_last_metrics",
+            "get_metrics",
+        ):
+            getter = getattr(client, name, None)
+            if not callable(getter):
+                continue
+            try:
+                m = getter()
+            except Exception:  # noqa: BLE001
+                continue
+            if m:
+                self._on_worker_metrics(m)
+                return
 
     def _on_done(self, result: str) -> None:
+        # P4#11: emitir métricas del cliente antes del flush final.
+        self._emit_client_metrics()
         # Flush final del buffer antes de aplicar Markdown. Sin esto,
         # el texto de los últimos 32 ms se perdería.
         self._drain_stream()

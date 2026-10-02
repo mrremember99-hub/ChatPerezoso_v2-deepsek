@@ -676,6 +676,16 @@ class AgentSession:
         except Exception:  # noqa: BLE001
             return
 
+        # P4#3: no emitir VerificationRun cuando no hay comando
+        # real de verificación. El CompletionVerifier no ejecuta
+        # `verification_command`; sin él, emitir un evento vacío
+        # con status="verified" da falsa sensación de verificación.
+        if (
+            result.status == "verified"
+            and not phase.verification_command
+        ):
+            return
+
         issues: list[dict] = []
         if result.status != "verified":
             issues.append({

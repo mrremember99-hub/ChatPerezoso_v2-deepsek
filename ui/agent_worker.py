@@ -54,11 +54,9 @@ class AgentWorker(QObject):
     tool_result = Signal(object)          # ToolResult
     confirmation_requested = Signal(str, object, str)
     tool_auto_approved = Signal(str)
-    metrics_updated = Signal(object)
     finished = Signal(str)
     cancelled = Signal()
     error = Signal(str)
-    summary_ready = Signal(str, int)
 
     def __init__(
         self,
