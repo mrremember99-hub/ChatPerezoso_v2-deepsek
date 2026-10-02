@@ -48,7 +48,6 @@ class CompletionPolicy:
     enabled: bool = True
     require_tool_execution: bool = True
     require_verification_pass: bool = True
-    max_auto_continuations: int = 3
 
 
 def parse_phases(prompt: str) -> list[PhaseSpec]:
@@ -157,46 +156,3 @@ class CompletionVerifier:
 
         return CompletionResult(status="verified")
 
-
-class AutoContinuation:
-    """Cuenta auto-continuaciones y decide cuando ceder al humano.
-
-    Regla (Anthropic 2026): max 3 auto-continuations sin progreso
-    antes de forzar revision humana.
-    """
-
-    def __init__(self, policy: CompletionPolicy | None = None) -> None:
-        self.policy = policy or CompletionPolicy()
-        self._count = 0
-
-    def reset(self) -> None:
-        self._count = 0
-
-    @property
-    def count(self) -> int:
-        return self._count
-
-    def should_continue(self, result: CompletionResult) -> bool:
-        """True si conviene enviar otro prompt de continuacion."""
-        if result.status == "verified":
-            self._count = 0
-            return False
-        if self._count >= self.policy.max_auto_continuations:
-            return False
-        self._count += 1
-        return True
-
-    def build_prompt(
-        self, phase: PhaseSpec, result: CompletionResult,
-    ) -> str:
-        """Mensaje para el modelo pidiendo que complete lo que falta."""
-        lines = [
-            "[Harness · Auto-continuacion]",
-            "",
-            f"Fase {phase.index} ({phase.name}) incompleta:",
-            result.message or "(sin detalle)",
-            "",
-            "Completa lo que falta y declara la fase como VERIFICADA "
-            "con evidencia real.",
-        ]
-        return "\n".join(lines)

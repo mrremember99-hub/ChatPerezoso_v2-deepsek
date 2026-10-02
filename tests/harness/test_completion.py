@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from core.harness.completion import (
-    AutoContinuation,
     CompletionPolicy,
     CompletionResult,
     CompletionVerifier,
@@ -101,33 +100,3 @@ def test_verifier_disabled_acepta():
     )
     assert r.status == "verified"
 
-
-# ── AutoContinuation ──────────────────────────────────────────
-
-
-def _res(status: str) -> CompletionResult:
-    return CompletionResult(status=status, message="falta algo")
-
-
-def test_autocontinue_se_resetea_con_verified():
-    a = AutoContinuation()
-    assert a.should_continue(_res("incomplete")) is True
-    assert a.count == 1
-    assert a.should_continue(_res("verified")) is False
-    assert a.count == 0
-
-
-def test_autocontinue_limite():
-    a = AutoContinuation(CompletionPolicy(max_auto_continuations=2))
-    assert a.should_continue(_res("incomplete")) is True
-    assert a.should_continue(_res("incomplete")) is True
-    assert a.should_continue(_res("incomplete")) is False
-    assert a.count == 2
-
-
-def test_build_prompt():
-    a = AutoContinuation()
-    p = a.build_prompt(_phase(), _res("incomplete"))
-    assert "Auto-continuacion" in p
-    assert "Fase 1" in p
-    assert "falta algo" in p
