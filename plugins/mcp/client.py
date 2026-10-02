@@ -10,6 +10,8 @@ La conexión se mantiene abierta con un ``AsyncExitStack`` para que el
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import asyncio
 import inspect
 import threading
@@ -207,12 +209,34 @@ class MCPClient:
         except ImportError:
             return
 
-        # El workspace aparece como uno de los args del servidor.
+        # P3#11 (auditoria 2026-10-02): el identificador del
+        # workspace era el PRIMER arg con "/", que con npx
+        # (`-y`, `@scope/pkg`, `<ws>`) era el nombre del paquete
+        # npm, no el workspace. Consecuencias:
+        #   - no mataba nada (cmdline de node no contiene
+        #     el nombre del paquete en formato npx), o
+        #   - mataba procesos de otros proyectos si la cadena
+        #     colisionaba.
+        # Estrategia: usar `cwd` si esta definido; si no, el
+        # ULTIMO arg que sea un directorio absoluto existente.
         workspace_hint: str | None = None
-        for arg in getattr(self.server, "args", []) or []:
-            if "/" in arg or "\\" in arg:
-                workspace_hint = arg
-                break
+        cwd = getattr(self.server, "cwd", None)
+        if isinstance(cwd, str) and cwd.strip():
+            workspace_hint = cwd
+        else:
+            for arg in reversed(
+                getattr(self.server, "args", []) or []
+            ):
+                if not isinstance(arg, str):
+                    continue
+                if not (arg.startswith("/") or ":" in arg[:3]):
+                    continue
+                try:
+                    if Path(arg).exists():
+                        workspace_hint = arg
+                        break
+                except OSError:
+                    continue
 
         if workspace_hint is None:
             # X1.1 (auditoria externa 2026-09-29): sin un identificador
