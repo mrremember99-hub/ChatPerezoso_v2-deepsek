@@ -9,18 +9,12 @@ from PySide6.QtWidgets import QWidget
 
 from core.context_window import ContextWindow
 from core.history import AsyncHistoryWriter, HistoryStore
-from core.model_capabilities import is_model_available
 from core.models_config import is_verified_tool_model
 from core.ollama import is_textual_tool_failure
 from core.prompt_phases import (
     DetectedPhases,
     build_phase_prompt,
     detect_phases,
-)
-from core.session_summary import (
-    SessionSummary,
-    build_summary_prompt,
-    format_summary_block,
 )
 from core.shutdown import remaining
 from core.tool_provider import ToolProvider
@@ -78,13 +72,12 @@ class RuntimeConfig:
 
     Consolidan los antiguos atributos privados. Se mantienen
     properties de compatibilidad para los tests que acceden
-    directamente a `_auto_approve`, `_auto_approve_shell`,
-    `_loop_detection_enabled` y `_completion_verification_enabled`.
+    directamente a `_auto_approve`, `_auto_approve_shell` y
+    `_completion_verification_enabled`.
     """
 
     auto_approve: bool = False
     auto_approve_shell: bool = False
-    loop_detection_enabled: bool = False
     completion_verification_enabled: bool = False
 
 
@@ -174,15 +167,6 @@ class ChatController(QObject):
         self._current_prompt: str = ""
         # Reintentos del prompt actual. Solo informativo.
         self._current_retry_count: int = 0
-        # Resumen rolling de la sesion (Hueco 2). Se regenera
-        # cada 20 mensajes, max 2 ciclos. Se inyecta al system
-        # prompt del siguiente turno.
-        self._session_summary = SessionSummary()
-        # Modelo para el resumen. Pequeno y rapido por diseno:
-        # el resumen es una tarea simple y no merece el grande.
-        self._summary_model: str = summary_model or "qwen3:1.7b"
-        # Aviso unico por sesion si el modelo no esta instalado (D6).
-        self._summary_model_warned: bool = False
         self._current_actions: list[ToolResult] = []
         # Fallos consecutivos de tool calling textual. Reset:
         # tras mostrar el dialogo, tras un turno con tool calls
@@ -214,27 +198,6 @@ class ChatController(QObject):
         self._stream_timer.timeout.connect(self._drain_stream)
 
     # -- API pública ---------------------------------------------------------
-    def _summary_model_available(self) -> bool:
-        """Comprueba disponibilidad del modelo de resumen (D6).
-
-        Cacheado 60s via core.model_capabilities.is_model_available.
-        Aviso una sola vez por sesion si no esta: el resumen se
-        deshabilita pero el chat sigue funcionando.
-        """
-        host = getattr(self.client, "host", "")
-        if not host or not self._summary_model:
-            return False
-        ok = is_model_available(host, self._summary_model)
-        if not ok and not self._summary_model_warned:
-            self._summary_model_warned = True
-            logger.warning(
-                "Modelo de resumen %r no disponible en %s; el "
-                "resumen de sesion queda deshabilitado hasta que "
-                "este instalado.",
-                self._summary_model, host,
-            )
-        return ok
-
     @property
     def state(self) -> ChatState:
         """Estado actual del chat."""
@@ -443,6 +406,7 @@ class ChatController(QObject):
             self._last_model,
             self._last_options,
             self._last_system_prompt,
+            from_queue=True,
         )
 
     # -- editar cola (2026-09-28) -------------------------------------------
@@ -533,11 +497,17 @@ class ChatController(QObject):
             f"Reintentando prompt {current} "
             f"(intento {self._current_retry_count + 1})"
         )
+        # P4#4: quitar el user del intento previo para no
+        # duplicar en el historial.
+        if self.messages and self.messages[-1].get("role") == "user":
+            self.messages.pop()
+            self.renderer.remove_from_last_user()
         self.send(
             self._current_prompt,
             self._last_model,
             self._last_options,
             self._last_system_prompt,
+            from_queue=True,
         )
         return True
 
@@ -561,6 +531,10 @@ class ChatController(QObject):
         self._queue_paused = False
         self._current_prompt = ""
         self._current_retry_count = 0
+        # P4#6: limpiar el plan de fases. Sin esto, la siguiente
+        # cola puede reenviar prompts de fases anteriores.
+        self._phase_plan = None
+        self._phase_bodies.clear()
         current = self._queue_total - len(self._queue)
         self.queue_item_status_changed.emit(current, "cancelled")
         self._stop_queue_with_message("Cola cancelada por el usuario")
@@ -591,14 +565,6 @@ class ChatController(QObject):
         self._ensure_runtime().auto_approve_shell = bool(value)
 
     @property
-    def _loop_detection_enabled(self) -> bool:
-        return self._ensure_runtime().loop_detection_enabled
-
-    @_loop_detection_enabled.setter
-    def _loop_detection_enabled(self, value: bool) -> None:
-        self._ensure_runtime().loop_detection_enabled = bool(value)
-
-    @property
     def _completion_verification_enabled(self) -> bool:
         return self._ensure_runtime().completion_verification_enabled
 
@@ -615,8 +581,8 @@ class ChatController(QObject):
         siempre confirma.
         """
         self._auto_approve = bool(enabled)
-        # Aplica al proximo worker: _build_harness_worker
-        # reconstruye HarnessConfig desde _runtime en cada send.
+        # Aplica al proximo worker: _build_agent_worker
+        # reconstruye AgentConfig desde _runtime en cada send.
         # Cascada: si el piloto principal se apaga, la extensión de
         # shell también. Así nunca queda un estado inconsistente.
         if not enabled:
@@ -633,13 +599,6 @@ class ChatController(QObject):
         self._auto_approve_shell = enabled
         # Aplica al proximo worker (ver set_auto_approve).
 
-    def set_loop_detection_enabled(self, enabled: bool) -> None:
-        """Activa/desactiva loop detection para el proximo worker.
-
-        No afecta al worker en curso: se aplica al siguiente.
-        """
-        self._loop_detection_enabled = bool(enabled)
-
     def set_completion_verification_enabled(
         self, enabled: bool,
     ) -> None:
@@ -653,8 +612,8 @@ class ChatController(QObject):
         del archivo y devuelve texto (vacío si OK).
         """
         self._verificador_hook = hook
-        # Aplica al proximo worker: _build_harness_worker pasa
-        # self._verificador_hook a HarnessSession al construir.
+        # Aplica al proximo worker: _build_agent_worker pasa
+        # self._verificador_hook a AgentSession al construir.
 
     def set_current_model(self, model: str) -> None:
         # Si el modelo cambia, el ContextWindow cacheado apunta al
@@ -699,7 +658,17 @@ class ChatController(QObject):
         model: str,
         options: dict[str, Any] | None = None,
         system_prompt: str | None = None,
+        *,
+        from_queue: bool = False,
     ) -> None:
+        # P4#9: bloquear send() externo con cola activa.
+        # getattr: tests con __new__ no pasan por __init__.
+        if getattr(self, "_queue_active", False) and not from_queue:
+            self.status.emit(
+                "Hay una cola en curso o en pausa: reanudala, "
+                "saltala o cancelala antes de enviar un mensaje nuevo"
+            )
+            return
         if self._state.is_active or not text or not model:
             return
         self._last_model = model
@@ -711,49 +680,12 @@ class ChatController(QObject):
         self.renderer.insert_user_message(text)
         self._append_message({"role": "user", "content": text})
         self.renderer.reset()
-        # Resumen rolling (Hueco 2) — D1 (auditoria 2026-09-26):
-        # el calculo se movio al ChatWorker. Aqui SOLO se construye
-        # el prompt (puro, sin red) si toca. El worker lo envia al
-        # modelo al terminar el turno y emite summary_ready.
-        summary_prompt = ""
-        summary_new_index = 0
-        _summary = getattr(self, "_session_summary", None)
-        if (
-            _summary is not None
-            and _summary.should_update(len(self.messages))
-            and self._summary_model_available()
-        ):
-            summary_prompt = build_summary_prompt(
-                self.messages,
-                keep_recent=0,
-                previous_summary=_summary.text,
-                since_index=_summary.last_message_count,
-            )
-            if summary_prompt:
-                summary_new_index = len(self.messages)
         # Trace del turno anterior: leer ANTES de limpiar
         # _current_actions. Los tool_results no van al historial
         # persistente, asi que sin esto el modelo no sabe que
         # tools se ejecutaron en el turno inmediatamente anterior.
         trace = self._build_tool_trace()
         effective_system_prompt = self._last_system_prompt or ""
-        # Inyectar resumen de sesion ANTES del system base si
-        # existe. Formato: [RESUMEN DE LA SESION]\n...\n\n<base>
-        summary = getattr(self, "_session_summary", None)
-        summary_text = summary.text if summary is not None else ""
-        if summary_text:
-            # H2 (auditoria 2026-09-26): base del agente PRIMERO,
-            # resumen despues. Antes el resumen (hasta 2k chars)
-            # desplazaba las instrucciones del rol, degradando
-            # instruction-following en modelos con atencion debil
-            # a tokens iniciales largos.
-            effective_system_prompt = (
-                effective_system_prompt
-                + "\n\n"
-                + summary_text
-                if effective_system_prompt.strip()
-                else summary_text
-            )
         if trace:
             effective_system_prompt = (
                 effective_system_prompt + "\n\n---\n\n" + trace
@@ -767,8 +699,6 @@ class ChatController(QObject):
             model,
             self._last_options,
             effective_system_prompt,
-            summary_prompt,
-            summary_new_index,
         )
 
     def regenerate(self, model: str) -> None:
@@ -794,39 +724,29 @@ class ChatController(QObject):
         self.renderer.remove_from_last_user()
         self.send(user_text, model, self._last_options, self._last_system_prompt)
 
-    def _make_loop_detector(self):
-        """Construye un LoopDetector si la flag esta activa."""
-        if not self._loop_detection_enabled:
-            return None
-        from core.harness.loop import LoopDetector
-        from core.harness.policy import LoopPolicy
-        return LoopDetector(LoopPolicy())
-
-    def _build_harness_worker(
+    def _build_agent_worker(
         self, model, options, system_prompt,
     ):
-        """S6-b-2: construye HarnessWorker en lugar de ChatWorker.
+        """Construye AgentWorker para el proximo step.
 
         Precarga el historico sin el ultimo user (que se pasa
         por step) y asigna el confirmation_handler al worker
         despues de construirlo. La session no invoca el handler
         hasta step(), que corre dentro del thread.
         """
-        import tempfile
         import uuid
         from pathlib import Path as _Path
 
-        from core.harness.durable import EventLog
-        from core.harness.ollama_adapter import OllamaAdapter
-        from core.harness.policy import (
+        from core.agent.ollama_adapter import OllamaAdapter
+        from core.agent.policy import (
+            AgentConfig,
             AgentSpec,
-            HarnessConfig,
             ModelSpec,
         )
-        from core.harness.session import HarnessSession
+        from core.agent.session import AgentSession
         from plugins.shell import is_command_allowed
 
-        from ..harness_worker import HarnessWorker
+        from ..agent_worker import AgentWorker
 
         run_id = uuid.uuid4().hex[:12]
         ws_provider = getattr(self, "_workspace_provider", None)
@@ -837,69 +757,40 @@ class ChatController(QObject):
                 ws_root = _Path.cwd()
         else:
             ws_root = _Path.cwd()
-        storage = (
-            _Path(tempfile.gettempdir()) / "cp_harness" / run_id
-        )
 
-        # S6-b-2: sin limite de output, qwen3 puede generar
-        # hasta agotar contexto (UX horrible). El legacy no lo
-        # necesita porque el modelo para solo, pero el harness
-        # anade tools + system prompt mas grandes y a veces no.
-        # Solo aplica si el config no fijo num_predict.
-        _HARNESS_NUM_PREDICT = 2048
+        # Sin limite de output, qwen3 puede generar hasta agotar
+        # contexto (UX horrible). El modelo legacy para solo, pero
+        # con tools + system prompt grande a veces no. Solo aplica
+        # si el config no fijo num_predict.
+        _DEFAULT_NUM_PREDICT = 2048
         _opts = dict(options or {})
         if not _opts.get("num_predict"):
-            _opts["num_predict"] = _HARNESS_NUM_PREDICT
+            _opts["num_predict"] = _DEFAULT_NUM_PREDICT
         adapter = OllamaAdapter(
             self.client, model=model, options=_opts,
         )
-        cfg = HarnessConfig(
+        cfg = AgentConfig(
             run_id=run_id,
             workspace_root=ws_root,
-            storage_dir=storage,
             model=ModelSpec(name=model),
             agent=AgentSpec(
                 name="chat", system_prompt=system_prompt or "",
             ),
-            auto_approve=bool(
-                self._auto_approve,
-            ),
-            auto_approve_shell=bool(
-                self._auto_approve_shell,
-            ),
+            auto_approve=bool(self._auto_approve),
+            auto_approve_shell=bool(self._auto_approve_shell),
             completion_verification_enabled=bool(
                 self._completion_verification_enabled,
             ),
         )
-        # P1.4 (2026-10-01): event_log persistente. Permite
-        # validar features del harness en vivo (antes volabamos
-        # a ciegas: sin event_log los eventos se emitian pero no
-        # se guardaban). El log es thread-safe (RLock propio).
-        #
-        # P3#8 (auditoria 2026-10-02): telemetria POR STEP.
-        # Un directorio nuevo por step (run_id distinto), sin
-        # retencion ni resume. `session.close()` no se llama
-        # desde el controller, asi que RunEnded no se emite y
-        # `apply_retention` no corre. Es aceptado por diseño:
-        # hoy el EventLog sirve solo para inspeccion puntual,
-        # no para reconstruir runs. Si en el futuro se quiere
-        # resume tras crash, habria que:
-        #   1. run_id estable por conversacion (no por step).
-        #   2. llamar a session.close() al cerrar la conversacion.
-        #   3. invocar apply_retention periodicamente.
-        # Mientras no haya caso de uso, se deja como esta.
-        event_log = EventLog(storage / "events.db")
-        session = HarnessSession(
+        session = AgentSession(
             cfg,
             model_client=adapter,
             tool_registry=self.tools,
-            loop_detector=self._make_loop_detector(),
             confirmation_handler=None,
             command_allowed=is_command_allowed,
             verificador_hook=getattr(
                 self, "_verificador_hook", None,
             ),
-            event_log=event_log,
         )
 
         # Localizar el ultimo mensaje user: todo lo anterior va
@@ -918,7 +809,7 @@ class ChatController(QObject):
                 self.messages[user_idx].get("content", ""),
             )
 
-        worker = HarnessWorker(session, user_message)
+        worker = AgentWorker(session, user_message)
         session.confirmation_handler = worker.handle_confirmation
         return worker
 
@@ -927,8 +818,6 @@ class ChatController(QObject):
         model,
         options=None,
         system_prompt="",
-        summary_prompt="",
-        summary_new_index=0,
     ):
         # Piloto automatico: inyectar el bloque al FINAL
         # del system prompt (despues de summary y trace,
@@ -947,7 +836,7 @@ class ChatController(QObject):
             self._auto_approve,
         )
         self._thread = QThread(self)
-        self._worker = self._build_harness_worker(
+        self._worker = self._build_agent_worker(
             model, options, system_prompt,
         )
         self._worker.moveToThread(self._thread)
@@ -957,13 +846,6 @@ class ChatController(QObject):
         self._worker.tool_result.connect(self._on_tool_result)
         self._worker.confirmation_requested.connect(self._on_confirmation)
         self._worker.tool_auto_approved.connect(self._on_tool_auto_approved)
-        self._worker.metrics_updated.connect(self._on_worker_metrics)
-        self._worker.summary_ready.connect(self._on_summary_ready)
-        # Harness v3 S1-ter: señales de loop detection. Solo se
-        # emiten si hay detector inyectado.
-        self._worker.loop_warning.connect(self._on_loop_warning)
-        self._worker.loop_corrective.connect(self._on_loop_corrective)
-        self._worker.loop_aborted.connect(self._on_loop_aborted)
         self._worker.finished.connect(self._on_done)
         self._worker.error.connect(self._on_error)
         self._worker.cancelled.connect(self._on_cancelled)
@@ -974,6 +856,9 @@ class ChatController(QObject):
         self._thread.start()
 
     def cancel(self) -> None:
+        # P4#19: guard contra cancel tardio.
+        if not self._state.is_active:
+            return
         if self._worker is not None:
             self._worker.cancel()
             self._set_state(ChatState.CANCELLING)
@@ -981,14 +866,13 @@ class ChatController(QObject):
     def clear(self) -> None:
         if self._state.is_active:
             return
+        # P4#10: cancelar cola pausada antes de limpiar.
+        if self._queue_paused:
+            self.cancel_paused_queue()
         self.messages.clear()
         if self._persist_timer.isActive():
             self._persist_timer.stop()
         self.store.clear()
-        # Nueva conversacion: resumen rolling a cero.
-        summary = getattr(self, "_session_summary", None)
-        if summary is not None:
-            summary.reset()
         self.conversation_changed.emit()
 
     def _reset_phase_history(self) -> None:
@@ -1006,11 +890,6 @@ class ChatController(QObject):
         """
         self.messages.clear()
         self._current_actions.clear()
-        # Cada fase es una conversacion independiente: el resumen
-        # de una fase no debe filtrarse a la siguiente.
-        summary = getattr(self, "_session_summary", None)
-        if summary is not None:
-            summary.reset()
         self.conversation_changed.emit()
 
     def shutdown(self, deadline: float | None = None) -> bool:
@@ -1304,67 +1183,33 @@ class ChatController(QObject):
             f"Auto-aprobado: {name}", active=False
         )
 
-    def _on_loop_warning(self, detector: str, reason: str) -> None:
-        """El LoopDetector detecto un patron repetitivo (leve)."""
-        self.renderer.insert_narration(
-            f"Loop leve ({detector}): {reason}",
-            active=False,
-        )
+    def _emit_client_metrics(self) -> None:
+        """P4#11: emitir métricas del cliente tras el step.
 
-    def _on_loop_corrective(self, detector: str, reason: str) -> None:
-        """El LoopDetector pide un cambio de estrategia."""
-        self.renderer.insert_narration(
-            f"Loop detectado ({detector}): {reason}. "
-            "El agente deberia cambiar de estrategia.",
-            active=False,
-        )
-
-    def _on_loop_aborted(self, detector: str, reason: str) -> None:
-        """El LoopDetector aborto la sesion. El worker se cancelo."""
-        self.renderer.insert_narration(
-            f"Loop abortado ({detector}): {reason}. "
-            "Sesion cancelada automaticamente.",
-            active=False,
-        )
-
-    def _on_summary_ready(self, raw: str, new_index: int) -> None:
-        """Aplica el resumen generado por el ChatWorker (D1).
-
-        Llega en el hilo de UI (Qt queued connection, porque el
-        worker vive en un QThread). `new_index` es el
-        `len(messages)` en el momento del send; el resumen cubre
-        los mensajes desde el ultimo `last_message_count` hasta
-        ahi, sin huecos.
+        Defensivo: tests con __new__ no siempre setean `client`.
+        Si no hay cliente o no expone el método, no hace nada.
         """
-        summary = getattr(self, "_session_summary", None)
-        if summary is None:
+        client = getattr(self, "client", None)
+        if client is None:
             return
-        # Auditoria 2026-09-27: descartar resumen stale. Si el
-        # historial se trunco (regenerate) o vacio (clear)
-        # mientras el worker resumia, `new_index` apunta a un
-        # historial que ya no existe. Aplicarlo congelaria el
-        # resumen para siempre: should_update veria
-        # new_since = len(messages) - last_message_count < 0.
-        if new_index > len(self.messages):
-            logger.info(
-                "Resumen descartado: new_index=%d > len(messages)=%d "
-                "(historial truncado durante la generacion).",
-                new_index, len(self.messages),
-            )
-            return
-        if new_index <= summary.last_message_count:
-            # Retroceso o sin avance: no aplicar.
-            return
-        block = format_summary_block(raw)
-        if not block:
-            return
-        summary.apply(block, new_index)
-        logger.info(
-            "Resumen de sesion actualizado (%d ciclos, %d chars)",
-            summary.cycles, len(block),
-        )
+        for name in (
+            "last_round_metrics", "get_last_metrics",
+            "get_metrics",
+        ):
+            getter = getattr(client, name, None)
+            if not callable(getter):
+                continue
+            try:
+                m = getter()
+            except Exception:  # noqa: BLE001
+                continue
+            if m:
+                self._on_worker_metrics(m)
+                return
 
     def _on_done(self, result: str) -> None:
+        # P4#11: emitir métricas del cliente antes del flush final.
+        self._emit_client_metrics()
         # Flush final del buffer antes de aplicar Markdown. Sin esto,
         # el texto de los últimos 32 ms se perdería.
         self._drain_stream()

@@ -66,3 +66,6 @@ scripts/eval/results/catalog/
 
 # Dossiers de auditoria externa (foto de fecha, no versionar)
 audit/
+
+# Estado del auditor externo (transitorio)
+PROJECT_STATUS.md

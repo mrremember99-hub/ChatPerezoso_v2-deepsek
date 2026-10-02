@@ -18,7 +18,7 @@ import threading
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
-from core.harness.model import ModelDelta
+from core.agent.model import ModelDelta
 
 if TYPE_CHECKING:
     from core.ollama import OllamaClient

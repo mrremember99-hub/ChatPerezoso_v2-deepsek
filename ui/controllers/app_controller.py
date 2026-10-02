@@ -205,10 +205,6 @@ class AppController(QObject):
         # Verificador: el checkbox y el hook se derivan del mismo flag.
         self.view.sidebar.set_verificador(self.config.verificador_enabled)
         self._apply_verificador(self.config.verificador_enabled)
-        # Harness v3 S1-ter: activar loop detection si config lo pide.
-        self._apply_loop_detection(
-            getattr(self.config, "loop_detection_enabled", False)
-        )
         # P1.4: completion verification (fases OVERPAPER).
         self.chat_ctrl.set_completion_verification_enabled(
             getattr(
@@ -874,15 +870,6 @@ class AppController(QObject):
             )
         else:
             self.view.set_status("Verificador OFF")
-
-    def _apply_loop_detection(self, enabled: bool) -> None:
-        """Activa o desactiva loop detection en el ChatController.
-
-        Sin toggle en la UI todavia: solo se llama al arrancar, leyendo
-        config.loop_detection_enabled. Si se añade un toggle en la
-        sidebar, este es el punto de entrada.
-        """
-        self.chat_ctrl.set_loop_detection_enabled(bool(enabled))
 
     def _apply_verificador(self, enabled: bool) -> None:
         """Construye o retira el hook de verificación.
