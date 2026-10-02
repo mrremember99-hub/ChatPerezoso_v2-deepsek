@@ -625,46 +625,53 @@ class AppController(QObject):
         )
         if not selected:
             return
+        # P3#25 (auditoria 2026-10-02): construir en locales y
+        # asignar al final. Antes, si fallaba despues de
+        # `self.workspace = Workspace(...)` (OSError de sqlite en
+        # get_index, fallo de ToolRegistry), quedaba el workspace
+        # nuevo con self.tools viejo -> estado inconsistente.
         try:
-            self.workspace = Workspace(selected)
-            self.tools = ToolRegistry(
-                self.workspace,
-                ast_index=get_index(self.workspace.root),
+            new_workspace = Workspace(selected)
+            new_tools = ToolRegistry(
+                new_workspace,
+                ast_index=get_index(new_workspace.root),
                 rag_index=get_rag_index(
-                    self.workspace.root, ollama=self.ollama,
+                    new_workspace.root, ollama=self.ollama,
                 ),
             )
-            new_bridge = MCPToolBridge(self.tools)
-
-            self.mcp_ctrl.rebind(new_bridge, self.workspace)
-            self.mcp = new_bridge
-            self._rebuild_composite()
-
-            # P3#21 (auditoria 2026-10-02): reaplicar el hook de
-            # verificacion. _rebuild_composite creo un nuevo
-            # VerificadorProvider con el workspace nuevo, pero
-            # chat_ctrl._verificador_hook seguia apuntando al
-            # bound method del provider viejo. Tras cambiar de
-            # carpeta, cada escritura recibia
-            # "[VERIFICACION] ERROR: archivo no encontrado" (o
-            # verificaba un fichero homonimo del workspace
-            # anterior).
-            self._apply_verificador(self.config.verificador_enabled)
-
-            self.agent_ctrl.set_available_tools(self._all_tool_names())
-            self._apply_agent(self.agent_ctrl.active_agent())
-
-            # El workspace ha cambiado: cualquier resultado cacheado
-            # (listados, lecturas, git status) apunta al workspace viejo.
-            self.composite.cache.invalidate_all()
-
-            self.config.workspace = str(Path(selected).resolve())
-            self.config.save()
-            self.view.sidebar.set_workspace_name(self._workspace_name())
-            self.view.right_panel.set_workspace(self.workspace.root)
-            self.view.set_status("Workspace cambiado")
-        except WorkspaceError as exc:
+            new_bridge = MCPToolBridge(new_tools)
+        except (WorkspaceError, OSError) as exc:
             warn(self.view, "Workspace", str(exc))
+            return
+
+        # A partir de aqui, ningun paso deberia fallar. Si alguno
+        # lanza (bug inesperado), se propaga: preferimos un crash
+        # ruidoso a un estado a medias.
+        self.workspace = new_workspace
+        self.tools = new_tools
+        self.mcp_ctrl.rebind(new_bridge, new_workspace)
+        self.mcp = new_bridge
+        self._rebuild_composite()
+
+        # P3#21 (auditoria 2026-10-02): reaplicar el hook de
+        # verificacion. _rebuild_composite creo un nuevo
+        # VerificadorProvider con el workspace nuevo, pero
+        # chat_ctrl._verificador_hook seguia apuntando al
+        # bound method del provider viejo.
+        self._apply_verificador(self.config.verificador_enabled)
+
+        self.agent_ctrl.set_available_tools(self._all_tool_names())
+        self._apply_agent(self.agent_ctrl.active_agent())
+
+        # Cualquier resultado cacheado (listados, lecturas, git
+        # status) apunta al workspace viejo.
+        self.composite.cache.invalidate_all()
+
+        self.config.workspace = str(Path(selected).resolve())
+        self.config.save()
+        self.view.sidebar.set_workspace_name(self._workspace_name())
+        self.view.right_panel.set_workspace(self.workspace.root)
+        self.view.set_status("Workspace cambiado")
 
     # -- chat ----------------------------------------------------------------
 
