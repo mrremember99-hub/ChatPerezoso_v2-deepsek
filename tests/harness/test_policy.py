@@ -41,5 +41,4 @@ def test_flags_por_slice_off_por_defecto():
         model=ModelSpec(name="x"),
         agent=AgentSpec(name="y"),
     )
-    assert cfg.schema_compilation_enabled is False
     assert cfg.completion_verification_enabled is False

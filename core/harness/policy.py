@@ -99,7 +99,6 @@ class HarnessConfig:
     loop_detection_enabled: bool = False
     health_monitoring_enabled: bool = False
     durable_enabled: bool = False
-    schema_compilation_enabled: bool = False
     completion_verification_enabled: bool = False
 
     # S4-b: limite de rondas del ciclo de agente por step. Cada
