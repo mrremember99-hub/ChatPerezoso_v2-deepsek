@@ -71,6 +71,40 @@ _FIND_DANGEROUS_FLAGS: frozenset[str] = frozenset({
 # -Ii. NO matchea long flags (--interactive, --config).
 _PY_FLAG_WITH_DANGEROUS_CHAR = re.compile(r"^-[A-Za-z]*[cimCIM]")
 
+# P3#3: subcomandos git con doble cara (leer por defecto,
+# escribir con flags). Solo se permite su forma de LISTADO
+# explicita (args todos en _GIT_LISTING_ARGS, o sin args).
+_GIT_DUAL_USE_SUBCOMMANDS: frozenset[str] = frozenset({
+    "config", "branch", "tag", "remote",
+})
+
+# Flags/valores admitidos en subcomandos duales.
+_GIT_LISTING_ARGS: frozenset[str] = frozenset({
+    "--list", "-l", "-a", "-r", "-v", "--verbose",
+    "--get", "--get-all", "--get-regexp", "--show-origin",
+    "--global", "--local", "--system", "--show-signature",
+    "list", "show",
+})
+
+# P3#3: cualquier arg que escriba a fichero. Rechazado en
+# cualquier subcomando (git diff --output, git log -o, etc.).
+_GIT_OUTPUT_FLAGS: tuple[str, ...] = (
+    "--output=", "--output", "-o",
+)
+
+# P3#4: programas read-only que aceptan escribir con flags.
+# tree -o FICHERO escribe; tree sin -o es seguro.
+_TREE_OUTPUT_FLAGS: frozenset[str] = frozenset({
+    "-o", "--output",
+})
+
+# P3#4: modulos python con side effects segun args.
+# json.tool in out escribe out; json.tool in solo lee.
+# pydoc -w MODULO escribe HTML.
+_PYDOC_WRITE_FLAGS: frozenset[str] = frozenset({
+    "-w", "--write",
+})
+
 
 def is_command_allowed(command: str) -> bool:
     """True si el comando puede auto-aprobarse con autopilot+shell ON.
@@ -109,6 +143,8 @@ def is_command_allowed(command: str) -> bool:
         return _find_allowed(args)
     if program == "tail":
         return _tail_allowed(args)
+    if program == "tree":
+        return _tree_allowed(args)
     return True
 
 
@@ -118,11 +154,24 @@ def _git_allowed(args: list[str]) -> bool:
     sub = args[0].lower()
     if sub not in GIT_READONLY_SUBCOMMANDS:
         return False
+    # P3#3: rechazar cualquier arg que escriba a fichero.
+    for a in args[1:]:
+        for flag in _GIT_OUTPUT_FLAGS:
+            if a == flag or a.startswith(flag + "="):
+                return False
     if sub == "stash":
         # `git stash` (list) OK. `git stash drop/pop/apply/...` modifica.
         if len(args) == 1:
             return True
         return len(args) >= 2 and args[1] == "list"
+    # P3#3: subcomandos duales (config/branch/tag/remote) solo en
+    # forma de listado. Sin args = listado; con args, todos deben
+    # estar en la allowlist.
+    if sub in _GIT_DUAL_USE_SUBCOMMANDS:
+        rest = args[1:]
+        if not rest:
+            return True
+        return all(a in _GIT_LISTING_ARGS for a in rest)
     return True
 
 
@@ -148,12 +197,39 @@ def _python_allowed(args: list[str]) -> bool:
         idx = args.index("-m")
         if idx + 1 >= len(args):
             return False
-        return args[idx + 1] in PYTHON_READONLY_MODULES
+        mod = args[idx + 1]
+        if mod not in PYTHON_READONLY_MODULES:
+            return False
+        rest = args[idx + 2:]
+        # P3#4: json.tool in out escribe out. Solo un arg
+        # posicional (el de entrada) es seguro.
+        if mod == "json.tool":
+            positional = [a for a in rest if not a.startswith("-")]
+            if len(positional) > 1:
+                return False
+        # P3#4: pydoc -w MODULO escribe HTML.
+        if mod == "pydoc":
+            for a in rest:
+                if a in _PYDOC_WRITE_FLAGS:
+                    return False
+                if a.startswith("--write="):
+                    return False
+        return True
     # Sin -m: tiene que haber un script (arg que no sea flag).
     for a in args:
         if not a.startswith("-"):
             return True
     return False
+
+
+def _tree_allowed(args: list[str]) -> bool:
+    # P3#4: tree -o FICHERO escribe. Rechazar.
+    for a in args:
+        if a in _TREE_OUTPUT_FLAGS:
+            return False
+        if a.startswith("--output="):
+            return False
+    return True
 
 
 def _find_allowed(args: list[str]) -> bool:
