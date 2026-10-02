@@ -1,10 +1,27 @@
 # Harness v3 — Especificación técnica
 
-**Estado**: diseño cerrado, pendiente de implementación.
-**Reemplaza**: el ciclo de agente monolítico en `ui/workers.py`.
+**Estado**: IMPLEMENTADO. Slices S0-S7 completos y en producción
+(commit actual ver `git log --oneline -1`).
+**Reemplaza**: el ciclo de agente monolítico en `ui/workers.py`
+(eliminado en S7, commit `4c8b251`).
 **No toca**: `ui/views/`, `plugins/`, `core/config.py`, `agents.py`,
 `history.py`, `workspace.py`, `ast_index.py`, `rag_index.py`,
 `ollama.py`, `scripts/`.
+
+> **Nota para auditores**: este documento describe el DISEÑO. El
+> código en `core/harness/` es la implementación real. Si el
+> documento y el código divergen, el código es la fuente de
+> verdad. Divergencias conocidas:
+> - `CompletionVerifier` (`completion.py`): `parse_phases` extrae
+>   index + name + verification_command, pero NO
+>   `required_tools` ni `expected_files`. El verifier pasa
+>   siempre con `issues=[]` por ahora. Mejora pendiente.
+> - `VRRStopCriterion` (`vrr.py`): módulo funcional pero NO
+>   wired al ciclo (`_agent_loop` no lo invoca). Won't-fix.
+> - `ToolSchemaCompiler` (`schemas.py`): implementado con 3
+>   perfiles; solo 1 wired en producción. Los otros 2 inertes.
+> - `EventLog`: activo desde P1.4 (`5ea901c`). Persiste a
+>   `<tempdir>/cp_harness/<run_id>/events.db`.
 
 ## Índice
 
